@@ -20,6 +20,7 @@
 
     "openaiChatModel",
     "anthropicChatModel",
+    "bedrockChatModel",
     "geminiChatModel",
     "sarvamChatModel",
 

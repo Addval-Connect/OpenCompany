@@ -29,6 +29,20 @@
       "claude-opus-4-0": {"input": 15.00, "output": 75.00, "cache_read": 1.50},
       "_default": {"input": 3.00, "output": 15.00, "cache_read": 0.30}
     },
+    "bedrock": {
+      "_description": "AWS bills Claude on Bedrock at the same on-demand per-MTok rates as Anthropic's own API, so these mirror the anthropic block. Keys are the BARE family names on purpose: get_pricing falls back to substring containment, so claude-opus-5 matches both the us.anthropic.* and global.anthropic.* profile ids without duplicating every prefix. Provisioned throughput and batch discounts are not modelled.",
+      "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
+      "claude-fable-5": {"input": 10.00, "output": 50.00, "cache_read": 1.00},
+      "claude-opus-4-8": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
+      "claude-opus-4-7": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
+      "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
+      "claude-opus-4-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
+      "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
+      "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
+      "claude-sonnet-4-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
+      "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10},
+      "_default": {"input": 3.00, "output": 15.00, "cache_read": 0.30}
+    },
     "gemini": {
       "gemini-3.6-flash": {"input": 1.50, "output": 7.50},
       "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50},

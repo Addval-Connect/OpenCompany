@@ -347,6 +347,7 @@ class LLMError(Exception):
 
         provider_names = {
             "anthropic": "Anthropic",
+            "bedrock": "AWS Bedrock",
             "gemini": "Gemini",
             "openai": "OpenAI",
             "openrouter": "OpenRouter",

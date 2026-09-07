@@ -14,6 +14,8 @@ AI_CHAT_MODEL_TYPES: FrozenSet[str] = frozenset(
     [
         "openaiChatModel",
         "anthropicChatModel",
+        # Same Claude models as `anthropicChatModel`, reached over AWS.
+        "bedrockChatModel",
         "geminiChatModel",
         "openrouterChatModel",
         "groqChatModel",
@@ -462,6 +464,11 @@ def detect_ai_provider(node_type: str, parameters: dict = None) -> str:
         return "groq"
     if "openrouter" in nt:
         return "openrouter"
+    # Before the anthropic branch: `bedrockChatModel` shares no token with it
+    # today, but a future `anthropicBedrock*` type would classify as
+    # first-party Anthropic and read the wrong credential.
+    if "bedrock" in nt:
+        return "bedrock"
     if "anthropic" in nt:
         return "anthropic"
     if "gemini" in nt:

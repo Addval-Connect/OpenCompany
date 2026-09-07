@@ -39,6 +39,7 @@ import { API_CONFIG } from '../../config/api';
 // add the matching deep import + entry to LOBEHUB_BRANDS below.
 import OpenAI from '@lobehub/icons/es/OpenAI';
 import Claude from '@lobehub/icons/es/Claude';
+import Bedrock from '@lobehub/icons/es/Bedrock';
 import Gemini from '@lobehub/icons/es/Gemini';
 import Groq from '@lobehub/icons/es/Groq';
 import Cerebras from '@lobehub/icons/es/Cerebras';
@@ -148,6 +149,7 @@ const lucideIndex = indexLibrary(Lucide as Record<string, unknown>);
 const LOBEHUB_BRANDS: Readonly<Record<string, any>> = {
   openai: OpenAI,
   claude: Claude,
+  bedrock: Bedrock,
   gemini: Gemini,
   groq: Groq,
   cerebras: Cerebras,

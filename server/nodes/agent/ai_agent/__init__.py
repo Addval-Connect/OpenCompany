@@ -41,6 +41,10 @@ class AIAgentParams(BaseModel):
     provider: Literal[
         "openai",
         "anthropic",
+        # Anthropic models served by AWS Bedrock. A separate entry rather than
+        # a flag on "anthropic" because the credential, the region and the
+        # model-id namespace all differ (us.anthropic.* inference profiles).
+        "bedrock",
         "gemini",
         "openrouter",
         "xai",

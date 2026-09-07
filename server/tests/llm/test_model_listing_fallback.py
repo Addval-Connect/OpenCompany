@@ -44,14 +44,18 @@ class TestFlagDefaults:
     def test_absent_key_means_listing_is_supported(self):
         assert supports_model_listing("provider-that-does-not-exist") is True
 
-    def test_sarvam_is_the_only_opt_out(self):
-        """Guards the other twelve providers against a behaviour change.
+    def test_only_sarvam_and_bedrock_opt_out(self):
+        """Guards the other providers against a behaviour change.
 
         If this ever fails, some provider gained the flag — confirm that
         was deliberate before updating the expectation.
+
+        Bedrock opts out because its model inventory lives on the ``bedrock``
+        control plane, not on ``bedrock-runtime``: the Messages client cannot
+        list it, and a Bedrock API key is not accepted there at all.
         """
         opted_out = {p for p in all_providers() if not supports_model_listing(p)}
-        assert opted_out == {"sarvam"}
+        assert opted_out == {"sarvam", "bedrock"}
 
 
 class TestListingSupported:

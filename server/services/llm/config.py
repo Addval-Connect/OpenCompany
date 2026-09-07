@@ -236,7 +236,9 @@ def resolve_temperature(params: dict, model: str, provider: str, thinking_enable
     if registry.is_reasoning_model(model, provider):
         return 1.0
 
-    if thinking_enabled and provider == "anthropic":
+    # Anthropic requires temperature=1 alongside budget thinking, and Bedrock
+    # serves the same models under the same rule.
+    if thinking_enabled and provider in ("anthropic", "bedrock"):
         return 1.0
 
     # Fixed temperature per model from llm_defaults.json (e.g. kimi-k2.5 = 0.6)
