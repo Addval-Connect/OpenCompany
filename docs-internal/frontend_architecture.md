@@ -22,13 +22,13 @@ Post-migration (2026-04-14). Single source of truth for the current frontend.
 |---|---|---|
 | Bundler | Vite 7 | [client/vite.config.js](../client/vite.config.js) |
 | Framework | React 19 | [client/src/main.tsx](../client/src/main.tsx) |
-| Type checker | `typescript@7.0.2` — native Go compiler, **exact-pinned in the root `package.json`** | root `pnpm run typecheck` → `tsc --noEmit -p client/tsconfig.json`; client's `typecheck` delegates up |
-| Type checker (second opinion) | `typescript@^5.9.3` in **client** `dependencies` | Kept for typescript-eslint's peer range (`>=4.8.4 <6.1.0`). Two `typescript` entries cannot live in one manifest, and both 5.x and 7.x expose a `tsc` bin — hence the root/client split. `pnpm typecheck:tsc` runs it for triage only. |
+| Type checker | `typescript@7.0.2` — native Go compiler, **exact-pinned in the root `package.json`** | root `bun run typecheck` → `tsc --noEmit -p client/tsconfig.json`; client's `typecheck` delegates up |
+| Type checker (second opinion) | `typescript@^5.9.3` in **client** `dependencies` | Kept for typescript-eslint's peer range (`>=4.8.4 <6.1.0`). Two `typescript` entries cannot live in one manifest, and both 5.x and 7.x expose a `tsc` bin — hence the root/client split. `bun run typecheck:tsc` runs it for triage only. |
 | Compiler | `babel-plugin-react-compiler@1.0.0` (exact-pinned; `target: '19'` = the React version, not the plugin version) | [vite.config.js](../client/vite.config.js) (scoped: all of `/src/` except `components/ui/`). Pin is exact because semver sorts the old `19.1.0-rc.3` **above** `1.0.0`, so a range would silently reinstall the release candidate — which lacks the incompatible-library skip list. |
 | Styling | Tailwind v4 + `@tailwindcss/vite` | [index.css](../client/src/index.css) + [tailwind.config.js](../client/tailwind.config.js) |
 | Component library | shadcn/ui (CLI `npx shadcn@latest add`) | [components/ui/](../client/src/components/ui/) |
 | Primitives | Radix UI | Pulled as transitive deps by shadcn |
-| Icons | `lucide-react` | Everywhere. No more `@ant-design/icons`. |
+| Icons | `lucide-react` | Everywhere. No more `@ant-design/icons`. Backend-declared node / provider icons go through `<NodeIcon size={token}>` — `theme.nodeSize.squareIcon` on canvas nodes, `theme.iconSize.*` elsewhere; the token is applied as width, height and emoji font size, so never size an icon with `h-*` / `text-*` classes. |
 | Typography | `@tailwindcss/typography` (`prose`) | Activated via `@plugin` in index.css |
 | Markdown | `react-markdown` + `remark-gfm` + `remark-breaks` | Output panel, memory display, skill instructions |
 | Code highlighting | `prismjs` | Code editor |
@@ -120,7 +120,6 @@ client/src/
 │   ├── ui/
 │   │   ├── ApiKeyInput.tsx         # Composite: input + eye toggle + save/delete buttons
 │   │   ├── SettingsPanel.tsx       # Shadcn Switch + Slider + Input
-│   │   ├── PricingConfigModal.tsx  # (client/src/components/PricingConfigModal.tsx)
 │   │   ├── ConsolePanel.tsx        # Chat + console + terminal + output
 │   │   ├── Modal.tsx               # Shadcn Dialog wrapper
 │   │   ├── NodeOutputPanel.tsx     # Deleted (superseded by output/OutputPanel)
@@ -128,8 +127,6 @@ client/src/
 │   │
 │   ├── icons/                      # AI provider icons (SVG data URIs)
 │   ├── auth/                       # Login page + protected route
-│   ├── shared/
-│   │   └── JSONTreeRenderer.tsx    # Recursive JSON tree (no styled-components)
 │   ├── SquareNode.tsx, StartNode.tsx, TriggerNode.tsx, GenericNode.tsx, AIAgentNode.tsx, WhatsAppNode.tsx, ModelNode.tsx
 │   │                               # React Flow nodes with lucide icons
 │   └── APIKeyValidator.tsx         # Shadcn Input + Button + Tooltip composition
@@ -150,7 +147,7 @@ client/src/
 │   ├── useComponentPalette.ts / useDragAndDrop.ts / useDragWorkspaceFile.ts
 │   ├── useOnboarding.ts            # Reads via useUserSettingsQuery; writes via mutation
 │   ├── useParameterPanel.ts        # Thin orchestrator over useNodeParamsQuery + save mutation
-│   ├── usePricing.ts / useToolSchema.ts / useWhatsApp.ts / useAndroidOperations.ts
+│   ├── useWhatsApp.ts             # WS-based WhatsApp ops (Android ops go via useWebSocket directly)
 │   └── useCopyPaste.ts / useRename.ts
 │
 ├── store/
@@ -357,7 +354,7 @@ components/credentials/CredentialsModal.tsx
 - **TanStack Query** owns the server state (catalogue, usage summaries, etc).
 - **idb-keyval** cache seeds first paint — opened modal renders from IndexedDB in <50 ms before the WS roundtrip completes.
 - **`requestIdleCallback`** writes back to IDB so saves don't block first paint.
-- **DB is the single source of truth.** The retired `client/src/components/credentials/providers.tsx` static fallback is gone — `useCatalogueQuery` is the only source. Cold-boot with no IDB cache renders a `<Skeleton>` palette while the WS catalogue arrives; server-unreachable shows an explicit error state, never stale fallback data.
+- **DB is the single source of truth.** The retired `providers.tsx` static fallback is gone — `useCatalogueQuery` is the only source. Cold-boot with no IDB cache renders a `<Skeleton>` palette while the WS catalogue arrives; server-unreachable shows an explicit error state, never stale fallback data.
 - **`provider.stored` is the canonical "do we have a credential for X?".** The retired `apiKeyStatuses[id].hasKey` mirror duplicated this answer with no synchronisation contract. Two new selector hooks (`useProviderStored(id)`, `useStoredProviderCount()`) read the catalogue. `apiKeyStatuses[id]` now narrowly carries the validation result (`valid`, `models`, `message`, `timestamp`).
 
 **App-wide query persistence ([client/src/lib/queryPersist.ts](../client/src/lib/queryPersist.ts)):** the QueryClient is wrapped in `<PersistQueryClientProvider>` ([main.tsx](../client/src/main.tsx)) with a localStorage persister + `__APP_VERSION__` buster + 24h SWR window. Only queries with key prefixes `nodeSpec` / `nodeGroups` / `skillContent` are dehydrated -- high-frequency / per-session queries stay in-memory. Hard refresh paints from cached specs **before** the WebSocket connects, so canvas nodes never flash placeholder icons. The credentials catalogue uses its own dedicated `idb-keyval` warm-start (above) because its payload is large enough that localStorage's 5-10MB cap is a real constraint. **Decrypted credential values are NOT persisted** (was the retired `'credentialValues'` prefix) per OWASP HTML5 Security Cheat Sheet / ASVS V9.9 — plaintext API keys in `localStorage` are readable via DevTools on shared / compromised browsers; the in-memory TanStack Query cache (`gcTime: ∞`) keeps the form populated for the session lifetime, on reload the panel refetches via WS.
@@ -477,7 +474,7 @@ This is the rule that keeps the data layer schema-driven instead of imperatively
 | **`stores/nodeStatusStore.ts`** (Zustand) | Per-workflow node-execution statuses -- moved out of WebSocketContext so a status tick does not cascade through the React tree. `useNodeStatus(id)` is a slice selector; only the affected node's consumers re-render. Mirror this pattern for any new high-frequency push state. | `allStatuses[workflowId][nodeId]`, `currentWorkflowId` |
 
 **Hard rules:**
-- **Read Zustand stores via slice selectors, never whole-store destructure.** Always `const x = useAppStore((s) => s.x)`, never `const { x } = useAppStore()`. The whole-store form re-renders the consumer on ANY store mutation (sidebar toggle, unrelated workflow rename, parameter save on another node), which defeats `React.memo` + `nodePropsEqual` on the canvas. Setters are stable refs from Zustand — single-field selectors are the cheapest read. Audited and converted across the canvas + parameter-panel hot paths (every node component, `Dashboard.tsx`, `useDragVariable`, `useParameterPanel`, `useReactFlowNodes`, `useWorkflowManagement`, `InputSection`, `MiddleSection`, `OutputPanel`, `ParameterRenderer`, `ToolSchemaEditor`, `ParameterPanel`, `InputNodesPanel`).
+- **Read Zustand stores via slice selectors, never whole-store destructure.** Always `const x = useAppStore((s) => s.x)`, never `const { x } = useAppStore()`. The whole-store form re-renders the consumer on ANY store mutation (sidebar toggle, unrelated workflow rename, parameter save on another node), which defeats `React.memo` + `nodePropsEqual` on the canvas. Setters are stable refs from Zustand — single-field selectors are the cheapest read. Audited and converted across the canvas + parameter-panel hot paths (every node component, `Dashboard.tsx`, `useDragVariable`, `useParameterPanel`, `useReactFlowNodes`, `useWorkflowManagement`, `InputSection`, `MiddleSection`, `OutputPanel`, `ParameterRenderer`, `ParameterPanel`).
 - A list of server records (`workflows`, `nodeParameters`, `userSettings`, `credentialCatalogue`, `userSkills`, node output schemas) lives in TanStack Query. Never duplicate it in Zustand. Phase-1 follow-up commit `c3a7aa4` removed `savedWorkflows` from `useAppStore` for exactly this reason; Wave 3 commit `7706afb` did the same for `userSkills` in MasterSkillEditor.
 - Imperative WebSocket request/response inside a component (`useEffect` + `sendRequest` + `setState`) is a code smell — wrap it in a `useQuery` hook. Inline the hook at the top of the consuming file when there's exactly one consumer (Wave 2/3 colocation rule); promote to `client/src/hooks/` when a second consumer appears. Phase-2 commit `b2b6fba` did this for `useParameterPanel` and `useOnboarding`; Wave 3 commits `2c5f227` / `7706afb` / `327f792` followed the same pattern inline inside MiddleSection / MasterSkillEditor / InputSection.
 - After a mutation, **invalidate the corresponding query key**, don't manually patch a Zustand list or call a local refetch helper. Mutations that need it from non-React code use the `queryClient` singleton at [client/src/lib/queryClient.ts](../client/src/lib/queryClient.ts).
@@ -500,13 +497,18 @@ Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts]
 | `hideRunButton` | `ParameterPanel` | Hide the Run button (skill / memory / tool nodes) |
 | `hasCodeEditor` | `MiddleSection` | Give the params block extra flex space for an embedded code editor |
 | `isMasterSkillEditor` | `MiddleSection`, `Dashboard` (component dispatch), `useAutoSkillEdges` | Render the MasterSkillEditor split panel; route to `ToolkitNode` on the canvas; identify Master Skill aggregators in the auto-skill edge dispatcher |
-| `isMemoryPanel` | `MiddleSection` | Render the memory markdown panel + token usage stats |
+| `isMemoryPanel` | `MiddleSection` | **Legacy.** The pre-RFC-0002 combined markdown/transcript panel. `simpleMemory` no longer declares it; kept while `normalize_workflow_graph` upgrades `input-memory` graphs |
+| `isMemoryToolPanel` | `MiddleSection` | Render the durable Memory item browser (search, edit, forget, clear). Declared by `simpleMemory`, and selected *before* `isMemoryPanel` |
+| `isContextPanel` | `MiddleSection` | Render the Context inspector (journal, active replay, fork/export/clear). Read-only: it observes the agent's journal and must never alter execution |
+| `requiresContext` | backend graph normalization | Declared in `STD_AGENT_HINTS`. Not a rendering flag — `normalize_workflow_graph` pairs every plugin carrying it with a Context companion, and `workflow_validator` enforces the topology |
+| `systemManaged` | canvas | Marks the auto-created Context companion. The backend owns its lifecycle; the user does not add or delete it directly |
 | `isToolPanel` | `MiddleSection` | Surface the ToolSchemaEditor for connected services |
 | `isMonitorPanel` | `MiddleSection`, `ParameterPanel` | Render the team-monitor panel |
 | `isTodoEditor` | `MiddleSection` | Render the editable Current Todos manager (`writeTodos`) instead of the plain params list |
 | `isTaskManagerPanel` | `MiddleSection` | Render the execution-scoped team task control panel |
 | `isProcessManagerPanel` | `MiddleSection` | Render live managed-process inspection and controls |
 | `isGalleryPanel` | `MiddleSection` | Render the workspace file browser (breadcrumbs, grid/list, search, preview, upload, drag-to-parameter) instead of the plain params list. Declared by `gallery`, which pairs it with `hideInputSection` but **keeps** the Output section — unlike `processManager` it produces output worth seeing and dragging. The panel writes back to the node's own `path` / `selection` params, so what you browse is what the node emits. |
+| `isCanvasPanel` | `MiddleSection`, `CanvasDock` | Render the pushed-content Canvas board instead of the plain params list. Declared by `canvas`. Double duty: the docked canvas sidebar also uses this flag to FIND Canvas nodes in the graph (`resolveNodeDescription(type)?.uiHints?.isCanvasPanel`) — never the type string. Pairs with an explicit `isConfigNode: False` because the `tool` group would auto-derive `True` while the node's `input-main` is real dataflow. See [canvas_node.md](./canvas_node.md). |
 | `showLocationPanel` | `LocationParameterPanel` | Special-case panel for nodes with map preview |
 | `isAndroidToolkit` | `ToolSchemaEditor` | Toolkit aggregator (Android service hub) |
 | `isChatTrigger` | `ConsolePanel` | This node is a chat-message target |
@@ -591,7 +593,7 @@ The DIY widget registry (RHF + zod + a tester+rank dispatch) is modeled on n8n's
 | File | When to use |
 |---|---|
 | [client/src/components/ui/action-button.tsx](../client/src/components/ui/action-button.tsx) | Colored "soft" toolbar button (Run / Save / Cancel / Reset / Stop). One semantic `intent` prop (`run | stop | save | config | secret | tools`) drives bg / border / text / hover against the matching `--action-X` quartet (`-soft`, `-hover`, `-border`, base) via static Tailwind classes — no opacity arithmetic. Disabled state is the shadcn-idiomatic `disabled:opacity-50` on the base class (one rule, all intents). Replaces the `actionButtonStyle(color, isDisabled)` style helper that was copy-pasted across 4 files. The credential-modal panels (`OAuthConnect`, `EmailPanel`, `QrPairingPanel`, `ActionBar`) and the skill / tool-schema editors all consume `<ActionButton>` directly; their `ActionDef` records carry an `intent` key, never a free-form colour. |
-| [client/src/styles/canvasAnimations.ts](../client/src/styles/canvasAnimations.ts) | Canvas-wide CSS injected once into Dashboard's `<style>` tag. Three named groups (`KEYFRAMES`, `edgeStatusStyles`, `nodeStatusStyles`) for the React Flow edge/node status visuals -- adding a new keyframe or status class is a single-file change. Light/dark distinction is encoded entirely in the `colors` arg coming from `theme.ts` -- `buildCanvasStyles(colors)` is single-arg with zero hardcoded hexes, and `CanvasStatusColors` carries the full set (`edgeDefault | edgeSelected | edgeExecuting | edgeCompleted | edgeError | edgePending | edgeMemoryActive | edgeToolActive`). The `nodeGlow` keyframe consumes scoped `--node-glow` / `--node-glow-soft` vars so one keyframe serves both themes. |
+| [client/src/styles/canvasAnimations.ts](../client/src/styles/canvasAnimations.ts) | Canvas-wide CSS injected once into Dashboard's `<style>` tag — adding a new keyframe or status class is a single-file change. Fully static since the design-handoff edge migration: `buildCanvasStyles()` takes no arguments; every colour/width/dash is a theme token (`--edge-stroke`, `--edge-stroke-width{,-active,-done}`, `--edge-dash{,-active}` from `themes/base.css`, plus semantic tokens for the status classes `selected/executing/completed/error/pending/memory-active/tool-active/skill-active`). Resting edges are pale-neutral dashed orthogonal step edges; the in-progress `.react-flow__connection-path` shares the resting rule. The old `CanvasStatusColors` per-theme hex interface was deleted — add a token, never a colour parameter. |
 | [client/src/components/ui/alert-dialog.tsx](../client/src/components/ui/alert-dialog.tsx) | Confirmation / destructive-action modals. **Never hand-roll a `position: fixed; background: rgba(0,0,0,0.5)` backdrop** — use `<AlertDialog open onOpenChange>` with `AlertDialogHeader` / `AlertDialogDescription` / `AlertDialogFooter`. Focus trap, escape-to-close, and `role="alertdialog"` come from Radix. MiddleSection Clear Memory + Reset Skill dialogs are the canonical consumers (Wave 3 commit `61bf23c`). |
 | [client/src/components/ui/sonner.tsx](../client/src/components/ui/sonner.tsx) | The `<Toaster />` mount — call `import { toast } from 'sonner'` directly at use sites; do not wrap. |
 | [client/src/components/ui/Modal.tsx](../client/src/components/ui/Modal.tsx) | Composition primitive on top of shadcn `<Dialog>`. Owns the recurring "title bar with centered headerActions and a close button + size-constrained content panel" 8 panels share. Not an antd facade. For destructive confirmations prefer `AlertDialog` above. |
@@ -605,16 +607,16 @@ The DIY widget registry (RHF + zod + a tester+rank dispatch) is modeled on n8n's
 
 ```bash
 # from repo root
-pnpm install            # client deps + server Python deps via postinstall
-pnpm run dev            # supervisor: Vite client (app port, proxying) + uvicorn backend; Temporal/WhatsApp are backend-owned on-demand daemons
-pnpm run build          # full prod build; bundle analyzer at dist/stats.html if ANALYZE=1
+bun install             # client deps + server Python deps via postinstall
+bun run dev             # supervisor: Vite client (app port, proxying) + uvicorn backend; Temporal/WhatsApp are backend-owned on-demand daemons
+bun run build           # full prod build; bundle analyzer at dist/stats.html if ANALYZE=1
 
 # client-only
 cd client
-pnpm dev                # Vite dev server
-pnpm build              # Vite prod build (Tailwind v4 via @tailwindcss/vite plugin)
-pnpm typecheck          # THE gate — delegates up to the root TypeScript 7 compiler
-pnpm typecheck:tsc      # second opinion under client's tsc 5.9.3 (triage only, never the gate)
+bun run dev             # Vite dev server
+bun run build           # Vite prod build (Tailwind v4 via @tailwindcss/vite plugin)
+bun run typecheck       # THE gate — delegates up to the root TypeScript 7 compiler
+bun run typecheck:tsc   # second opinion under client's tsc 5.9.3 (triage only, never the gate)
 ```
 
 **Adding shadcn components:**
@@ -622,7 +624,7 @@ pnpm typecheck:tsc      # second opinion under client's tsc 5.9.3 (triage only, 
 cd client
 OPENCOMPANY_INSTALLING=true npx shadcn@latest add <name>
 ```
-The `OPENCOMPANY_INSTALLING=true` env var suppresses the recursive project postinstall hook during shadcn's internal `pnpm install`. Without it the hook's `company build` run fails and shadcn aborts before writing the component file.
+The `OPENCOMPANY_INSTALLING=true` env var suppresses the recursive project postinstall hook during shadcn's internal package-manager install. Without it the hook's `company build` run fails and shadcn aborts before writing the component file.
 
 ## Migration history (for context)
 

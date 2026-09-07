@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Search } from 'lucide-react';
 import { NodeIcon } from '../../assets/icons';
+import { theme } from '../../styles/theme';
 import { useNodeGroups, listCachedNodeSpecs, NodeGroupEntry } from '../../lib/nodeSpec';
 import { nodeSpecToDescription } from '../../adapters/nodeSpecToDescription';
 
@@ -53,6 +54,10 @@ const ComponentPalette: React.FC<ComponentPaletteProps> = ({
     const definitions = listCachedNodeSpecs().map(nodeSpecToDescription);
 
     const filteredDefinitions = definitions.filter((definition) => {
+      // Context companions and other lifecycle-owned nodes are rendered when
+      // present in a workflow, but can only be created by graph operations.
+      if (definition.uiHints?.systemManaged) return false;
+
       // Backend allowlist (server/config/node_allowlist.json). Two-tier:
       //   1. `disabled_groups` + `disabled_nodes` — absolute blocklist
       //      enforced in BOTH normal and dev mode. The node's group
@@ -173,7 +178,7 @@ const ComponentPalette: React.FC<ComponentPaletteProps> = ({
                           >
                             <NodeIcon
                               icon={config.icon}
-                              className="h-4 w-4 text-base"
+                              size={theme.iconSize.sm}
                               fallback={<span>📦</span>}
                             />
                           </span>

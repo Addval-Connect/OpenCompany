@@ -13,6 +13,47 @@ User scope (confirmed before this work): stay on npm distribution; **no** Nuitka
 | Node sidecar | `esbuild` bundle to `dist/index.js`, run via `node` | Drops tsx interpreter startup (~500ms-1s every server boot). `--packages=external` keeps Express in `node_modules/` for patch flow. |
 | Python | `python -m compileall -q -j 0 <project dirs>` + `[tool.uv] compile-bytecode = true` | Pre-compile bytecode. Implemented as step `[5/6]` in [`cli/commands/build.py`](../cli/commands/build.py) (`COMPILEALL_SOURCE_DIRS` constant lists the dirs); `server/pyproject.toml`'s `compile-bytecode = true` makes `uv sync` (step `[4/6]`) compile `.venv/` site-packages too. No `-O`: every runtime launches python without `-O`, and per PEP 488 a non-optimized interpreter only loads plain `.pyc` — the earlier `-O` invocation produced `.opt-1.pyc` that nothing ever loaded (fixed 2026-07-14; ~30-50s cold-start gain, see [performance.md](performance.md)). |
 
+## Package manager (bun)
+
+The dev workspace runs on **bun** (migrated from pnpm@9.15.0, 2026-08; pinned
+via `"packageManager": "bun@1.4.0"` — CI's `oven-sh/setup-bun` reads that pin).
+Facts that are load-bearing, each verified during the migration:
+
+- **Scope**: bun installs the workspace and runs scripts; **Node 22 stays the
+  runtime** (vite/vitest/eslint/the sidecar run on node via shebang — never
+  pass `--bun`). Everything npm-facing is deliberately untouched: end-user
+  `npm install -g @zeenie-ai/opencompany`, the backend's
+  `npm install --prefix <DATA_DIR>/packages/` shared tree, the sidecar's
+  user-package endpoints, and `npm publish --provenance` in release.yml.
+- **Gate**: `scripts/preinstall.js` rejects non-bun installs in a source
+  checkout. It keys on `bunfig.toml` existing (committed, excluded from the
+  tarball by the `files` allowlist, so end-user npm installs never trigger it)
+  and on `npm_config_user_agent` **starting with** `bun` — bun's UA is
+  `bun/x.y.z npm/? node/...`, so a substring match on "npm" would misfire.
+- **Layout**: `bunfig.toml` pins `linker = "isolated"` — pnpm-style symlinked
+  `node_modules` with the store at `node_modules/.bun/` (NOT `.pnpm/`). The
+  phantom-dependency guard, the `typeRoots` tsconfig workaround, and the
+  `vite-env.d.ts` triple-slash reference all depend on this layout.
+- **Lockfile**: the tracked text `bun.lock` is **lockfileVersion 3** — forced
+  by the version-ranged keys in the top-level `overrides` block (the security
+  pins formerly under `pnpm.overrides`, moved verbatim). Older bun cannot read
+  it; the `packageManager` pin is the effective read-floor.
+- **Sharp edges** (each bites silently): declaring `trustedDependencies`
+  REPLACES bun's default trusted list rather than extending it — do not declare
+  it (esbuild's install script would stop running); never pass
+  `--omit=optional` (it drops the per-platform rollup/esbuild/TS7 binaries,
+  oven-sh/bun#16696); bun 1.4 rejects the space-separated `--cwd ..` form
+  (`bun --cwd=.. run <script>` is required — this is why the client typecheck
+  script uses `=`); and `--filter` must come AFTER the `run` subcommand.
+- **Lost guard**: pnpm's `strict-peer-dependencies` has no bun equivalent (bun
+  never errors on peer conflicts, oven-sh/bun#9135). The
+  `test_client_keeps_typescript_5_for_typescript_eslint` CLI test is now the
+  only check keeping client `typescript` inside typescript-eslint's peer range.
+- Config invariants (gate source, manifest shape, bunfig linker, workspace
+  paths) are locked by `cli/tests/test_release_pipeline_config.py`; the
+  workspace-member oracle in `cli/tests/conftest.py` parses the root
+  `workspaces` array directly (bun has no `pnpm list --json` equivalent).
+
 ## Implementation steps
 
 ### 1. TypeScript 7 type-check
@@ -27,7 +68,8 @@ named `tsgo` — stopped publishing the day before and must not come back.
   (it loads the TS API at module scope and its peer range excludes 6.x/7.x). A
   single manifest cannot declare `typescript` twice.
 - `typescript@7` and `typescript@5` **both** ship a `tsc` bin. Co-locating them
-  would leave pnpm's bin-link conflict resolution deciding which compiler gates
+  would leave bun's bin-link conflict resolution (under the isolated linker)
+  deciding which compiler gates
   CI. (No collision exists today only because `native-preview`'s bin was `tsgo`.)
 - Root declares no `typescript` and no `typescript-eslint`, so there is no peer
   conflict and nothing else claims `tsc`.
@@ -35,15 +77,15 @@ named `tsgo` — stopped publishing the day before and must not come back.
 - root `package.json` → `devDependencies: { "typescript": "7.0.2" }`, **exact —
   no caret**, so the compiler that gates CI never moves on an unrelated install;
   plus `"typecheck": "tsc --noEmit -p client/tsconfig.json"`
-- `client/package.json` → `"typecheck": "pnpm -w run typecheck"` (delegates up,
+- `client/package.json` → `"typecheck": "bun --cwd=.. run typecheck"` (delegates up,
   so the CI command and its guard test stay byte-identical)
   - `"typecheck:tsc": "tsc --noEmit"` — resolves client's own 5.9.3. A **second
     opinion for triaging a red gate**, NOT an equivalent check and NOT a revert
     path: the two compilers check different programs under different default
     rules. Nothing in CI runs it, so verify it independently before trusting it.
-- `.github/workflows/predeploy.yml` → `pnpm --filter react-flow-client run typecheck` in the
+- `.github/workflows/predeploy.yml` → `bun run --filter react-flow-client typecheck` in the
   `build-and-lint` job. (This gate lives in `predeploy.yml`, not `release.yml`.) The cross-OS
-  `test-build-start` matrix additionally runs `pnpm exec tsc --version`, because the TS7
+  `test-build-start` matrix additionally runs `bun run tsc --version`, because the TS7
   compiler is a per-platform Go binary delivered via `optionalDependencies` — the type-check
   itself runs only on ubuntu, so without that step the darwin-arm64 and win32-x64 binaries
   would be installed on every matrix run and never executed.
@@ -52,11 +94,11 @@ named `tsgo` — stopped publishing the day before and must not come back.
 
 - `client/vite.config.js` → extend `build` block:
   - `target: 'es2022'`
-  - `chunkSizeWarningLimit: 600` (down from 1500)
+  - `chunkSizeWarningLimit: 850` (down from 1500; the plan said 600, but `vendor-icons` — lucide + lobehub brand SVGs — is ~830 KB on its own, so the ceiling sits just above it and other chunks still trip it)
   - `rollupOptions.output.manualChunks` mapping:
     - `vendor-react`: `react`, `react-dom`, `react-hook-form`, `@hookform/resolvers`
     - `vendor-flow`: `reactflow`
-    - `vendor-radix`: `@radix-ui/*`, `radix-ui`
+    - `vendor-radix`: `radix-ui` (the single umbrella package; no `@radix-ui/*` scoped entries)
     - `vendor-icons`: `lucide-react`, `@lobehub/icons`
     - `vendor-query`: `@tanstack/react-query`, `@tanstack/query-sync-storage-persister`, `@tanstack/react-query-persist-client`, `@lukemorales/query-key-factory`
     - `vendor-markdown`: `react-markdown`, `remark-gfm`, `remark-breaks`, `prismjs`, `react-simple-code-editor`, `@uiw/react-json-view`
@@ -107,11 +149,11 @@ The npm tarball still excludes `__pycache__/` per `package.json` `files` (cross-
 - **`company build` layers `.env.dev` first.** `build_command()` calls `cli.config.load_dev_overrides(root)` before the install steps, so the build's `DATA_DIR` matches what the runtime sees. Without it, a repo checkout's `company build` read `DATA_DIR=~/.opencompany` from `.env.template` and installed Temporal under user home, but `company dev` then read `DATA_DIR=.opencompany` from `.env.dev` and re-downloaded into `<repo>/.opencompany/` — a redundant ~114 MB fetch on every fresh clone.
 - **Safe for global installs.** `.env.dev` is git-committed for contributors but is NOT in the npm `files` list, so an npm-distributed copy has no `.env.dev` — `load_dev_overrides` is a no-op and everything falls through to the `.env.template` default (`DATA_DIR=~/.opencompany`), matching `company start` / `company daemon`.
 
-### 5. Wire bundle + compileall into install.js
+### 5. Wire compileall into install.js (the sidecar bundle ships pre-built)
 
 - `scripts/install.js` → after `uv sync`:
-  1. `npm --prefix server/nodejs run build` — produce `dist/index.js`
-  2. `python -m compileall -q -j 0 <COMPILEALL_SOURCE_DIRS>` — same shape as build.py (no `-O`; locked in sync by `cli/tests/test_release_pipeline_config.py`)
+  1. `uv run python -m compileall -q -j 0 <COMPILEALL_SOURCE_DIRS>` — same shape as build.py (no `-O`; locked in sync by `cli/tests/test_release_pipeline_config.py`)
+- The sidecar is **not** rebuilt at install time: `company build` step `[3/6]` runs `bun run --filter opencompany-nodejs-executor build` before `npm pack`, and `server/nodejs/dist/index.js` rides inside the tarball (the `server/` entry in the root `files` list covers it). Likewise the client is only built by install.js when `client/dist/index.html` is missing.
 
 Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is deterministic).
 
@@ -129,19 +171,19 @@ Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is determinis
 | `server/nodejs/package.json` | + esbuild devDep, build script, change start |
 | `server/nodejs/.gitignore` | new — ignore `dist/` |
 | `cli/commands/build.py` | + compileall step (`[5/6]`, plain `.pyc` — no `-O`), `COMPILEALL_SOURCE_DIRS` constant |
-| `scripts/install.js` | + sidecar bundle + compileall calls |
+| `scripts/install.js` | + compileall call (sidecar bundle arrives pre-built in the tarball) |
 | `server/pyproject.toml` | `[tool.uv] compile-bytecode = true` — `uv sync` compiles `.venv/` site-packages |
 | `.github/workflows/predeploy.yml` | + typecheck gate in `build-and-lint`; + `tsc --version` in the cross-OS matrix |
 
 ## Verification
 
-1. `pnpm --filter react-flow-client run typecheck` → <5s, zero errors.
-2. `ANALYZE=1 pnpm --filter react-flow-client run build` → open `client/dist/stats.html`. Expect: no chunk above 600 KB gz, main < 200 KB gz, `vendor-flow` split.
-3. `cd server/nodejs && npm run build && node dist/index.js` → starts on :5682 in <100ms.
+1. `bun run --filter react-flow-client typecheck` → <5s, zero errors.
+2. `ANALYZE=1 bun run --filter react-flow-client build` → open `client/dist/stats.html`. Expect: no chunk trips the 850 KB `chunkSizeWarningLimit` (`vendor-icons` is the ~830 KB outlier it is sized for), main < 200 KB gz, `vendor-flow` split.
+3. `cd server/nodejs && bun run build && NODEJS_EXECUTOR_PORT=<port> node dist/index.js` → starts on `NODEJS_EXECUTOR_PORT` (required env; no fallback literal) in <100ms.
 4. `cd server && uv run python -m compileall -q -j 0 services` → plain `__pycache__/*.pyc` present (no `.opt-1.pyc` — nothing loads those).
 5. Cold-start: clean install + `company start > start.log 2>&1` → `Application startup complete` at ≤+50s (was +66.9s).
 6. `npm pack --dry-run` → `server/nodejs/dist/index.js` included; no `__pycache__/`; tarball size ≤ v0.0.76.
-7. Smoke: `company start` → load http://localhost:5678 → run "AI Assistant" example → agent responds.
+7. Smoke: `company start` → load the app URL (`http://localhost:${PYTHON_BACKEND_PORT}`) → run "AI Assistant" example → agent responds.
 
 ## Out of scope (future work)
 

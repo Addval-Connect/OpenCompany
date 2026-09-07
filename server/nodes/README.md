@@ -44,12 +44,18 @@ class AcmeOutput(BaseModel):
 
 
 # 4. The node. (Icon + color are NOT declared on the class.
-#    Icon: drop `icon.svg` into THIS plugin folder. For per-node-type
-#       icons in multi-node folders (telegram / whatsapp / stripe),
-#       use `icon_<nodeType>.svg`. The resolver picks per-node first,
-#       falling back to shared `icon.svg`. Emoji / `lobehub:<brand>`
-#       entries live in `server/nodes/visuals.json` for plugins
-#       without a co-located SVG.
+#    Icon: for anything with a recognisable brand, drop the mark as
+#       `icon.svg` in THIS folder, or `icon_<nodeType>.svg` per node
+#       type in a multi-node folder. Brand artwork is what makes a node
+#       identifiable at canvas size and depends on nothing external.
+#       For generic utility nodes, meta.json can instead reference a
+#       library glyph: `"icons": {"<nodeType>": "lucide:Send"}` (use
+#       the package's ExportName — `CheckCheck`, NOT `check-check`).
+#       That is the weaker option: the name can be renamed or removed
+#       upstream and the node then renders nothing, and the glyph is
+#       monochrome currentColor line art. A file always beats a
+#       meta.json ref, so don't ship both. `server/nodes/visuals.json`
+#       is the legacy central registry for plugins with neither.
 #    Color: create `meta.json` with `{"color": "#abcdef"}` in this folder.
 #    BaseNode._metadata_dict resolves both at registration time via the
 #    central handler at server/nodes/_visuals.py.)
@@ -108,11 +114,17 @@ android/     — Android device services
 google/      — Google Workspace (gmail / calendar / drive / sheets / …)
 twitter/     — Twitter/X (send / search / user / receive)
 telegram/    — Telegram bot (send / receive)
+discord/     — Discord bot (send / action / receive / interaction).
+               Multi-account: _accounts.py maps an account id onto the
+               session_id credential scope; nothing else knows about it.
 whatsapp/    — WhatsApp (send / db / receive)
-social/      — Unified social (send / receive)
+social/      — Unified social (send / receive). Names no platform: each
+               plugin registers a _social.py adapter and owns the mapping
+               onto its own parameter shape.
 email/       — IMAP/SMTP via Himalaya CLI
 search/      — Web search APIs (brave / serper / perplexity / duckduckgo)
-scraper/     — Apify / Crawlee
+scraper/     — Apify / Crawlee / TikHub (SDK-backed, flattened like a
+               CLI: list_endpoints + call over resource.method ids)
 document/    — RAG pipeline (scrape / download / parse / chunk / embed / store)
 code/        — Python / Monty (sandboxed Python) / JS / TS executors
 filesystem/  — file_read / file_modify / shell / fs_search / gallery
@@ -198,7 +210,8 @@ from ._credentials import TwitterCredential              # shared with 3 sibling
 | `nodes/location/` | `GoogleMapsCredential` (API key via `?key=`) | gmaps_create / gmaps_locations / gmaps_nearby_places |
 | `nodes/twitter/` | `TwitterCredential` (OAuth2 + PKCE) | twitter_send / _search / _user / _receive |
 | `nodes/telegram/` | `TelegramCredential` (bot token + owner chat id) | telegram_send / _receive |
-| `nodes/scraper/` | `ApifyCredential` (Bearer) | apify_actor |
+| `nodes/discord/` | `DiscordBotCredential` (bot token; overrides `inject()` because Discord uses `Bot <token>`, not the inherited `Bearer `) + `DiscordUserCredential` (OAuth2 user context, separate id so connecting a user never overwrites the bot) | discord_send / _action / _receive / _interaction |
+| `nodes/scraper/` | `ApifyCredential` (Bearer, SDK probe) + `TikHubCredential` (Bearer, declarative httpx probe against `tikhub/user/get_user_info` — kept SDK-free so the modal validates even if the `tikhub` import fails) | apify_actor / tikhub_action |
 | `nodes/model/` | 13 LLM credential classes: 11 cloud (`OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / xAI / Sarvam`) plus Ollama / LM Studio | 12 chat models (xAI has no standalone chat-model node) **plus the 5 `nodes/sarvam/` service nodes**, which import `SarvamCredential` from here — one stored key serves Sarvam's OpenAI-compatible chat endpoint *and* its `api-subscription-key` REST APIs |
 | `nodes/search/` | `BraveSearch / Serper / Perplexity` inlined in each plugin file | single-use per plugin |
 
@@ -257,7 +270,7 @@ similar plugin.
 
 ```
 server/nodes/telegram/
-├── __init__.py          # imports + register_* calls covering six registries (zero logic)
+├── __init__.py          # imports + register_* calls covering seven registries (zero logic)
 ├── _credentials.py      # TelegramCredential subclass
 ├── _service.py          # singleton bot lifecycle (connect / send / poll)
 ├── _handlers.py         # WS_HANDLERS dict (telegram_connect, …)
@@ -314,7 +327,7 @@ Four ideas worth stealing wholesale:
 See [Multi-credential nodes](../../docs-internal/plugin_system.md#multi-credential-nodes)
 for the `ctx.connection(id)` contract and the `routing=` trap that comes with it.
 
-### Six generic registries to plug into
+### Seven generic registries to plug into
 
 Telegram's `__init__.py` is the canonical wiring example. Adding any
 of these concerns to your plugin is one `register_*` call from your
@@ -328,11 +341,12 @@ package's `__init__.py` — the consumer never imports your folder.
 | Trigger pre-execution check | `services.event_waiter.register_trigger_precheck(node_type, async_fn)` | Generic `triggers.py` handler runs `run_trigger_precheck` before entering the wait loop |
 | Service-status refresh on WS connect | `services.status_broadcaster.register_service_refresh(async_callback)` | Callback runs once per `_refresh_all_services` cycle |
 | Output schema | `services.node_output_schemas.register_output_schema(node_type, ModelClass)` | Avoids declaring a duplicate `Output` class in the central schema file |
+| Agent Context descriptor | `services.plugin.edge_walker.register_agent_context_builder(async_fn)` | Turns a node connected on `input-context` into the descriptor the agent runtime consumes. The framework walks the edge but knows nothing about the descriptor's shape — see `nodes/context/_descriptor.py` |
 
-All six are idempotent (same callable / class for the same key is a
+All seven are idempotent (same callable / class for the same key is a
 no-op; conflicts raise `ValueError`).
 
-These six are the core self-contained-folder set; newer concerns have
+These seven are the core self-contained-folder set; newer concerns have
 their own generic `register_*` entrypoints in the same spirit —
 `services.events.register_webhook_source`,
 `services.ws_handler_registry.register_option_loader` /

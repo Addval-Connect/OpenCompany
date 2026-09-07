@@ -39,7 +39,7 @@ The repo currently ships **three workflows** plus one composite action. A number
 | CI | `.github/workflows/ci.yml` | push/PR → main | Delegates to predeploy.yml |
 | Predeploy | `.github/workflows/predeploy.yml` | `workflow_call` | build/lint + backend tests + CLI tests + cross-OS build/start smoke |
 | Release | `.github/workflows/release.yml` | `v*.*.*` tag, `workflow_dispatch` | predeploy gate → publish (npm + GitHub Packages) |
-| Setup | `.github/actions/setup/action.yml` | (composite) | pnpm 9 + Node 22 + Python 3.12 + uv v8 + editable CLI install |
+| Setup | `.github/actions/setup/action.yml` | (composite) | bun 1.4 + Node 22 + Python 3.12 + uv v8 + editable CLI install |
 
 ### Toolchain pin
 
@@ -67,12 +67,12 @@ The repo currently ships **three workflows** plus one composite action. A number
 
 | Tool | Version source | Action |
 |------|---------------|--------|
-| pnpm | `pnpm/action-setup` v4.3.0 default | Immutable commit SHA |
+| bun | `oven-sh/setup-bun` v2.2.0 — reads the root `packageManager` pin (`bun@1.4.0`) | Immutable commit SHA |
 | Node.js | `node-version` input, default `22` | `actions/setup-node` v6.5.0, immutable commit SHA; package cache disabled |
 | Python | hard-coded `3.12` (matches `.python-version`) | `actions/setup-python` v5.6.0, immutable commit SHA |
 | uv | `astral-sh/setup-uv` v8.1.0, cache disabled | Immutable commit SHA |
 
-`setup-node`'s `cache:` is intentionally omitted — its post-job cache save fails with a `Path Validation Error` in lanes that didn't run pnpm (CLI / backend test jobs), which would mark the whole job red even when every test passed.
+`setup-node`'s `cache:` is intentionally omitted — its post-job cache save fails with a `Path Validation Error` in lanes that didn't run a JS install (CLI / backend test jobs), which would mark the whole job red even when every test passed. No dependency cache is configured for bun either (unchanged from the pnpm era).
 
 After tool install the composite installs the supervisor CLI editably (`uv pip install --system -e .`).
 
@@ -84,10 +84,10 @@ After tool install the composite installs the supervisor CLI editably (`uv pip i
 
 Reusable `workflow_call` workflow with four independent jobs (no plan/change-detection gate, no aggregator — every job runs on every call):
 
-- `build-and-lint` — `pnpm install --frozen-lockfile` + `pnpm run build`, then client lint (`pnpm --filter react-flow-client run lint`), TypeScript check (`... run typecheck`), and frontend tests (`... run test`, vitest). Runs on `ubuntu-latest`.
+- `build-and-lint` — `bun install --frozen-lockfile` + `bun run build`, then client lint (`bun run --filter react-flow-client lint`), TypeScript check (`... typecheck`), and frontend tests (`... test`, vitest). Runs on `ubuntu-latest`.
 - `backend-tests` — `uv sync` + `uv run pytest tests/ -v` in `server/`. Whole suite, unsharded. Runs on `ubuntu-latest`.
 - `cli-tests` — `uv pip install --system pytest pytest-asyncio pyyaml` + `python -m pytest cli/tests/ -v`. Runs on `ubuntu-latest`.
-- `test-build-start` — cross-OS matrix (`ubuntu-latest`, `macos-latest`, `windows-latest`, `fail-fast: false`). Runs `pnpm run build`, then a start smoke test. On Unix it backgrounds `pnpm run start`, polls `http://localhost:5678/health` for up to ~30 s, then `pnpm run stop`. On Windows it starts the supervisor as a background job, waits 15 s, and fails if the job already exited.
+- `test-build-start` — cross-OS matrix (`ubuntu-latest`, `macos-latest`, `windows-latest`, `fail-fast: false`). Runs `bun run build`, then `bun run tsc --version` (proves the per-platform TypeScript 7 Go binary delivered via `optionalDependencies` resolves on every OS — the type-check gate itself runs on ubuntu only; `bun run`, never `bunx`, so it resolves strictly from the root `node_modules/.bin`), then a start smoke test. On Unix it backgrounds `bun run start`, reads `PYTHON_BACKEND_PORT` out of `.env.template` and polls `http://localhost:${APP_PORT}/health` for up to ~30 s, then `bun run stop`. On Windows it starts the supervisor as a background job, waits 15 s, and fails if the job already exited.
 
 ---
 
@@ -121,7 +121,7 @@ publish-npm                    publish-github-packages
       npmjs, public + provenance     npm.pkg.github.com
 ```
 
-- Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → immutable `actions/setup-node` (with the target `registry-url`) → `pnpm install --frozen-lockfile` → `pnpm run build` → `python -m cli version sync`.
+- Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → immutable `actions/setup-node` (with the target `registry-url`) → `bun install --frozen-lockfile` → `bun run build` → `python -m cli version sync`.
 - `publish-npm` — validates the token with `npm whoami`, then publishes the canonical public npmjs package `@zeenie-ai/opencompany` via `npm publish --access public --provenance` with `NODE_AUTH_TOKEN=secrets.NPM_TOKEN`. The `--provenance` flag emits an npm provenance attestation (backed by the workflow's `id-token: write`).
 - `publish-github-packages` — rewrites `package.json` `name` to `@zeenie-ai/opencompany` and sets `publishConfig.registry = https://npm.pkg.github.com`, then `npm publish` with `NODE_AUTH_TOKEN=secrets.GITHUB_TOKEN`.
 
@@ -151,9 +151,41 @@ folder — both the folder and the workflow are gone.
 | `.github/workflows/ci.yml` | CI entry point (delegates to predeploy.yml) |
 | `.github/workflows/predeploy.yml` | Reusable validation (build/lint + backend tests + CLI tests + OS matrix build/start) |
 | `.github/workflows/release.yml` | Tag / manual release: predeploy gate → publish npm + GitHub Packages |
-| `.github/actions/setup/action.yml` | Composite: pnpm + Node + Python + uv + editable CLI install |
-| `.github/dependabot.yml` | Weekly npm, Python, and GitHub Actions update coverage |
+| `.github/actions/setup/action.yml` | Composite: bun + Node + Python + uv + editable CLI install |
+| `.github/dependabot.yml` | **Security updates only** — version-update PRs disabled; see below |
 | `.python-version` | Toolchain pin (`3.12`) — single source of truth |
+
+---
+
+## Dependency update policy (security-only)
+
+Dependabot raises **security PRs only**; routine version bumps are disabled
+(`open-pull-requests-limit: 0` on every entry — the limit affects version
+updates only; security PRs are exempt from both the limit and the schedule
+and are grouped per ecosystem via `applies-to: security-updates`).
+
+Three entries cover the real surfaces: `bun /` (bun workspace spans root +
+`client/` + `server/nodejs/`), `pip /server` (authoritative
+`server/pyproject.toml`; the committed `requirements.txt` export is the
+transitive-pin surface security fixes patch), `github-actions /`. A former
+`pip: /` entry (duplicate churn against `server/requirements.txt`) and a
+dead `npm: /server` entry were removed.
+
+**Caveat on the `bun` ecosystem**: Dependabot's `bun` support does version
+updates only — it never raises security-update PRs, so the security-only
+posture above yields no automated PRs at all for the JS workspace. Alerts
+still fire; the remediation channel is the top-level `overrides` block in
+the root `package.json` (the ranged pins formerly under `pnpm.overrides`).
+
+Repo-level alerts + security updates must stay enabled — verify with
+`gh api repos/zeenie-ai/OpenCompany/vulnerability-alerts` (204 = enabled).
+
+Re-enable version updates deliberately, never by just deleting the limits:
+raise `open-pull-requests-limit`, set `schedule.interval: monthly`, add
+`groups` with `patterns: ["*"]` + `update-types: [minor, patch]`, and
+`cooldown: {semver-major-days: 30}`. Stored comment-ignores (`mcp` 2.x,
+`websockets` 17.x) are inspectable via `@dependabot show <dep> ignore
+conditions`.
 
 ---
 
@@ -162,7 +194,7 @@ folder — both the folder and the workflow are gone.
 The following existed in earlier drafts of this doc but are **not present in the current repo**. Listed here so the intent is preserved without misrepresenting the shipped pipeline:
 
 - **`predeploy.yml` change-detection + aggregator** — a `plan` job (`dorny/paths-filter`) gating downstream jobs, a `pre-commit` job, pytest sharding by domain, and a `ci-passed` aggregator (`re-actors/alls-green`) as the single branch-protection target. Today every predeploy job runs unconditionally and there is no aggregator job.
-- **`release.yml` hardening** — `workflow_dispatch` dry-run default, a blocking `pnpm audit`, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job.
+- **`release.yml` hardening** — `workflow_dispatch` dry-run default, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job. (An earlier draft also planned a blocking `pnpm audit`; bun has no audit-equivalent gate, so the top-level `overrides` block + Dependabot alerts are the vulnerability-remediation channel instead.)
 - **`publish-pypi.yml`** — reusable PyPI publish (OIDC trusted publishing, `uv build --no-sources`, `pypa/gh-action-pypi-publish`). No PyPI distribution is published today.
 - **`test-install.yml`** — cross-platform end-user install smoke (npm install, git clone, install script) across 3 OS.
 - **`rollback.yml`** — manual `npm deprecate` + optional revert PR.

@@ -18,13 +18,14 @@ import { cn } from '@/lib/utils';
 import { queryClient } from '../../lib/queryClient';
 import { getCachedNodeSpec } from '../../lib/nodeSpec';
 import { NodeIcon } from '../../assets/icons';
+import { theme } from '../../styles/theme';
 import { resolveNodeDescription } from '../../lib/nodeSpec';
 
 // ---------------------------------------------------------------------------
 // Backend-driven node output schema lookup.
 //
 // Mirrors n8n's schemaPreview pattern (see
-// docs-internal/schema_source_of_truth_rfc.md): the shape shown in the
+// docs-internal/ARCHIVE/schema_source_of_truth_rfc.md): the shape shown in the
 // drag-drop variable panel for a node that has not been executed yet
 // comes from the backend's Pydantic model registry via the
 // `get_node_output_schema` WS handler. Results are cached per node
@@ -629,7 +630,7 @@ const InputSection: React.FC<InputSectionProps> = ({ nodeId, visible = true }) =
                 className="flex cursor-pointer items-center justify-between bg-muted px-3 py-2 transition-colors hover:bg-card"
               >
                 <div className="flex items-center gap-2">
-                  <NodeIcon icon={node.icon} className="h-5 w-5 text-lg" />
+                  <NodeIcon icon={node.icon} size={theme.iconSize.md} />
                   <span className="font-display text-sm font-semibold text-fg-default">{node.name}</span>
                 </div>
                 <div className="flex items-center gap-2">

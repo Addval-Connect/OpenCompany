@@ -9,9 +9,9 @@ Interactions API and bridges the OpenCompany canvas into it:
   ``execute_tool`` path (so tool nodes glow exactly like they do for
   the local aiAgent loop), then answered via ``function_result`` inputs
   on a chained follow-up create.
-- Conversation + sandbox continuity rides the connected simpleMemory
-  node: ``vertex_interaction_id`` / ``vertex_environment_id`` are stored
-  in its params and the turn is appended to ``memory_content``.
+- Conversation + sandbox continuity lives in the backend Context store as an
+  opaque interaction/environment provider binding. Immutable V1 generations
+  retain their recorded Simple Memory parameter bridge.
 - Cloud-side tool usage (sandbox commands, google_search, ...) is
   surfaced LIVE as dynamic ``vertexCloudTool`` canvas nodes via the
   workflow-ops protocol (agentBuilder pattern) — see ``_ops.py``: each
@@ -30,7 +30,14 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.logging import get_logger
-from services.plugin import ActionNode, NodeContext, NodeUserError, Operation, TaskQueue
+from services.plugin import (
+    ActionNode,
+    NodeContext,
+    NodeUserError,
+    Operation,
+    RetryPolicy,
+    TaskQueue,
+)
 from services.plugin.edge_walker import collect_agent_connections
 from services.plugin.scaling import AI_START_TO_CLOSE
 
@@ -181,11 +188,13 @@ class VertexManagedAgentNode(ActionNode):
         "function calling and shows cloud tool usage on the canvas."
     )
     component_kind = "agent"
+    requires_context = True
     tool_name = "delegate_to_vertex_managed_agent"
     handles = std_agent_handles()
     ui_hints = STD_AGENT_HINTS
     annotations = {"destructive": False, "readonly": False, "open_world": True}
     task_queue = TaskQueue.AI_HEAVY
+    retry_policy = RetryPolicy(maximum_attempts=1)
     # 30m: managed-agent sandbox turns (provision + code execution +
     # multi-round tool bridging) routinely exceed the 10m action default.
     start_to_close_timeout = AI_START_TO_CLOSE
@@ -224,9 +233,24 @@ class VertexManagedAgentNode(ActionNode):
 
         await phase("initializing", message="Starting Vertex managed agent...")
 
-        memory_data, _, tool_data, input_data, _ = await collect_agent_connections(
+        context_data, _, tool_data, input_data, _ = await collect_agent_connections(
             node_id, ctx.raw, database, log_prefix="[Vertex Agent]"
         )
+        from services.cli_agent.context_bridge import (
+            SpecializedAgentContextBridge,
+            is_context,
+        )
+
+        context_bridge: Optional[SpecializedAgentContextBridge] = None
+        memory_data = context_data
+        if is_context(context_data):
+            memory_data = None
+            context_bridge = await SpecializedAgentContextBridge.resolve(
+                database,
+                context_data,
+                provider="vertex",
+                agent_node_id=node_id,
+            )
 
         prompt = params.prompt or self._prompt_from_input(input_data)
         if not prompt:
@@ -234,6 +258,9 @@ class VertexManagedAgentNode(ActionNode):
                 "vertex_managed_agent: provide a prompt or connect an "
                 "input node that produced a message."
             )
+        original_prompt = prompt
+        if context_bridge is not None:
+            prompt = context_bridge.augment_prompt(prompt)
 
         api_key = resolve_api_key_from_context(ctx.raw)
         client = build_genai_client(api_key, params.project_id, params.location)
@@ -245,9 +272,9 @@ class VertexManagedAgentNode(ActionNode):
         # ---- live visibility state (shared with the post-turn sweep)
         live_nodes: Dict[str, str] = {}  # cloud_tool_key -> canvas node id
         open_calls: Dict[str, Dict[str, Any]] = {}  # step id -> {node_id, label, arguments}
-        on_event = None
+        visibility_handler = None
         if params.visualize_cloud_tools:
-            on_event = self._make_live_handler(
+            visibility_handler = self._make_live_handler(
                 broadcaster=broadcaster,
                 workflow_id=workflow_id,
                 agent_node_id=node_id,
@@ -255,6 +282,8 @@ class VertexManagedAgentNode(ActionNode):
                 live_nodes=live_nodes,
                 open_calls=open_calls,
             )
+
+        on_event = visibility_handler
 
         # ---- memory bridge: interaction/environment chain ids
         prev_interaction_id: Optional[str] = None
@@ -265,6 +294,9 @@ class VertexManagedAgentNode(ActionNode):
             mem_params = await database.get_node_parameters(memory_node_id) or {}
             prev_interaction_id = mem_params.get("vertex_interaction_id") or None
             environment = mem_params.get("vertex_environment_id") or "remote"
+        # Context-bound runs start a fresh remote interaction every firing:
+        # continuity comes from the stored conversation rendered into the
+        # prompt, not from chained provider interaction ids.
 
         create_kwargs: Dict[str, Any] = {
             "agent": params.agent,
@@ -377,11 +409,10 @@ class VertexManagedAgentNode(ActionNode):
             function_results = []
             for call in results:
                 await phase("executing_tool", tool_name=call["name"])
-                function_results.append(
-                    await self._execute_bridged_call(
-                        call, tool_configs, ctx, delegation_wait_seconds=wait
-                    )
+                function_result = await self._execute_bridged_call(
+                    call, tool_configs, ctx, delegation_wait_seconds=wait
                 )
+                function_results.append(function_result)
             turn += 1
             await broadcaster.broadcast_agent_progress(
                 node_id, workflow_id=workflow_id, iteration=turn, max_iterations=params.max_turns
@@ -458,6 +489,20 @@ class VertexManagedAgentNode(ActionNode):
                     else None
                 ),
             )
+        elif context_bridge is not None and response_text:
+            await phase("saving_context")
+            # Best-effort: the provider already ran and billed, so a save
+            # failure must not fail the run.
+            try:
+                await context_bridge.record_turn(
+                    original_prompt,
+                    response_text,
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort persist
+                logger.warning(
+                    "[Vertex Agent] conversation save failed; continuing: %s",
+                    exc,
+                )
 
         # ---- usage bookkeeping (tokens billed by Google; recorded for stats)
         try:
@@ -498,8 +543,16 @@ class VertexManagedAgentNode(ActionNode):
 
         return {
             "response": response_text,
-            "interaction_id": getattr(interaction, "id", None),
-            "environment_id": environment_id,
+            # Provider bindings are fetched through the authorized Context
+            # API in V2; they never enter ordinary node outputs.
+            "interaction_id": (
+                getattr(interaction, "id", None)
+                if context_bridge is None
+                else None
+            ),
+            "environment_id": (
+                environment_id if context_bridge is None else None
+            ),
             "status": status,
             "agent": params.agent,
             "provider": "gemini",
@@ -563,6 +616,7 @@ class VertexManagedAgentNode(ActionNode):
         from constants import AI_AGENT_TYPES
         from services.plugin.deps import get_ai_service
         from services.plugin.tool import inline_schema_refs
+        from services.tool_identity import ensure_unique_tool_names
 
         ai_service = get_ai_service()
         declared: List[Dict[str, Any]] = []
@@ -582,22 +636,26 @@ class VertexManagedAgentNode(ActionNode):
                 schema = inline_schema_refs(structured.args_schema.model_json_schema())
             else:
                 schema = {"type": "object", "properties": {}}
-            # Deterministic de-dup: first node keeps the base name, later
-            # nodes (edge order) get _2, _3, ... — declared list and
-            # dispatch configs stay in sync. Dispatch routes by the
-            # config's node_type/node_id, so a suffixed name is safe.
             name = structured.name
             if name in configs:
-                n = 2
-                while f"{name}_{n}" in configs:
-                    n += 1
-                logger.warning(
-                    "[Vertex Agent] duplicate tool name %r (node %s) — declared as %r",
-                    name,
-                    (config or {}).get("node_id"),
-                    f"{name}_{n}",
+                # The provider-visible identity is part of the canonical tool
+                # contract. Never invent Vertex-only suffixes: that would hide
+                # an ambiguous topology and make dispatch differ from native,
+                # Temporal, CLI, and RLM agents.
+                ensure_unique_tool_names(
+                    [
+                        {
+                            "name": name,
+                            "node_id": configs[name].get("node_id") or "",
+                            "label": configs[name].get("label") or name,
+                        },
+                        {
+                            "name": name,
+                            "node_id": (config or {}).get("node_id") or "",
+                            "label": (config or {}).get("label") or name,
+                        },
+                    ]
                 )
-                name = f"{name}_{n}"
             declared.append(
                 {
                     "type": "function",

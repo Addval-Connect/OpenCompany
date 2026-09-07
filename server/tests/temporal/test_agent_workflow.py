@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 
 class TestAgentWorkflowDefinition:
     """``AgentWorkflow`` must be a valid Temporal workflow definition
@@ -92,6 +93,257 @@ class TestDurableTeamDelegationContract:
         assert '"team_id": payload.get("team_id") or context.get("team_id")' in source
         assert '"execution_id": context.get("execution_id")' in source
 
+
+class TestConversationIdentity:
+    """Every firing continues one conversation and saves each turn once."""
+
+    def test_conversation_key_is_workflow_generation_agent(self):
+        """The conversation key is (workflow_id, generation, agent_node_id).
+
+        The journal design keyed threads per firing/session, so a taskTrigger
+        review resolved a different thread from the chat that started the
+        work and the lead came back amnesiac (messages=2). One key per agent
+        per generation makes every firing continue the same conversation.
+        """
+        import inspect
+
+        from services.temporal import agent_activities
+
+        source = inspect.getsource(agent_activities.prepare_agent_payload)
+        assert '"workflow_id"' in source
+        assert '"generation"' in source
+        assert '"agent_node_id"' in source
+        assert "conversation_key" in source
+
+    def test_no_local_import_shadows_a_name_after_use(self):
+        """A function-local import makes its name local for the WHOLE
+        function, so any use above the import raises UnboundLocalError at
+        runtime — invisible to py_compile. A mid-function ``import json``
+        below the conversation size guard failed every Context-connected
+        run at ``prepare_agent_payload`` (attempt 3, ConversationLoadFailed
+        never even reached: the crash was the guard itself).
+        """
+        import ast
+        import inspect
+
+        from services.temporal import agent_activities
+
+        tree = ast.parse(inspect.getsource(agent_activities))
+        offenders: list[str] = []
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            imported_at: dict[str, int] = {}
+            used_at: dict[str, int] = {}
+            for node in ast.walk(func):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    for alias in node.names:
+                        name = alias.asname or alias.name.split(".")[0]
+                        line = imported_at.get(name)
+                        imported_at[name] = (
+                            node.lineno if line is None else min(line, node.lineno)
+                        )
+                elif isinstance(node, ast.Name) and isinstance(
+                    node.ctx, ast.Load
+                ):
+                    if node.id not in used_at:
+                        used_at[node.id] = node.lineno
+            for name, import_line in imported_at.items():
+                use_line = used_at.get(name)
+                if use_line is not None and use_line < import_line:
+                    offenders.append(
+                        f"{func.name}: '{name}' used at line {use_line} "
+                        f"but locally imported at line {import_line}"
+                    )
+        assert not offenders, (
+            "local imports shadowing an earlier use (UnboundLocalError at "
+            f"runtime): {offenders}"
+        )
+
+    def test_compaction_preserves_the_system_prompt_and_summary_survival(
+        self,
+    ):
+        """Compaction rebuilds as [original system, user(summary+request)].
+
+        Two rules are locked. (1) The system prompt is never modified or
+        duplicated: it is the agent's contract and must stay byte-stable
+        (provider prompt caching, behavioral consistency). (2) The summary
+        must NOT ride ``role="system"`` — the next firing's seeding drops
+        stored system messages so policy changes take effect, which once
+        made the summary vanish on the next chat message while the noisy
+        tool tail (non-system) survived it. As a user message, the
+        compacted knowledge crosses firings with the conversation.
+        """
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert "## Compacted summary:" not in source, (
+            "the old system-role summary marker is retired"
+        )
+        start = source.index('summary = compact_result.get("summary"')
+        end = source.index("context_usage_total = {}", start)
+        rebuild = source[start:end]
+        assert rebuild.count('role="system"') == 1, (
+            "compaction must keep exactly ONE system message — the "
+            "original, verbatim"
+        )
+        assert 'role="user"' in rebuild, (
+            "the summary must ride a user message so it survives the next "
+            "firing's stored-system filter"
+        )
+        # Observability: both the trigger and the applied swap are logged.
+        assert "compaction triggered at iteration" in source
+        assert "compaction applied at iteration" in source
+
+    def test_resumed_run_continues_from_the_carried_transcript(self):
+        """continue_as_new carries the live transcript itself.
+
+        The journal-replay design reconstructed the conversation from the
+        Context store on resume, and its journal was missing every tool
+        result — so the replayed transcript ended on an assistant tool-call
+        turn with no answers, which every provider rejects (Gemini 400:
+        "Requests ending with a model turn are not supported"). Carrying
+        the messages directly makes that bug unrepresentable.
+        """
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert 'resume.get("transcript")' in source, (
+            "a resumed AgentWorkflow must continue from the transcript "
+            "carried across continue_as_new"
+        )
+        assert "agent.reconstruct_context_messages" not in source, (
+            "journal replay on resume was retired; the transcript crosses "
+            "the boundary directly"
+        )
+        carried_at = source.index('resume.get("transcript")')
+        loop_at = source.index("agent.execute_llm_step")
+        assert carried_at < loop_at, (
+            "the carried transcript must be adopted before the first LLM "
+            "step of the resumed run"
+        )
+
+    def test_rollover_guards_transcript_size(self):
+        """The CAN argument shares Temporal's 2 MiB payload error limit.
+
+        An oversized transcript must degrade to the opening prompt with a
+        warning instead of failing the rollover itself (which would kill
+        the run at exactly the moment it tried to survive).
+        """
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert "_CAN_TRANSCRIPT_MAX_BYTES" in source
+        guard_at = source.index("_CAN_TRANSCRIPT_MAX_BYTES")
+        can_at = source.index("workflow.continue_as_new(")
+        assert guard_at < can_at, (
+            "the size guard must run before continue_as_new is issued"
+        )
+
+    def test_workflow_never_claims_the_activity_rebuilds_the_request(self):
+        """Guards the comment, not the code.
+
+        Two comments used to state that the LLM activity reconstructs from the
+        store rather than from ``messages``. That was false, and it is exactly
+        the sentence a future reader would implement to reintroduce the
+        original bug.
+        """
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        for claim in (
+            "reconstructs\n",
+            "source of truth for the transcript",
+            "rather than from `messages`",
+        ):
+            assert claim not in source, (
+                f"stale claim {claim!r} in AgentWorkflow.run -- the activity "
+                f"always builds its request from `messages`"
+            )
+
+    def test_llm_step_has_a_single_implementation(self):
+        """A Context node observes execution; it must not steer it.
+
+        ``context_ref`` used to select a second, journal-backed LLM
+        implementation that rebuilt the request from the store instead of
+        sending ``messages``. That transcript did not carry the user's prompt,
+        so merely connecting a Context node made the agent answer an empty
+        question.
+        """
+        import inspect
+
+        from services.temporal import agent_activities
+
+        source = inspect.getsource(agent_activities)
+        assert "_execute_context_llm_step" not in source, (
+            "a second LLM implementation selected by context_ref is exactly "
+            "how attaching a Context node changed the agent's request"
+        )
+        step = inspect.getsource(agent_activities.execute_llm_step)
+        assert "if payload.get(\"context_ref\")" not in step
+
+    def test_save_failure_cannot_fail_the_run(self):
+        """Persistence must never break execution.
+
+        The conversation save happens after the provider has been called and
+        billed, so raising there fails the turn over a bookkeeping write — and
+        for a team lead, stalls its next delegation.
+        """
+        import ast
+        import inspect
+
+        from services.temporal import agent_activities
+
+        fn = ast.parse(
+            inspect.getsource(agent_activities._save_conversation)
+        ).body[0]
+        handlers = [
+            handler
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Try)
+            for handler in node.handlers
+        ]
+        assert handlers, (
+            "_save_conversation must not let a write failure escape"
+        )
+        assert any(
+            h.type is None
+            or (isinstance(h.type, ast.Name) and h.type.id == "Exception")
+            for h in handlers
+        )
+
+    def test_conversation_records_the_exact_request_never_a_reconstruction(
+        self,
+    ):
+        """The store must record what was sent, not rebuild it.
+
+        The retired ``prepare_context`` activity wrote journal entries
+        assembled from configuration before the request existed — that is
+        how the journal came to hold a fabricated request. The turn is saved
+        from the exact list handed to ``ChatUnifier.chat``, after the call.
+        """
+        import inspect
+
+        from services.temporal import agent_activities
+
+        assert not hasattr(agent_activities, "prepare_context"), (
+            "prepare_context journalled configuration before a request "
+            "existed; the plain store saves only what was sent"
+        )
+
+        native = inspect.getsource(agent_activities._execute_native_llm_step)
+        sent = native.index("_save_conversation")
+        called = native.index("run_native_llm_step(")
+        assert called < sent, "save the request only after it was sent"
+
     def test_root_execution_identity_is_initialized_before_agent_loop(self):
         import inspect
 
@@ -99,7 +351,7 @@ class TestDurableTeamDelegationContract:
 
         source = inspect.getsource(AgentWorkflow.run)
         initialization = source.index("root_execution_id = str(")
-        tool_loop = source.index("for iteration in range(max_iterations)")
+        tool_loop = source.index("for iteration in range(iteration_offset, max_iterations)")
         result_payload = source.index('"root_execution_id": root_execution_id')
         assert initialization < tool_loop < result_payload
 
@@ -124,8 +376,8 @@ class TestDurableTeamDelegationContract:
         assert '"DelegatedTaskWorkflow"' in lead_source
         assert "ParentClosePolicy.ABANDON" in lead_source
         assert 'return {"status": "queued"' in lead_source
-        assert '"agent.finish_delegation.v1"' in runner_source
-        assert '"agent.release_subagent_permit.v1"' in runner_source
+        assert '"agent.finish_delegation"' in runner_source
+        assert '"agent.release_subagent_permit"' in runner_source
 
     def test_queued_work_does_not_block_lead_final_response(self):
         import inspect
@@ -162,13 +414,13 @@ class TestDurableTeamDelegationContract:
         from services.temporal.agent_workflow import AgentWorkflow
 
         source = inspect.getsource(AgentWorkflow.run)
-        queue_at = source.index('"agent.queue_delegation.v1"')
-        acquire_at = source.index('"agent.acquire_subagent_permit.v1"')
-        claim_at = source.index('"agent.begin_delegation.v1"')
+        queue_at = source.index('"agent.queue_delegation"')
+        acquire_at = source.index('"agent.acquire_subagent_permit"')
+        claim_at = source.index('"agent.begin_delegation"')
         start_at = source.index("workflow.start_child_workflow")
         assert queue_at < acquire_at < claim_at < start_at
-        assert '"agent.finish_delegation.v1"' in source
-        assert '"agent.release_subagent_permit.v1"' in source
+        assert '"agent.finish_delegation"' in source
+        assert '"agent.release_subagent_permit"' in source
         assert "assignment_event_id" in source
         assert "terminal_event_id" in source
 
@@ -196,15 +448,14 @@ class TestDurableTeamDelegationContract:
         detached = source.index('"DelegatedTaskWorkflow"', queue)
         assert queue < detached
         runner = inspect.getsource(DelegatedTaskWorkflow.run)
-        permit = runner.index('"agent.acquire_subagent_permit.v1"')
-        claim = runner.index('"agent.begin_delegation.v1"')
+        permit = runner.index('"agent.acquire_subagent_permit"')
+        claim = runner.index('"agent.begin_delegation"')
         child = runner.index('"AgentWorkflow"', claim)
-        finish = runner.index('"agent.finish_delegation.v1"', child)
-        release = runner.index('"agent.release_subagent_permit.v1"', finish)
+        finish = runner.index('"agent.finish_delegation"', child)
+        release = runner.index('"agent.release_subagent_permit"', finish)
         assert permit < claim < child < finish < release
         assert '"permit_id": task_id' in runner
         assert '"team_task_id": task_id' in source
-        assert "TASK_MANAGER_DELEGATION_PATCH" in source
 
     def test_task_manager_child_lead_yields_own_permit(self):
         import inspect
@@ -226,7 +477,7 @@ class TestDurableTeamDelegationContract:
         create_children = source.index("asyncio.create_task(", gather)
         ordered_loop = source.index("for call_index, call in enumerate(calls):", create_children)
         ordered_await = source.index(
-            "await task_manager_delegation_tasks[call_index]", ordered_loop
+            "await task_manager_delegation_tasks.pop(call_index)", ordered_loop
         )
         assert start_activity < gather < create_children < ordered_loop < ordered_await
         assert "task_manager_preflight_results[call_index]" in source
@@ -243,60 +494,61 @@ class TestAgentActivities:
 
         defn = getattr(execute_llm_step, "__temporal_activity_definition", None)
         assert defn is not None
-        assert defn.name == "agent.execute_llm_step.v1"
+        assert defn.name == "agent.execute_llm_step"
 
     def test_persist_agent_turn_registered(self):
         from services.temporal.agent_activities import persist_agent_turn
 
         defn = getattr(persist_agent_turn, "__temporal_activity_definition")
-        assert defn.name == "agent.persist_turn.v1"
+        assert defn.name == "agent.persist_turn"
 
-    def test_compact_agent_memory_registered(self):
-        from services.temporal.agent_activities import compact_agent_memory
+    def test_compact_context_registered(self):
+        from services.temporal.agent_activities import compact_context
 
-        defn = getattr(compact_agent_memory, "__temporal_activity_definition")
-        assert defn.name == "agent.compact_memory.v1"
+        defn = getattr(compact_context, "__temporal_activity_definition")
+        assert defn.name == "agent.compact_context"
 
     def test_collect_returns_all_agent_activities(self):
-        """Each successive sprint added one F4.B agent activity:
-        infra (3) → per-agent-wiring +prepare_payload (4) → CloudEvents
-        cleanup +broadcast_progress (5) → +store_output (6) →
-        +refresh_tools (7) + durable delegation lifecycle/coordinator (13). All must register so the AgentWorkflow loop
-        can schedule them by name."""
+        """Every activity the AgentWorkflow loop schedules by name must
+        register here. The single-standard cleanup retired the journal
+        replay surface (reconstruct_context_messages / append_context /
+        compact_memory) — the transcript now crosses continue_as_new
+        directly and compaction summarizes the live conversation."""
         from services.temporal.agent_activities import collect_agent_activities
 
         activities = collect_agent_activities()
         names = sorted(getattr(a, "__temporal_activity_definition").name for a in activities)
         assert names == [
-            "agent.acquire_subagent_permit.v1",
-            "agent.begin_delegation.v1",
-            "agent.broadcast_progress.v1",
-            "agent.compact_memory.v1",
-            "agent.execute_llm_step.v1",
-            "agent.finalize_team.v1",
-            "agent.finish_delegation.v1",
-            "agent.persist_turn.v1",
-            "agent.prepare_payload.v1",
-            "agent.queue_delegation.v1",
-            "agent.refresh_tools.v1",
-            "agent.register_task_execution.v1",
-            "agent.release_subagent_permit.v1",
-            "agent.skill.clear.v1",
-            "agent.skill.invoke.v1",
-            "agent.store_output.v1",
+            "agent.acquire_subagent_permit",
+            "agent.begin_delegation",
+            "agent.broadcast_progress",
+            "agent.cancel_delegation",
+            "agent.compact_context",
+            "agent.execute_llm_step",
+            "agent.finalize_team",
+            "agent.finish_delegation",
+            "agent.persist_turn",
+            "agent.prepare_payload",
+            "agent.queue_delegation",
+            "agent.refresh_tools",
+            "agent.register_task_execution",
+            "agent.release_subagent_permit",
+            "agent.skill.clear",
+            "agent.skill.invoke",
+            "agent.store_output",
         ]
 
     def test_prepare_payload_registered(self):
         from services.temporal.agent_activities import prepare_agent_payload
 
         defn = getattr(prepare_agent_payload, "__temporal_activity_definition")
-        assert defn.name == "agent.prepare_payload.v1"
+        assert defn.name == "agent.prepare_payload"
 
     def test_broadcast_progress_registered(self):
         from services.temporal.agent_activities import broadcast_agent_progress
 
         defn = getattr(broadcast_agent_progress, "__temporal_activity_definition")
-        assert defn.name == "agent.broadcast_progress.v1"
+        assert defn.name == "agent.broadcast_progress"
 
     async def test_temporal_tool_progress_preserves_visible_tool_name(self, monkeypatch):
         """A phase-only Temporal event must still update the agent card.
@@ -358,7 +610,7 @@ class TestAgentActivities:
         from services.temporal.agent_workflow import AgentWorkflow
 
         source = inspect.getsource(AgentWorkflow.run)
-        failure = source.index("except Exception as e:", source.index('"agent.execute_llm_step.v1"'))
+        failure = source.index("except Exception as e:", source.index('"agent.execute_llm_step"'))
         terminal_return = source.index('"error_type": "LLMStepError"', failure)
         cleanup = source.index('activity_id="clear-active-skills-failed"', failure)
         error_phase = source.index('phase="failed"', cleanup)
@@ -532,7 +784,7 @@ class TestAutoRebindTools:
 
         defn = getattr(refresh_agent_tools, "__temporal_activity_definition", None)
         assert defn is not None, "refresh_agent_tools missing @activity.defn"
-        assert defn.name == "agent.refresh_tools.v1"
+        assert defn.name == "agent.refresh_tools"
 
     def test_refresh_tools_in_collect(self):
         """Worker registration must include the new activity so
@@ -540,7 +792,7 @@ class TestAutoRebindTools:
         from services.temporal.agent_activities import collect_agent_activities, refresh_agent_tools
 
         names = {getattr(a, "__temporal_activity_definition").name for a in collect_agent_activities()}
-        assert "agent.refresh_tools.v1" in names
+        assert "agent.refresh_tools" in names
         assert refresh_agent_tools in collect_agent_activities()
 
     async def test_refresh_tools_runs_without_nameerror(self, monkeypatch):
@@ -567,7 +819,7 @@ class TestAutoRebindTools:
         from services.temporal.agent_workflow import AgentWorkflow
 
         src = inspect.getsource(AgentWorkflow.run)
-        assert '"agent.refresh_tools.v1"' in src, (
+        assert '"agent.refresh_tools"' in src, (
             "AgentWorkflow tool dispatch must schedule agent.refresh_tools.v1 "
             "when a tool result returns workflow_ops operations."
         )
@@ -854,3 +1106,206 @@ class TestNeedsCanvasDispatch:
             "level so the workflow body can resolve plugin classes by "
             "type string."
         )
+
+
+class TestWorkerRegistrationParity:
+    """The three Worker constructions must expose the same surface.
+
+    They previously hand-maintained duplicate workflow lists, which is how
+    ``agent.cancel_delegation.v1`` ended up scheduled-but-unregistered and
+    how the V2 activity spread drifted between them.
+    """
+
+    def test_framework_workflow_list_is_single_sourced(self):
+        import inspect
+
+        from services.temporal import worker as worker_module
+
+        names = [cls.__name__ for cls in worker_module._framework_workflows()]
+        assert names == sorted(set(names), key=names.index), "duplicate workflow class"
+        assert "MachinaWorkflow" in names
+        assert "AgentWorkflow" in names
+
+        source = inspect.getsource(worker_module)
+        # Every construction goes through the helper; none re-lists classes.
+        assert source.count("workflows=_framework_workflows()") == 3
+        assert "workflows=[" not in source
+
+    def test_every_scheduled_agent_activity_is_registered(self):
+        """Guards the class of bug that left cancel_delegation unregistered."""
+        import inspect
+        import re
+
+        from services.temporal import agent_workflow as wf_module
+        from services.temporal.agent_activities import collect_agent_activities
+
+        registered = {
+            getattr(a, "__temporal_activity_definition").name
+            for a in collect_agent_activities()
+        }
+        scheduled = set(
+            re.findall(r'"(agent\.[a-z_.]+\.v\d)"', inspect.getsource(wf_module))
+        )
+        missing = scheduled - registered
+        assert not missing, f"scheduled but not registered on any worker: {sorted(missing)}"
+
+
+class TestCompactionPauseIsNotAnAnswer:
+    """A provider stop-to-compact must never surface as the agent's answer.
+
+    A compaction stop carries no tool calls, so `kind` is "final" and the
+    truncated content would be returned to the user verbatim.
+    """
+
+    def test_native_payload_requests_the_finish_reason(self):
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        # Without this the workflow cannot distinguish the two stop kinds.
+        assert '"include_finish_reason": True' in source
+
+    def test_workflow_continues_instead_of_finalising_on_compaction(self):
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert 'finish_reason == "compaction"' in source
+        # The guard must sit BEFORE the final-answer branch, or the answer
+        # is already returned by the time it runs.
+        assert source.index('finish_reason == "compaction"') < source.index('if kind == "final":')
+
+    def test_activity_only_emits_finish_reason_when_asked(self):
+        """Opt-in keeps the legacy payload shapes byte-identical."""
+        import inspect
+
+        from services.temporal.agent_activities import _execute_native_llm_step
+
+        source = inspect.getsource(_execute_native_llm_step)
+        assert 'payload.get("include_finish_reason")' in source
+
+
+class TestDelegatedChildrenInheritScope:
+    """A subagent must resolve its own context, not silently none.
+
+    The scope keys are injected into a ROOT node's context by
+    MachinaWorkflow. Delegated children are started by the agent workflow
+    itself, so without explicit inheritance they carry none of them and
+    every subagent turn goes unjournalled with no error.
+    """
+
+    def test_inherited_scope_forwards_only_present_keys(self):
+        from services.temporal.agent_workflow import _inherited_scope
+
+        got = _inherited_scope(
+            {"generation": 4, "graphVersion": 2, "user_id": "u1", "unrelated": "x"}
+        )
+        assert got == {"generation": 4, "graphVersion": 2, "user_id": "u1"}
+        # Absent keys must not materialise as None — `generation: None`
+        # would fail the int() coercion downstream.
+        assert _inherited_scope({}) == {}
+
+    def test_both_delegation_sites_inherit_scope(self):
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert source.count("**_inherited_scope(context)") == 2
+
+    def test_inherited_scope_never_overrides_explicit_child_keys(self):
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        for block in source.split("child_context = {")[1:]:
+            spread = block.index("**_inherited_scope(context)")
+            node_id = block.index('"node_id"')
+            assert spread < node_id, "spread must come first so explicit keys win"
+
+
+class TestAgentContinueAsNew:
+    """The agent loop carries a transcript and a growing tool list, so it
+    must roll over before Temporal's ~51,200-event hard terminate."""
+
+    def test_rollover_exists_and_carries_the_essentials(self):
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert "workflow.continue_as_new(" in source
+        # The transcript, usage totals, refs and counters cross the
+        # boundary. The transcript is size-guarded (see
+        # test_rollover_guards_transcript_size) so the CAN argument stays
+        # under Temporal's payload error limit.
+        carried = source[source.index("_RESUME_MARKER:") :][:700]
+        # The conversation key is deliberately NOT carried: prepare_payload
+        # recomputes it deterministically from the descriptor on every run,
+        # resumed or fresh.
+        for required in (
+            '"transcript"',
+            '"usage"',
+            '"context_usage"',
+            '"iteration"',
+            '"execution_id"',
+        ):
+            assert required in carried, f"{required} must cross the rollover"
+
+    def test_rollover_is_not_gated_on_a_context_node(self):
+        """Every agent must roll over under history pressure.
+
+        The journal-replay design gated the rollover on ``context_ref``,
+        so an agent without a Context node grew until Temporal's hard
+        history terminate. With the transcript carried directly there is
+        no reason to require a Context node.
+        """
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert "if _history_pressure(_AGENT_HISTORY_SOFT_CAP):" in source
+        assert "if context_ref and _history_pressure" not in source
+
+    def test_execution_id_survives_the_rollover(self):
+        """run_id changes on continue-as-new.
+
+        execution_id falls back to run_id[:8], so a resumed run would mint a
+        different id and break browser-session reuse and permit scoping.
+        """
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert 'resume.get("execution_id")' in source
+        assert source.index('resume.get("execution_id")') < source.index(
+            'workflow.info().run_id[:8]'
+        ), "the carried id must take precedence over the run_id fallback"
+
+    def test_iteration_continues_rather_than_resetting(self):
+        """iteration is baked into delegation child ids and team_task_id;
+        resetting it to 0 collides with the pre-rollover run."""
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert "for iteration in range(iteration_offset, max_iterations)" in source
+        assert '"iteration": iteration + 1' in source
+
+    def test_rollover_refused_while_a_delegation_is_live(self):
+        """delegation_handles holds ChildWorkflowHandle objects and the
+        Task-Manager map holds asyncio.Tasks — neither is serializable."""
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        guard = "delegation_handles or task_manager_delegation_tasks"
+        assert guard in source
+        assert source.index(guard) < source.index("workflow.continue_as_new(")

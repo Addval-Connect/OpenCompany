@@ -6,7 +6,8 @@ storage format / concern owns its own module:
   - :mod:`services.memory.markdown` — markdown parse/append/trim
     (used by aiAgent / chatAgent / rlm_agent)
   - :mod:`services.memory.jsonl` — Anthropic Messages JSONL
-    parse/append/trim (used by claude_code_agent's session bridge)
+    parse/append/trim (standalone primitive; no agent consumes it today —
+    claude_code_agent's continuity is claude-native via --continue/--resume)
   - :mod:`services.memory.vector_store` — per-session native semantic
     store for long-term archival
   - :mod:`services.memory.state` — orchestration: clear every store
@@ -40,6 +41,10 @@ from services.memory.runtime import (
     append_memory_turns_atomic,
     update_memory_parameters_atomic,
 )
+from services.memory.tool_store import (
+    MemoryScope,
+    MemoryToolStore,
+)
 
 __all__ = [
     # Markdown helpers — used by every agent bridge (aiAgent /
@@ -64,4 +69,7 @@ __all__ = [
     # Transactional runtime writes.
     "append_memory_turns_atomic",
     "update_memory_parameters_atomic",
+    # Explicit durable Memory tool.
+    "MemoryScope",
+    "MemoryToolStore",
 ]

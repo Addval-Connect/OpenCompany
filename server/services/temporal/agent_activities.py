@@ -16,9 +16,10 @@ RFC §6.3 plus the F4 deferred follow-up). Activities defined here:
   ``services.ai`` uses today. Per user decision (plan §15) memory
   appends per turn, not on completion, so workflow failures don't lose
   progress.
-- :func:`compact_agent_memory` — invoke ``CompactionService.compact_context``
-  when token thresholds trip. Returns the compacted summary message
-  list. Token accounting stays in the workflow state.
+- :func:`compact_context` — summarize the live conversation via
+  ``CompactionService`` when token thresholds trip. The workflow swaps
+  its ``messages`` for the summary; token accounting stays in the
+  workflow state.
 
 Determinism: every activity is a leaf computation (LLM ainvoke, DB
 write, summarisation). The workflow that calls them is sandboxed=False
@@ -36,19 +37,25 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+from datetime import timedelta
 import hashlib
+import json
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Mapping, Optional
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
 
 logger = logging.getLogger(__name__)
 
-# The only engine there is. Kept as a named constant rather than inlined
-# because it is written into Temporal history by ``prepare_agent_payload``
-# and read back by ``execute_llm_step`` to detect pre-cutover runs.
-_NATIVE_LLM_ENGINE = "native"
-
+# Byte ceiling for the stored conversation returned by ``prepare_agent_payload``
+# as a fresh-run seed. Conversations are compaction-bounded in tokens but not
+# in bytes, and Temporal's payload error limit is 2 MiB for the whole activity
+# result — over the cap the run degrades to its opening prompt with a warning
+# instead of dying. Mirrors ``_CAN_TRANSCRIPT_MAX_BYTES`` on the rollover path.
+_SEED_TRANSCRIPT_MAX_BYTES = 1_000_000
 
 # Activity result shapes — keep these in sync with AgentWorkflow's
 # expectations. Pydantic was considered but plain dicts keep the
@@ -159,11 +166,23 @@ def _as_temporal_llm_error(error: Any):
         "retry_after": getattr(error, "retry_after", None),
         "retry_after_raw": getattr(error, "retry_after_raw", None),
     }
+    # Honor the provider's own pacing: a 429 with Retry-After should wait
+    # exactly that long before the next attempt instead of the policy's
+    # generic backoff.
+    retry_after = details["retry_after"]
+    next_retry_delay = (
+        timedelta(seconds=float(retry_after))
+        if details["retryable"]
+        and isinstance(retry_after, (int, float))
+        and retry_after > 0
+        else None
+    )
     return ApplicationError(
         safe_message,
         details,
         type=f"LLMError.{category}",
         non_retryable=not details["retryable"],
+        next_retry_delay=next_retry_delay,
     )
 
 
@@ -229,26 +248,12 @@ async def _execute_native_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     from services.llm.messages import filter_empty_messages
     from services.llm.protocol import (
         LLMError,
-        MESSAGE_WIRE_VERSION,
-        NATIVE_MESSAGE_WIRE_VERSIONS,
         Message,
         ThinkingConfig,
         ToolDef,
         message_to_wire,
         messages_from_wire,
     )
-
-    wire_version = int(
-        payload.get("message_wire_version") or MESSAGE_WIRE_VERSION
-    )
-    if wire_version not in NATIVE_MESSAGE_WIRE_VERSIONS:
-        from temporalio.exceptions import ApplicationError
-
-        raise ApplicationError(
-            f"Unsupported native message wire version {wire_version}",
-            type="InvalidAgentMessageWireVersion",
-            non_retryable=True,
-        )
 
     messages = filter_empty_messages(
         messages_from_wire(payload.get("messages") or [])
@@ -288,6 +293,7 @@ async def _execute_native_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
                 max_tokens=payload.get("max_tokens", 4096),
                 thinking=thinking,
                 tools=tool_defs,
+                context_management=payload.get("context_management"),
                 # Temporal owns the one-shot retry contract. SDK retries could
                 # otherwise re-bill a request after an ambiguous transport loss.
                 sdk_max_retries=0,
@@ -309,6 +315,17 @@ async def _execute_native_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     assistant_wire = message_to_wire(assistant)
     usage = asdict(response.usage)
 
+    # Persist the conversation exactly as it happened: the message list this
+    # activity just sent to the provider plus the reply it got back.
+    # ``messages`` above IS the argument handed to ``ChatUnifier.chat`` —
+    # nothing is rebuilt, inferred, or re-typed, so the stored conversation
+    # cannot drift from the request.
+    await _save_conversation(
+        payload,
+        sent=[dict(message_to_wire(message)) for message in messages],
+        assistant_wire=dict(assistant_wire),
+    )
+
     if response.tool_calls:
         calls = []
         for tool_call in response.tool_calls:
@@ -324,25 +341,75 @@ async def _execute_native_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
             if parse_error:
                 call["parse_error"] = parse_error
             calls.append(call)
-        return {
+        result = {
             "kind": "tool_calls",
             "assistant_message": assistant_wire,
             "calls": calls,
             "usage": usage,
         }
+        if payload.get("include_finish_reason"):
+            result["finish_reason"] = response.finish_reason
+        return result
 
-    return {
+    result = {
         "kind": "final",
         "assistant_message": assistant_wire,
         "content": response.content or "",
         "thinking": response.thinking,
         "usage": usage,
     }
+    if payload.get("include_finish_reason"):
+        result["finish_reason"] = response.finish_reason
+    return result
 
 
-@activity.defn(name="agent.execute_llm_step.v1")
+async def _save_conversation(
+    payload: Dict[str, Any],
+    *,
+    sent: List[Dict[str, Any]],
+    assistant_wire: Dict[str, Any],
+) -> None:
+    """Persist the full transcript for this turn, when a key is attached.
+
+    Persistence only: it never influences the request. ``sent`` is the
+    exact list handed to the provider; ``sent + [assistant]`` IS the
+    conversation after this turn, saved whole (last-write-wins upsert per
+    key). Living inside the LLM activity means per-turn durability with
+    zero extra activities and zero Temporal-history payload.
+    """
+    key = payload.get("conversation_key")
+    if not isinstance(key, dict):
+        return
+    try:
+        from core.container import container
+        from services.agent_context import save_conversation
+
+        await save_conversation(
+            container.database(),
+            workflow_id=str(key.get("workflow_id") or ""),
+            generation=int(key.get("generation") or 0),
+            agent_node_id=str(key.get("agent_node_id") or ""),
+            messages=[*sent, assistant_wire],
+        )
+    except Exception:
+        # Persistence must never fail the run. The provider has already
+        # been called and billed by this point, so raising here would fail
+        # the turn — and, for a team lead, stall its next delegation —
+        # over a bookkeeping write.
+        activity.logger.warning(
+            "Conversation save failed; execution continues",
+            exc_info=True,
+        )
+
+
+@activity.defn(name="agent.execute_llm_step")
 async def execute_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Run one LLM turn with bound tools and return the structured response.
+
+    The single LLM-step activity. There is exactly one implementation: the
+    request is always built from ``payload["messages"]``. A ``context_ref``
+    only asks for the turn to be journalled afterwards — attaching a Context
+    node observes the agent, it never changes what the agent sends.
 
     ``payload`` shape::
 
@@ -371,39 +438,18 @@ async def execute_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     Heartbeats every 30 s so long LLM streams don't trip
     ``heartbeat_timeout``.
     """
+
     activity.logger.info(
         f"Agent LLM step: provider={payload.get('provider')} " f"model={payload.get('model')} messages={len(payload.get('messages', []))}"
     )
     activity.heartbeat(f"LLM step starting: {payload.get('model')}")
-
-    # ``agent.prepare_payload.v1`` records the engine marker. Its absence
-    # means the run predates the native cutover, when conversation state was
-    # serialised in a retired wire format the native reader cannot
-    # interpret. Failing loudly is the honest outcome: reinterpreting those
-    # messages would silently corrupt the conversation.
-    engine = str(payload.get("llm_engine") or "").strip().lower()
-    if engine != _NATIVE_LLM_ENGINE:
-        from temporalio.exceptions import ApplicationError
-
-        detail = (
-            "was started before the native LLM cutover, so its conversation "
-            "state is in a retired wire format"
-            if not engine
-            else f"records an unsupported LLM engine {engine!r}"
-        )
-        raise ApplicationError(
-            f"This agent run {detail} and cannot continue. Reset the workflow "
-            "to start a new generation.",
-            type="InvalidAgentLLMEngine",
-            non_retryable=True,
-        )
 
     result = await _execute_native_llm_step(payload)
     activity.heartbeat("LLM step: model returned")
     return result
 
 
-@activity.defn(name="agent.persist_turn.v1")
+@activity.defn(name="agent.persist_turn")
 async def persist_agent_turn(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Append one ``(human, assistant)`` pair to the connected memory.
 
@@ -482,62 +528,7 @@ async def persist_agent_turn(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@activity.defn(name="agent.compact_memory.v1")
-async def compact_agent_memory(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Compact the running conversation when token budget exceeded.
-
-    Wraps ``CompactionService.compact_context`` (existing, in
-    ``services/compaction.py``) so the workflow can replace its
-    ``messages`` list with the summary message when needed.
-
-    ``payload``::
-
-        {
-            "session_id": str,
-            "node_id": str,
-            "memory_content": str,
-            "provider": str,
-            "node_id": str,
-            "model": str,
-        }
-
-    Returns ``{"success": bool, "summary": str, "tokens_before": int,
-    "tokens_after": int, "usage": dict}``. Caller replaces its ``messages``
-    with a single summary, resets only the context-threshold counter, and
-    retains both pre-compaction and summarizer usage for final billing.
-    """
-    from services.compaction import get_compaction_service
-
-    activity.heartbeat("Compacting agent memory")
-    svc = get_compaction_service()
-    if svc is None:
-        # CompactionService is a Singleton wired by the FastAPI lifespan
-        # (main.py). If the worker activity runs before lifespan init,
-        # the singleton is None and compaction must no-op so the agent
-        # loop keeps running — the workflow checks ``success`` and
-        # keeps the existing messages list on False.
-        return {
-            "success": False,
-            "error": "CompactionService not initialized (worker bootstrap race)",
-            "summary": "",
-            "tokens_before": 0,
-            "tokens_after": 0,
-            "usage": {},
-        }
-    return await svc.compact_context(
-        session_id=payload["session_id"],
-        node_id=payload["node_id"],
-        memory_content=payload.get("memory_content", ""),
-        provider=payload["provider"],
-        api_key=await _resolve_activity_api_key(payload),
-        model=payload["model"],
-        # Temporal owns activity retries; never repeat an ambiguous provider
-        # request inside the activity or SDK.
-        explicit_max_retries=0,
-    )
-
-
-@activity.defn(name="agent.broadcast_progress.v1")
+@activity.defn(name="agent.broadcast_progress")
 async def broadcast_agent_progress(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Emit a CloudEvents-shaped ``agent_progress`` broadcast per turn.
 
@@ -660,7 +651,7 @@ async def broadcast_agent_progress(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"emitted": True}
 
 
-@activity.defn(name="agent.store_output.v1")
+@activity.defn(name="agent.store_output")
 async def store_agent_output(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist the agent's final ``result`` dict via the existing
     ``WorkflowService.store_node_output`` so ``ParameterResolver`` can
@@ -691,7 +682,7 @@ async def store_agent_output(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"stored": True}
 
 
-@activity.defn(name="agent.prepare_payload.v1")
+@activity.defn(name="agent.prepare_payload")
 async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
     """Resolve everything ``AgentWorkflow`` needs from the canvas + DB.
 
@@ -864,7 +855,16 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # ---- Edge walking ---------------------------------------------------
+    # Carry the execution context through rather than rebuilding it from a
+    # fixed key list. Connected nodes decide what they need from it: the
+    # Context descriptor requires ``generation`` and refuses to build without
+    # one, then reads ``session_id`` / ``explicit_session_id`` /
+    # ``delegated_task_id`` to pick its thread. A four-key rebuild dropped all
+    # of them, so every Temporal run walked edges as if it had no admitted
+    # generation and the agent journalled nothing — while the in-process path
+    # (nodes/agent/_inline.py) passed the context whole and worked.
     walk_context = {
+        **context,
         "nodes": context.get("nodes") or [],
         "edges": context.get("edges") or [],
         "workflow_id": workflow_id,
@@ -978,13 +978,73 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         system_message = skill_prompt if has_personality else f"{system_message}\n\n{skill_prompt}"
 
     # ---- Memory ---------------------------------------------------------
+    # The descriptor is forwarded verbatim as ``context_descriptor``. Reading
+    # it only through the legacy markdown keys below silently yields an empty
+    # transcript for any descriptor that does not carry them, which is how a
+    # journal-backed agent ends up starting every run with no history. The
+    # keys are read with ``.get`` and never interpreted here — whichever
+    # plugin produced the descriptor owns its meaning.
     memory_node_id = ""
     memory_content = ""
     memory_window_size = 10
+    context_descriptor: Dict[str, Any] = dict(memory_data or {})
     if memory_data:
         memory_node_id = memory_data.get("node_id") or ""
         memory_content = memory_data.get("memory_content") or ""
         memory_window_size = int(memory_data.get("window_size") or 10)
+
+    # ---- Conversation (plain JSON transcript) ---------------------------
+    # A connected Context node opts the agent into durable conversation
+    # persistence: key (workflow_id, generation, agent_node_id), loaded here
+    # as the fresh-run seed and saved per turn inside the LLM step. Every
+    # firing — chat messages AND task-completion reviews — continues the
+    # same conversation; Reset admits a new generation, which is a new key.
+    # Load failures are LOUD: running the agent with its memory silently
+    # missing wastes billed tokens on a run that has forgotten everything.
+    # A transient DB error gets the activity retry budget; an over-sized
+    # transcript is user-actionable (clear or compact) and fails fast.
+    # See docs-internal/agent_context_flow.md.
+    conversation: List[Dict[str, Any]] = []
+    conversation_key: Optional[Dict[str, Any]] = None
+    generation = int(context.get("generation") or 0)
+    if (
+        context_descriptor.get("kind") == "context"
+        and workflow_id
+        and generation > 0
+    ):
+        conversation_key = {
+            "workflow_id": str(workflow_id),
+            "generation": generation,
+            "agent_node_id": node_id,
+        }
+        try:
+            from services.agent_context import load_conversation
+
+            conversation = await load_conversation(
+                database,
+                **conversation_key,
+            )
+        except Exception as exc:
+            raise ApplicationError(
+                f"Conversation load failed for agent {node_id!r} "
+                f"(generation {generation}): {type(exc).__name__}",
+                type="ConversationLoadFailed",
+                non_retryable=False,
+            ) from exc
+        if conversation:
+            seed_bytes = len(
+                json.dumps(conversation, default=str).encode("utf-8")
+            )
+            if seed_bytes > _SEED_TRANSCRIPT_MAX_BYTES:
+                raise ApplicationError(
+                    f"Stored conversation for agent {node_id!r} is "
+                    f"{seed_bytes} bytes (limit "
+                    f"{_SEED_TRANSCRIPT_MAX_BYTES}). Clear the conversation "
+                    "from the Context panel or lower the compaction "
+                    "threshold, then run again.",
+                    type="ConversationTooLarge",
+                    non_retryable=True,
+                )
 
     # ---- Tools ----------------------------------------------------------
     # We call ``ai_service._build_tool_from_node`` once here ONLY to
@@ -1049,10 +1109,10 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if any(tool["name"].startswith("delegate_to_") for tool in tools_payload):
+        from services.plugin.edge_walker import format_teammate_roster_line
+
         delegates = "\n".join(
-            f"- {(tool.get('tool_info') or {}).get('node_id')}: "
-            f"{(tool.get('tool_info') or {}).get('label', tool['node_type'])} "
-            f"({tool['node_type']})"
+            format_teammate_roster_line({**(tool.get("tool_info") or {}), "node_type": tool["node_type"]})
             for tool in tools_payload
             if tool["name"].startswith("delegate_to_")
         )
@@ -1087,7 +1147,10 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         svc = get_compaction_service()
         if svc is not None:
             cfg = await svc.anthropic_config(model=model, provider=provider)
-            compaction_threshold = int(cfg.get("context_token_threshold") or 0) or None
+            # A disabled service must actually disable compaction — the
+            # workflow treats a falsy threshold as "never compact".
+            if cfg.get("enabled"):
+                compaction_threshold = int(cfg.get("context_token_threshold") or 0) or None
     except Exception:  # noqa: BLE001 — defensive, optional feature
         compaction_threshold = None
 
@@ -1103,8 +1166,6 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
                 prompt = str(out[field])
                 break
         if not prompt and isinstance(out, dict) and out:
-            import json
-
             prompt = json.dumps(out, ensure_ascii=False, default=str)
 
     # Read user-overridable globals once at prep time.
@@ -1152,10 +1213,6 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001 — last-resort fallback
             effective_recursion_limit = 200
 
-    from services.llm.protocol import MESSAGE_WIRE_VERSION
-
-    message_wire_version = MESSAGE_WIRE_VERSION
-
     return {
         "node_id": node_id,
         "node_type": node_type,
@@ -1171,6 +1228,9 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         "memory_node_id": memory_node_id,
         "memory_content": memory_content,
         "memory_window_size": memory_window_size,
+        "context_descriptor": context_descriptor,
+        "conversation": conversation,
+        "conversation_key": conversation_key,
         "max_iterations": effective_recursion_limit,
         "thinking_config": thinking_config_dict,
         "compaction_threshold": compaction_threshold,
@@ -1185,15 +1245,10 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
             or context.get("execution_id")
             or ""
         ),
-        # The marker `execute_llm_step` checks: a history without it
-        # predates the native cutover and carries messages in a retired wire
-        # format that can no longer be read.
-        "llm_engine": _NATIVE_LLM_ENGINE,
-        "message_wire_version": message_wire_version,
     }
 
 
-@activity.defn(name="agent.refresh_tools.v1")
+@activity.defn(name="agent.refresh_tools")
 async def refresh_agent_tools(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Build fresh ``tool_payload`` entries from a workflow_ops batch.
 
@@ -1289,7 +1344,7 @@ async def refresh_agent_tools(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"tools": new_tools_payload}
 
 
-@activity.defn(name="agent.skill.invoke.v1")
+@activity.defn(name="agent.skill.invoke")
 async def invoke_agent_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Retry-safe, history-recorded progressive skill invocation."""
     from services.skill_runtime import execute_skill_tool
@@ -1319,7 +1374,7 @@ async def invoke_agent_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-@activity.defn(name="agent.skill.clear.v1")
+@activity.defn(name="agent.skill.clear")
 async def clear_agent_skills(payload: Dict[str, Any]) -> Dict[str, Any]:
     from services.skill_runtime import clear_skill_turn
 
@@ -1331,7 +1386,7 @@ async def clear_agent_skills(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"cleared": True}
 
 
-@activity.defn(name="agent.begin_delegation.v1")
+@activity.defn(name="agent.begin_delegation")
 async def begin_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Idempotently persist and claim a delegation before child startup."""
     from services.agent_team import get_agent_team_service
@@ -1422,7 +1477,7 @@ async def begin_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"team_id": team_id, "team_task_id": task_id, "claimed": True}
 
 
-@activity.defn(name="agent.queue_delegation.v1")
+@activity.defn(name="agent.queue_delegation")
 async def queue_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Create a pending task before it waits for a root-wide permit."""
     from services.agent_team import get_agent_team_service
@@ -1455,7 +1510,7 @@ async def queue_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"team_id": team_id, "team_task_id": task_id, "status": "queued"}
 
 
-@activity.defn(name="agent.cancel_delegation.v1")
+@activity.defn(name="agent.cancel_delegation")
 async def cancel_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist cancellation as a terminal state without failure requeueing."""
     from services.agent_team import get_agent_team_service
@@ -1523,7 +1578,7 @@ def _subagent_lease_id(
     return f"subagent-lease-v2-{hashlib.sha256(identity).hexdigest()}"
 
 
-@activity.defn(name="agent.acquire_subagent_permit.v1")
+@activity.defn(name="agent.acquire_subagent_permit")
 async def acquire_subagent_permit(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Poll the durable root coordinator until this delegation is admitted."""
     from services.agent_team import get_agent_team_service
@@ -1618,7 +1673,7 @@ async def acquire_subagent_permit(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise
 
 
-@activity.defn(name="agent.release_subagent_permit.v1")
+@activity.defn(name="agent.release_subagent_permit")
 async def release_subagent_permit(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Idempotently release a durable root-wide concurrency permit."""
     from services.agent_team import get_agent_team_service
@@ -1645,7 +1700,7 @@ async def release_subagent_permit(payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-@activity.defn(name="agent.finish_delegation.v1")
+@activity.defn(name="agent.finish_delegation")
 async def finish_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Idempotently persist a delegated child's terminal result."""
     from services.agent_team import get_agent_team_service
@@ -1745,7 +1800,7 @@ async def finish_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"team_id": team_id, "team_task_id": task_id, "status": target_status}
 
 
-@activity.defn(name="agent.register_task_execution.v1")
+@activity.defn(name="agent.register_task_execution")
 async def register_task_execution(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist actual runner/child Temporal identities for trace inspection."""
     from services.agent_team import get_agent_team_service
@@ -1772,7 +1827,7 @@ async def register_task_execution(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"team_id": team_id, "team_task_id": task_id, "registered": True}
 
 
-@activity.defn(name="agent.finalize_team.v1")
+@activity.defn(name="agent.finalize_team")
 async def finalize_agent_team(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Finalize a lead's team after all delegated tasks become terminal."""
     from services.agent_team import get_agent_team_service
@@ -1809,7 +1864,6 @@ def collect_agent_activities() -> List[Any]:
     return [
         execute_llm_step,
         persist_agent_turn,
-        compact_agent_memory,
         prepare_agent_payload,
         broadcast_agent_progress,
         store_agent_output,
@@ -1818,9 +1872,174 @@ def collect_agent_activities() -> List[Any]:
         clear_agent_skills,
         begin_agent_delegation,
         queue_agent_delegation,
+        # Scheduled unconditionally by the cancellation-unwind paths in
+        # AgentWorkflow/DelegatedTaskWorkflow. Its absence here left
+        # agent.cancel_delegation.v1 unregistered, so every cancelled
+        # delegation burned DELEGATION_CLEANUP_RETRY (10 attempts) against
+        # an unknown activity type and the failure was swallowed, leaving
+        # team task rows non-terminal.
+        cancel_agent_delegation,
         acquire_subagent_permit,
         release_subagent_permit,
         register_task_execution,
         finish_agent_delegation,
         finalize_agent_team,
+        # Conversation persistence is inside execute_llm_step (save) and
+        # prepare_agent_payload (load); the summarizer is the one extra
+        # activity this surface needs.
+        compact_context,
     ]
+
+
+# ---------------------------------------------------------------------------
+# Conversation persistence surface.
+#
+# Persistence observes the agent; it never feeds the request directly.
+# ``prepare_agent_payload`` loads the stored conversation as a fresh-run
+# seed, ``_save_conversation`` (inside the LLM step) persists each turn,
+# and ``compact_context`` summarizes the live conversation.
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_GRAPH_KEYS = frozenset(
+    {
+        "apikey",
+        "accesstoken",
+        "refreshtoken",
+        "password",
+        "secret",
+        "clientsecret",
+        "authorization",
+    }
+)
+def _normalise_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+def _strip_credentials(value: Any) -> Any:
+    """Copy graph/runtime metadata without credential-shaped fields."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _strip_credentials(item)
+            for key, item in value.items()
+            if _normalise_key(key) not in _SENSITIVE_GRAPH_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_credentials(item) for item in value]
+    if isinstance(value, tuple):
+        return [_strip_credentials(item) for item in value]
+    return value
+def _non_retryable(message: str, error_type: str) -> ApplicationError:
+    return ApplicationError(
+        message,
+        type=error_type,
+        non_retryable=True,
+    )
+def _tool_identity(tool: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": str(tool.get("name") or ""),
+        "node_id": str(tool.get("tool_node_id") or ""),
+        "node_type": str(tool.get("node_type") or ""),
+        "version": int(tool.get("version") or 1),
+        "task_queue": str(tool.get("dispatch_task_queue") or ""),
+    }
+@activity.defn(name="agent.compact_context")
+async def compact_context(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize the live conversation into a compact replacement.
+
+    Simple by design: render the wire messages to text, ask
+    ``CompactionService`` for its five-section summary, return it. The
+    workflow swaps its ``messages`` for the summary. No journal side
+    effects and no checkpoints — the next LLM turn journals a fresh
+    ``request.snapshot`` containing the compacted messages, so the
+    Context panel and any later rollover see the compacted state
+    naturally.
+
+    ``payload``::
+
+        {
+            "session_id": str,
+            "node_id": str,
+            "messages": [<message wire>],   # the live transcript
+            "provider": str,
+            "model": str,
+        }
+
+    Returns ``{"success": bool, "summary": str, "usage": dict}``.
+    """
+
+    from services.compaction import get_compaction_service
+    from services.llm.protocol import message_from_wire
+
+    activity.heartbeat("Compacting agent context")
+    svc = get_compaction_service()
+    if svc is None:
+        # Singleton wired by the FastAPI lifespan (main.py). Retryable:
+        # a worker bootstrap race resolves itself within the retry
+        # policy's backoff window.
+        raise ApplicationError(
+            "CompactionService not initialized (worker bootstrap race)",
+            type="CompactionFailed",
+            non_retryable=False,
+        )
+
+    lines: List[str] = []
+    for wire in payload.get("messages") or []:
+        if not isinstance(wire, dict):
+            continue
+        try:
+            message = message_from_wire(wire)
+        except Exception:
+            continue
+        line = f"{message.role.upper()}: {message.content}"
+        if message.tool_calls:
+            line += "\nTOOL_CALLS: " + json.dumps(
+                [
+                    {"name": call.name, "args": call.args}
+                    for call in message.tool_calls
+                ],
+                ensure_ascii=False,
+                default=str,
+            )
+        if message.tool_call_id:
+            line += (
+                f"\nTOOL_RESULT_FOR: {message.name or message.tool_call_id}"
+            )
+        lines.append(line)
+
+    rendered = "\n\n".join(lines)
+    activity.logger.info(
+        f"Compacting agent context: {len(lines)} messages "
+        f"({len(rendered)} rendered chars) via "
+        f"{payload['provider']}/{payload['model']}"
+    )
+    result = await svc.compact_context(
+        session_id=str(payload.get("session_id") or "default"),
+        node_id=payload["node_id"],
+        memory_content=rendered,
+        provider=payload["provider"],
+        api_key=await _resolve_activity_api_key(payload),
+        model=payload["model"],
+        # Temporal owns activity retries; never repeat an ambiguous provider
+        # request inside the activity or SDK.
+        explicit_max_retries=0,
+    )
+    if result.get("success") and result.get("summary"):
+        usage = result.get("usage") or {}
+        activity.logger.info(
+            f"Agent context compacted: summary {len(result['summary'])} "
+            f"chars (summarizer usage: "
+            f"in={usage.get('input_tokens', 0)} "
+            f"out={usage.get('output_tokens', 0)})"
+        )
+    if not result.get("success") or not result.get("summary"):
+        # Compaction is the run's pressure-relief valve. Raising (retryable)
+        # gives transient summarizer failures the activity policy's retry
+        # budget; if it still cannot compact, the workflow fails the run
+        # loudly rather than letting the transcript grow unbounded.
+        raise ApplicationError(
+            f"Compaction failed: {result.get('error') or 'empty summary'}",
+            type="CompactionFailed",
+            non_retryable=False,
+        )
+    return result
+
+

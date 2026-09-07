@@ -38,6 +38,31 @@ from .activities import (
     create_shared_session,
 )
 
+
+
+def _framework_workflows() -> list:
+    """The framework workflow classes every worker must register.
+
+    Single source of truth: the three worker constructions below used to
+    hand-maintain identical copies of this list, which is how they drifted.
+    Imports stay lazy — the workflow modules pull in the plugin registry.
+    """
+    from services.temporal.workflow import MachinaWorkflow
+    from services.temporal.agent_workflow import AgentWorkflow, DelegatedTaskWorkflow
+    from services.temporal.trigger_listener_workflow import TriggerListenerWorkflow
+    from services.temporal.polling_trigger_workflow import PollingTriggerWorkflow
+    from services.temporal.workflow_control_workflow import WorkflowControlWorkflow
+
+    return [
+        MachinaWorkflow,
+        AgentWorkflow,
+        DelegatedTaskWorkflow,
+        TriggerListenerWorkflow,
+        PollingTriggerWorkflow,
+        WorkflowControlWorkflow,
+    ]
+
+
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
@@ -185,8 +210,8 @@ class TemporalWorkerManager:
         # zero runtime cost when the flag is off (orchestrator routes to
         # execute_node_activity, per-type entries sit idle).
         #
-        # F4.B: register AgentWorkflow + its three activities
-        # (execute_llm_step / persist_turn / compact_memory). The
+        # F4.B: register AgentWorkflow + its agent activities
+        # (execute_llm_step / persist_turn / compact_context / ...). The
         # orchestrator schedules AgentWorkflow as a child workflow
         # for the 15 migrating agent types when
         # ``temporal_agent_workflow_enabled`` is on.
@@ -195,9 +220,9 @@ class TemporalWorkerManager:
             collect_polling_activities,
         )
         from services.temporal.agent_activities import collect_agent_activities
-        from services.temporal.agent_workflow import AgentWorkflow, DelegatedTaskWorkflow
         from services.temporal.activities import (
             broadcast_trigger_status_activity,
+            evaluate_trigger_filter_activity,
             load_persisted_workflow_graph_activity,
             pause_workflow_on_failure_activity,
             store_node_output_activity,
@@ -241,17 +266,11 @@ class TemporalWorkerManager:
             self.client,
             task_queue=self.task_queue,
             plugins=plugin_list,
-            workflows=[
-                MachinaWorkflow,
-                AgentWorkflow,
-                DelegatedTaskWorkflow,
-                TriggerListenerWorkflow,
-                PollingTriggerWorkflow,
-                WorkflowControlWorkflow,
-            ],
+            workflows=_framework_workflows(),
             activities=[
                 self._activities.execute_node_activity,
                 broadcast_trigger_status_activity,
+                evaluate_trigger_filter_activity,
                 load_persisted_workflow_graph_activity,
                 pause_workflow_on_failure_activity,
                 store_node_output_activity,
@@ -705,26 +724,39 @@ async def run_standalone_worker(
 
     from services.temporal.activities import (
         broadcast_trigger_status_activity,
+        evaluate_trigger_filter_activity,
         load_persisted_workflow_graph_activity,
         pause_workflow_on_failure_activity,
         store_node_output_activity,
     )
+    from services.temporal.agent_activities import collect_agent_activities
+    from services.temporal.agent_workflow import (
+        AgentWorkflow,
+        DelegatedTaskWorkflow,
+    )
+    from services.temporal.plugin_activities import (
+        collect_plugin_activities,
+    )
+
+    registered_agent_activities = [
+        *collect_agent_activities(),
+    ]
+    registered_plugin_activities = collect_plugin_activities()
 
     try:
         worker = Worker(
             client,
             task_queue=task_queue,
-            workflows=[
-                MachinaWorkflow,
-                TriggerListenerWorkflow,
-                PollingTriggerWorkflow,
-                WorkflowControlWorkflow,
-            ],
+            workflows=_framework_workflows(),
             activities=[
                 activities.execute_node_activity,
                 broadcast_trigger_status_activity,
+                evaluate_trigger_filter_activity,
                 load_persisted_workflow_graph_activity,
+                pause_workflow_on_failure_activity,
                 store_node_output_activity,
+                *registered_plugin_activities,
+                *registered_agent_activities,
             ],
             max_concurrent_activities=pool_size,
             max_concurrent_workflow_tasks=10,
@@ -771,26 +803,38 @@ async def create_worker(
     activities = NodeExecutionActivities(session)
     from services.temporal.activities import (
         broadcast_trigger_status_activity,
+        evaluate_trigger_filter_activity,
         load_persisted_workflow_graph_activity,
         pause_workflow_on_failure_activity,
         store_node_output_activity,
     )
+    from services.temporal.agent_activities import collect_agent_activities
+    from services.temporal.agent_workflow import (
+        AgentWorkflow,
+        DelegatedTaskWorkflow,
+    )
+    from services.temporal.plugin_activities import (
+        collect_plugin_activities,
+    )
+
+    registered_agent_activities = [
+        *collect_agent_activities(),
+    ]
+    registered_plugin_activities = collect_plugin_activities()
 
     return Worker(
         client,
         task_queue=task_queue,
-        workflows=[
-            MachinaWorkflow,
-            TriggerListenerWorkflow,
-            PollingTriggerWorkflow,
-            WorkflowControlWorkflow,
-        ],
+        workflows=_framework_workflows(),
         activities=[
             activities.execute_node_activity,
             broadcast_trigger_status_activity,
+            evaluate_trigger_filter_activity,
             load_persisted_workflow_graph_activity,
             pause_workflow_on_failure_activity,
             store_node_output_activity,
+            *registered_plugin_activities,
+            *registered_agent_activities,
         ],
         max_concurrent_activities=100,
         max_concurrent_workflow_tasks=10,

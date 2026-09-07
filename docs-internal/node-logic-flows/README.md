@@ -7,13 +7,17 @@ match its doc here, and each doc must still describe what the code does.
 ## How to use
 
 - **Adding a node**: copy [`_TEMPLATE.md`](./_TEMPLATE.md) into the right
-  category folder, name it `<nodeName>.md` (camelCase, matching the
-  `type` field on the backend plugin at `server/nodes/<category>/<node>.py`).
+  category folder and name it `<type>.md` -- the filename stem must equal the
+  registered `type` string exactly (camelCase or snake_case, whatever the
+  plugin declares) as set on the backend plugin at
+  `server/nodes/<group>/<plugin>/__init__.py`.
 - **Refactoring a node**: update the matching contract test in
   `server/tests/nodes/test_<category>.py` *first*, then change the handler,
   then update this doc.
-- **The index below is maintained by hand** (there is no generator script
-  currently). When you add, rename, or remove a card, update its entry below.
+- **The index below is generated.** Run `company docs nodes` after adding,
+  renaming or removing a card; `company docs nodes --check` fails when a
+  registered node has no card. Do not hand-edit between the
+  `AUTO-GENERATED-INDEX` markers.
 
 ## Conventions
 
@@ -26,13 +30,15 @@ match its doc here, and each doc must still describe what the code does.
 
 ## Index
 
-<!-- INDEX-START (manually maintained; filenames are camelCase of the plugin `type`) -->
+<!-- AUTO-GENERATED-INDEX-START -->
 
 ### ai_agents
 
 - [AI Agent (`aiAgent`)](./ai_agents/aiAgent.md)
 - [Zeenie (`chatAgent`)](./ai_agents/chatAgent.md)
-- [Simple Memory (`simpleMemory`)](./ai_agents/simpleMemory.md)
+- [Context (`context`)](./ai_agents/context.md)
+- [Master Skill (`masterSkill`)](./ai_agents/masterSkill.md)
+- [Memory (`simpleMemory`)](./ai_agents/simpleMemory.md)
 
 ### ai_chat_models
 
@@ -53,9 +59,12 @@ match its doc here, and each doc must still describe what the code does.
 
 - [Agent Builder (`agentBuilder`)](./ai_tools/agentBuilder.md)
 - [Calculator Tool (`calculatorTool`)](./ai_tools/calculatorTool.md)
+- [Canvas (`canvas`)](./ai_tools/canvas.md)
 - [Current Time Tool (`currentTimeTool`)](./ai_tools/currentTimeTool.md)
+- [Data (`dataSource`)](./ai_tools/dataSource.md)
 - [DuckDuckGo Search (`duckduckgoSearch`)](./ai_tools/duckduckgoSearch.md)
 - [Task Manager (`taskManager`)](./ai_tools/taskManager.md)
+- [Vision Analyze (`visionAnalyze`)](./ai_tools/visionAnalyze.md)
 - [Write Todos (`writeTodos`)](./ai_tools/writeTodos.md)
 
 ### android
@@ -82,10 +91,19 @@ match its doc here, and each doc must still describe what the code does.
 - [Chat History (`chatHistory`)](./chat_utility/chatHistory.md)
 - [Chat Send (`chatSend`)](./chat_utility/chatSend.md)
 - [Console (`console`)](./chat_utility/console.md)
-- [Create Map (`gmaps_create`)](./chat_utility/gmaps_create.md)
 - [File Handler (`fileHandler`)](./chat_utility/fileHandler.md)
+- [Create Map (`gmaps_create`)](./chat_utility/gmaps_create.md)
+- [Geocoding (`gmaps_locations`)](./chat_utility/gmaps_locations.md)
+- [Nearby Places (`gmaps_nearby_places`)](./chat_utility/gmaps_nearby_places.md)
 - [Team Monitor (`teamMonitor`)](./chat_utility/teamMonitor.md)
 - [Text Generator (`textGenerator`)](./chat_utility/textGenerator.md)
+
+### cli_integrations
+
+- [Cloudflare (`cloudflareAction`)](./cli_integrations/cloudflareAction.md)
+- [Google Cloud (`gcloudAction`)](./cli_integrations/gcloudAction.md)
+- [GitHub (`githubAction`)](./cli_integrations/githubAction.md)
+- [Vercel (`vercelAction`)](./cli_integrations/vercelAction.md)
 
 ### code_fs_process
 
@@ -99,6 +117,13 @@ match its doc here, and each doc must still describe what the code does.
 - [Python Executor (`pythonExecutor`)](./code_fs_process/pythonExecutor.md)
 - [Shell (`shell`)](./code_fs_process/shell.md)
 - [TypeScript Executor (`typescriptExecutor`)](./code_fs_process/typescriptExecutor.md)
+
+### discord
+
+- [Discord API (`discordAction`)](./discord/discordAction.md)
+- [Discord Interaction (`discordInteraction`)](./discord/discordInteraction.md)
+- [Discord Receive (`discordReceive`)](./discord/discordReceive.md)
+- [Discord Send (`discordSend`)](./discord/discordSend.md)
 
 ### document
 
@@ -134,14 +159,17 @@ match its doc here, and each doc must still describe what the code does.
 
 ### language
 
-Sarvam AI's non-chat REST APIs. The chat models live under `ai_chat_models`
-and share the same credential.
-
 - [Detect Language (`detectLanguage`)](./language/detectLanguage.md)
 - [Speech to Text (`speechToText`)](./language/speechToText.md)
 - [Text to Speech (`textToSpeech`)](./language/textToSpeech.md)
 - [Translate (`translateText`)](./language/translateText.md)
 - [Transliterate (`transliterateText`)](./language/transliterateText.md)
+
+### microsoft
+
+- [Outlook Calendar (`msCalendar`)](./microsoft/msCalendar.md)
+- [Outlook Mail (`msMail`)](./microsoft/msMail.md)
+- [Outlook Mail Receive (`msMailReceive`)](./microsoft/msMailReceive.md)
 
 ### search
 
@@ -151,22 +179,30 @@ and share the same credential.
 
 ### specialized_agents
 
-- [AI Employee (`ai_employee`)](./specialized_agents/aiEmployee.md)
-- [Android Control Agent (`android_agent`)](./specialized_agents/androidAgent.md)
-- [Autonomous Agent (`autonomous_agent`)](./specialized_agents/autonomousAgent.md)
-- [Claude Code Agent (`claude_code_agent`)](./specialized_agents/claudeCodeAgent.md)
-- [Codex (`codex_agent`)](./specialized_agents/codexAgent.md)
-- [Coding Agent (`coding_agent`)](./specialized_agents/codingAgent.md)
-- [Consumer Agent (`consumer_agent`)](./specialized_agents/consumerAgent.md)
-- [Orchestrator Agent (`orchestrator_agent`)](./specialized_agents/orchestratorAgent.md)
-- [Payments Agent (`payments_agent`)](./specialized_agents/paymentsAgent.md)
-- [Productivity Agent (`productivity_agent`)](./specialized_agents/productivityAgent.md)
-- [RLM Agent (`rlm_agent`)](./specialized_agents/rlmAgent.md)
-- [Social Media Agent (`social_agent`)](./specialized_agents/socialAgent.md)
-- [Task Management Agent (`task_agent`)](./specialized_agents/taskAgent.md)
-- [Tool Agent (`tool_agent`)](./specialized_agents/toolAgent.md)
-- [Travel Agent (`travel_agent`)](./specialized_agents/travelAgent.md)
-- [Web Control Agent (`web_agent`)](./specialized_agents/webAgent.md)
+- [AI Employee (`ai_employee`)](./specialized_agents/ai_employee.md)
+- [Android Control Agent (`android_agent`)](./specialized_agents/android_agent.md)
+- [Autonomous Agent (`autonomous_agent`)](./specialized_agents/autonomous_agent.md)
+- [Claude Code Agent (`claude_code_agent`)](./specialized_agents/claude_code_agent.md)
+- [Codex (`codex_agent`)](./specialized_agents/codex_agent.md)
+- [Coding Agent (`coding_agent`)](./specialized_agents/coding_agent.md)
+- [Consumer Agent (`consumer_agent`)](./specialized_agents/consumer_agent.md)
+- [Orchestrator Agent (`orchestrator_agent`)](./specialized_agents/orchestrator_agent.md)
+- [Payments Agent (`payments_agent`)](./specialized_agents/payments_agent.md)
+- [Productivity Agent (`productivity_agent`)](./specialized_agents/productivity_agent.md)
+- [RLM Agent (`rlm_agent`)](./specialized_agents/rlm_agent.md)
+- [Social Media Agent (`social_agent`)](./specialized_agents/social_agent.md)
+- [Task Management Agent (`task_agent`)](./specialized_agents/task_agent.md)
+- [Tool Agent (`tool_agent`)](./specialized_agents/tool_agent.md)
+- [Travel Agent (`travel_agent`)](./specialized_agents/travel_agent.md)
+- [Vertex Agent Admin (`vertex_agent_admin`)](./specialized_agents/vertex_agent_admin.md)
+- [Vertex Agent (`vertex_managed_agent`)](./specialized_agents/vertex_managed_agent.md)
+- [Cloud Tool (`vertexCloudTool`)](./specialized_agents/vertexCloudTool.md)
+- [Web Control Agent (`web_agent`)](./specialized_agents/web_agent.md)
+
+### stripe
+
+- [Stripe (`stripeAction`)](./stripe/stripeAction.md)
+- [Stripe Receive (`stripeReceive`)](./stripe/stripeReceive.md)
 
 ### telegram_social
 
@@ -186,13 +222,22 @@ and share the same credential.
 
 - [Apify Actor (`apifyActor`)](./web_automation/apifyActor.md)
 - [Browser (`browser`)](./web_automation/browser.md)
+- [Browser Harness (`browserHarness`)](./web_automation/browserHarness.md)
 - [Crawlee Scraper (`crawleeScraper`)](./web_automation/crawleeScraper.md)
+- [TikHub (`tikhubAction`)](./web_automation/tikhubAction.md)
 
 ### whatsapp
 
 - [WhatsApp DB (`whatsappDb`)](./whatsapp/whatsappDb.md)
 - [WhatsApp Receive (`whatsappReceive`)](./whatsapp/whatsappReceive.md)
 - [WhatsApp Send (`whatsappSend`)](./whatsapp/whatsappSend.md)
+
+### whatsapp_business
+
+- [WhatsApp Business Media (`whatsappBusinessMedia`)](./whatsapp_business/whatsappBusinessMedia.md)
+- [WhatsApp Business Receive (`whatsappBusinessReceive`)](./whatsapp_business/whatsappBusinessReceive.md)
+- [WhatsApp Business Send (`whatsappBusinessSend`)](./whatsapp_business/whatsappBusinessSend.md)
+- [WhatsApp Business Status (`whatsappBusinessStatus`)](./whatsapp_business/whatsappBusinessStatus.md)
 
 ### workflow_triggers
 
@@ -204,4 +249,4 @@ and share the same credential.
 - [Webhook Response (`webhookResponse`)](./workflow_triggers/webhookResponse.md)
 - [Webhook Trigger (`webhookTrigger`)](./workflow_triggers/webhookTrigger.md)
 
-<!-- INDEX-END -->
+<!-- AUTO-GENERATED-INDEX-END -->

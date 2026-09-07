@@ -202,6 +202,23 @@
       "contact_search": 0.0,
       "_default": 0.0
     },
+    "microsoft_graph": {
+      "_description": "Microsoft Graph API (Mail + Calendar) - free, throttled per mailbox",
+      "_source": "https://learn.microsoft.com/en-us/graph/throttling",
+      "_note": "Free API - costs are $0. Analytics bookkeeping only.",
+      "mail_send": 0.0,
+      "mail_read": 0.0,
+      "mail_search": 0.0,
+      "mail_reply": 0.0,
+      "mail_list_attachments": 0.0,
+      "mail_download_attachments": 0.0,
+      "event_create": 0.0,
+      "event_read": 0.0,
+      "event_update": 0.0,
+      "event_delete": 0.0,
+      "event_list": 0.0,
+      "_default": 0.0
+    },
     "twitter": {
       "_description": "X/Twitter Pay-Per-Use API pricing (per resource/request)",
       "_source": "https://developer.x.com/#pricing",
@@ -237,6 +254,14 @@
       "_updated": "2026-02",
       "web_search": 0.003,
       "_default": 0.003
+    },
+    "tikhub": {
+      "_description": "TikHub pay-per-request (non-2xx not billed)",
+      "_source": "https://tikhub.io/pricing",
+      "_updated": "2026-09",
+      "request": 0.001,
+      "meta": 0.0,
+      "_default": 0.001
     },
     "serper": {
       "_description": "Serper Google Search API pricing (per query)",
@@ -388,8 +413,25 @@
       "list": "contact_list",
       "search": "contact_search"
     },
+    "microsoft_graph": {
+      "send": "mail_send",
+      "read": "mail_read",
+      "search": "mail_search",
+      "reply": "mail_reply",
+      "list_attachments": "mail_list_attachments",
+      "download_attachments": "mail_download_attachments",
+      "create": "event_create",
+      "update": "event_update",
+      "delete": "event_delete",
+      "list": "event_list"
+    },
     "brave_search": {
       "web_search": "web_search"
+    },
+    "tikhub": {
+      "call": "request",
+      "fetch_url": "request",
+      "account": "meta"
     },
     "serper": {
       "web_search": "web_search"

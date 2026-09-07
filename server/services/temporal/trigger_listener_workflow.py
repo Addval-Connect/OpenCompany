@@ -43,6 +43,8 @@ from temporalio.common import (
 )
 from temporalio.workflow import ParentClosePolicy
 
+from .workflow import TEMPORAL_ROUTING_INPUT_KEY
+
 
 # 50K events is the Temporal Event-History soft ceiling per the
 # very-long-running-workflows blog post — past it the workflow
@@ -51,57 +53,51 @@ from temporalio.workflow import ParentClosePolicy
 # so this caps at ~16K triggers between continueAsNew checkpoints.
 # Per-event histogram is empirical; tune later.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 16_000
-CHILD_SEARCH_ATTRIBUTES_PATCH = "trigger-child-search-attributes-v1"
-COOPERATIVE_PAUSE_SCHEDULING_PATCH = (
-    "trigger-cooperative-pause-scheduling-v1"
-)
-# Child MachinaWorkflow runs used to carry 1h execution/run timeouts.
-# A run may legitimately execute — or stay cooperatively paused — for
-# months, and Temporal's timeout timer keeps ticking through a pause,
-# so any pause longer than the cap silently terminated the run.
-# Liveness is enforced at the activity layer (heartbeats), not by
-# workflow lifetime caps; new executions start children unbounded
-# (Temporal's default). The patch keeps replay compatibility for
-# histories whose recorded child starts carried the old caps.
-UNBOUNDED_CHILD_RUNS_PATCH = "trigger-unbounded-child-runs-v1"
+# Child MachinaWorkflow runs start without execution/run timeouts. A run
+# may legitimately execute — or stay cooperatively paused — for months,
+# and Temporal's timeout timer keeps ticking through a pause, so any cap
+# silently terminated paused runs. Liveness is enforced at the activity
+# layer (heartbeats), not by workflow lifetime caps.
+#
 # The _processed_count threshold above was calibrated assuming ~2-3
 # history events per firing, but the real spawn path costs ~15-25
 # (signal + two broadcast activities + optional graph-load + child
 # start/close + workflow tasks) — the server's ~51,200-event hard
 # termination fires around 2,000-3,500 firings, long before the
-# 16,000-processed checkpoint could. The patched path rolls over on
-# the server's own is_continue_as_new_suggested signal (with the soft
-# cap below as a deterministic backstop), carries still-queued events
-# instead of dropping them, and carries the pause flag instead of
-# blocking the rollover behind a resume that may be months away.
-HISTORY_BOUNDED_CAN_PATCH = "trigger-history-bounded-can-v1"
+# 16,000-processed checkpoint could. Rollover therefore rides the
+# server's own is_continue_as_new_suggested signal (with the soft cap
+# below as a deterministic backstop), carries still-queued events, and
+# carries the pause flag rather than blocking the rollover behind a
+# resume that may be months away.
 _HISTORY_SOFT_CAP = 10_000
 # Continue-as-new argument blobs are capped at 2MiB; carry at most this
 # many still-queued events across a rollover (oldest dropped, logged).
 _MAX_CARRIED_EVENTS = 256
-# Status broadcasts are cosmetic UI signalling. Without an explicit
-# policy Temporal retries a failing activity forever, wedging the
-# serialized spawn loop behind a dead broadcaster. Bounded + swallowed
-# on the patched path (BOUNDED_STATUS_BROADCASTS_PATCH gates the
-# command-visible retry-policy change; the try/except is command-free).
-# Policy: the shared QUICK_ACTIVITY_RETRY constant (cheap side-effect
-# activities fail fast) — never an inline RetryPolicy construction.
-BOUNDED_STATUS_BROADCASTS_PATCH = "trigger-bounded-status-broadcasts-v1"
+
+# Applying the node's own filter before spawning changes the recorded
+# command sequence, so it is patch-gated: histories written before this
+# landed replay with the old "spawn on every event" behaviour. Marker
+# naming follows the one existing precedent, CONDITIONAL_EDGES_PATCH.
+NODE_FILTER_PATCH = "machina-trigger-listener-node-filter"
+
+_FILTER_ACTIVITY_NAME = "evaluate_trigger_filter_activity"
+_FILTER_ACTIVITY_TIMEOUT = timedelta(seconds=10)
 
 
 def _history_pressure(soft_cap: int) -> bool:
     """True when the server suggests continue-as-new or the current
     history length crossed ``soft_cap``. False outside a real workflow
-    runtime (direct unit invocation), where history cannot grow. Shared
-    by the listener, polling, and controller rollover checks."""
+    runtime (direct unit invocation, or a stubbed ``workflow.info()``),
+    where history cannot grow. Shared by the listener, polling, agent,
+    and controller rollover checks."""
     try:
         info = workflow.info()
+        return bool(
+            info.is_continue_as_new_suggested()
+            or info.get_current_history_length() > soft_cap
+        )
     except Exception:  # direct unit invocation outside Temporal runtime
         return False
-    return bool(
-        info.is_continue_as_new_suggested()
-        or info.get_current_history_length() > soft_cap
-    )
 
 
 def event_workflow_search_attributes(
@@ -148,6 +144,65 @@ class TriggerListenerWorkflow:
         if self._control_paused:
             await workflow.wait_condition(lambda: not self._control_paused)
 
+    async def _event_passes_node_filter(
+        self, event: Dict[str, Any], listener_data: Dict[str, Any]
+    ) -> bool:
+        """True when the trigger node's configured filter admits this event.
+
+        Before this existed, ``filter_params`` was carried in
+        ``listener_data`` and never read, so the ``EventType`` Search
+        Attribute was the only narrowing on the deployed path. Every event
+        of the right type spawned a run: a ``webhookTrigger`` bound to
+        ``/a`` fired on a POST to ``/b`` (all webhooks share one CloudEvents
+        type and are unscoped), a ``taskTrigger`` watching one agent fired
+        on every task, and a ``whatsappReceive`` scoped to one group fired
+        on every message. The canvas-Run path applied these filters, so the
+        two paths disagreed about what the same node does.
+
+        ``listener_data["filter_params"]`` is the only available source, not
+        a shortcut: the graph snapshot carries no parameters at all
+        (``node.data`` holds just the label, and
+        ``load_persisted_workflow_graph_activity`` returns nodes/edges
+        only), so the hot graph re-read below cannot supply them. Editing a
+        deployed trigger's filter therefore takes effect on re-deploy, which
+        matches the trigger node itself: it is pre-executed with the event
+        as its output and never re-reads its parameters at run time.
+
+        An empty ``filter_params`` short-circuits without an activity: an
+        unconfigured trigger admits everything, and this is read from
+        immutable ``listener_data``, so the branch is replay-stable.
+        """
+        filter_params = listener_data.get("filter_params") or {}
+        if not filter_params:
+            return True
+
+        data = event.get("data")
+        if not isinstance(data, dict):
+            # Not the envelope shape the filters expect. Admit rather than
+            # guess -- see the fail-open contract on the activity.
+            return True
+
+        # Shared constant, never an inline RetryPolicy -- same contract as
+        # the status broadcast below. The filter is a cheap local call, so
+        # the fail-fast policy fits: the spawn loop is serialized and a
+        # wedged filter would stall every later event on this listener.
+        # If the attempts are exhausted the activity raises, the caller
+        # logs it and moves on, exactly as for any other spawn failure.
+        from services.temporal._retry_policies import QUICK_ACTIVITY_RETRY
+
+        return bool(
+            await workflow.execute_activity(
+                _FILTER_ACTIVITY_NAME,
+                {
+                    "node_type": listener_data.get("node_type") or "",
+                    "filter_params": filter_params,
+                    "event_data": data,
+                },
+                start_to_close_timeout=_FILTER_ACTIVITY_TIMEOUT,
+                retry_policy=QUICK_ACTIVITY_RETRY,
+            )
+        )
+
     @workflow.signal
     async def on_event(self, event_payload: Dict[str, Any]) -> None:
         """Receive an event from ``services.events.dispatch.emit``.
@@ -193,16 +248,7 @@ class TriggerListenerWorkflow:
             f"node={listener_data.get('trigger_node_id')} "
             f"event_type={listener_data.get('event_type')}"
         )
-        use_child_search_attributes = workflow.patched(
-            CHILD_SEARCH_ATTRIBUTES_PATCH
-        )
-        use_cooperative_pause_schedule_gate = workflow.patched(
-            COOPERATIVE_PAUSE_SCHEDULING_PATCH
-        )
-        use_history_bounded_can = workflow.patched(HISTORY_BOUNDED_CAN_PATCH)
-
-        # Rehydrate rollover-carried state. Command-free, so pre-patch
-        # histories (whose payloads lack the keys) replay identically.
+        # Rehydrate rollover-carried state.
         self._control_paused = bool(listener_data.get("control_paused"))
         for carried_event in listener_data.get("pending_events") or []:
             carried_id = carried_event.get("id")
@@ -222,17 +268,9 @@ class TriggerListenerWorkflow:
                 await self._spawn_child_run(
                     event,
                     listener_data,
-                    admission_check=(
-                        self._wait_until_resumed
-                        if use_cooperative_pause_schedule_gate
-                        else None
-                    ),
-                    search_attributes=(
-                        event_workflow_search_attributes(
-                            listener_data.get("workflow_id")
-                        )
-                        if use_child_search_attributes
-                        else None
+                    admission_check=self._wait_until_resumed,
+                    search_attributes=event_workflow_search_attributes(
+                        listener_data.get("workflow_id")
                     ),
                 )
             except Exception as exc:  # noqa: BLE001
@@ -245,27 +283,21 @@ class TriggerListenerWorkflow:
 
             self._processed_count += 1
             should_rollover = self._processed_count >= _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW
-            if use_history_bounded_can and not should_rollover:
+            if not should_rollover:
                 should_rollover = _history_pressure(_HISTORY_SOFT_CAP)
             if should_rollover:
                 workflow.logger.info(f"TriggerListener continue_as_new: processed={self._processed_count}")
-                if use_history_bounded_can:
-                    # Carry queued events (previously dropped at rollover)
-                    # and the pause flag (previously the rollover blocked
-                    # behind a resume that could be months away, letting
-                    # signal traffic overflow the history mid-pause).
-                    dropped = max(0, len(self._matched_events) - _MAX_CARRIED_EVENTS)
-                    if dropped:
-                        workflow.logger.warning(
-                            f"TriggerListener rollover dropping {dropped} oldest queued "
-                            f"event(s) beyond the {_MAX_CARRIED_EVENTS} carry cap"
-                        )
-                    listener_data["pending_events"] = self._matched_events[-_MAX_CARRIED_EVENTS:]
-                    listener_data["control_paused"] = self._control_paused
-                elif use_cooperative_pause_schedule_gate:
-                    # Do not let continue-as-new reset a pause that landed
-                    # during the final spawn/status broadcast.
-                    await self._wait_until_resumed()
+                # Carry queued events and the pause flag so the rollover
+                # never blocks behind a resume that could be months away,
+                # which would let signal traffic overflow the history.
+                dropped = max(0, len(self._matched_events) - _MAX_CARRIED_EVENTS)
+                if dropped:
+                    workflow.logger.warning(
+                        f"TriggerListener rollover dropping {dropped} oldest queued "
+                        f"event(s) beyond the {_MAX_CARRIED_EVENTS} carry cap"
+                    )
+                listener_data["pending_events"] = self._matched_events[-_MAX_CARRIED_EVENTS:]
+                listener_data["control_paused"] = self._control_paused
                 workflow.continue_as_new(args=[listener_data])
 
     async def _spawn_child_run(
@@ -289,18 +321,37 @@ class TriggerListenerWorkflow:
           - After spawn returns → trigger node ``"waiting"`` (child runs
             independently per ``parent_close_policy=ABANDON``).
         """
+        # The trigger node's own filter gates the spawn, and it is enforced
+        # here rather than in the caller because this method is the single
+        # choke point: WorkflowControlWorkflow._spawn_push_run constructs a
+        # TriggerListenerWorkflow purely to call it. Gating in either run
+        # loop would leave the other path unfiltered.
+        #
+        # Patch-gated: skipping a spawn changes the recorded command
+        # sequence, so pre-patch histories must keep replaying the old
+        # "spawn on every event" behaviour.
+        if workflow.patched(NODE_FILTER_PATCH):
+            if not await self._event_passes_node_filter(event, listener_data):
+                workflow.logger.debug(
+                    f"Trigger filter rejected event.id={event.get('id')} for "
+                    f"node={listener_data.get('trigger_node_id')}; no run spawned"
+                )
+                return
+
         trigger_node_id = listener_data["trigger_node_id"]
         nodes = listener_data["nodes"]
         edges = listener_data["edges"]
         session_id = listener_data.get("session_id", "default")
         workflow_id = listener_data.get("workflow_id")
-        try:
-            use_latest_graph = bool(workflow_id) and workflow.patched("trigger-latest-graph-v1")
-        except RuntimeError:  # direct unit invocation outside Temporal runtime
-            use_latest_graph = False
+        graph_version = int(
+            listener_data.get("graphVersion")
+            or listener_data.get("graph_version")
+            or 0
+        )
+        generation = int(listener_data.get("generation") or 0)
         # Controlled generations execute their immutable admitted snapshot.
         # Legacy deployments retain hot graph lookup for compatibility.
-        if use_latest_graph and not listener_data.get("data_scope_id"):
+        if bool(workflow_id) and not listener_data.get("data_scope_id"):
             try:
                 latest = await workflow.execute_activity(
                     "load_persisted_workflow_graph_activity",
@@ -310,6 +361,9 @@ class TriggerListenerWorkflow:
                 if latest.get("found"):
                     nodes = latest.get("nodes") or []
                     edges = latest.get("edges") or []
+                    graph_version = int(
+                        latest.get("graphVersion") or graph_version
+                    )
             except Exception as exc:  # snapshot remains a safe fallback
                 workflow.logger.warning(
                     f"Current graph lookup failed for {workflow_id}; using deployment snapshot: {exc}"
@@ -351,13 +405,11 @@ class TriggerListenerWorkflow:
 
         from services.temporal._retry_policies import QUICK_ACTIVITY_RETRY
 
-        try:
-            unbounded_child_runs = workflow.patched(UNBOUNDED_CHILD_RUNS_PATCH)
-            bounded_broadcasts = workflow.patched(BOUNDED_STATUS_BROADCASTS_PATCH)
-        except RuntimeError:  # direct unit invocation outside Temporal runtime
-            unbounded_child_runs = True
-            bounded_broadcasts = True
-        broadcast_retry = QUICK_ACTIVITY_RETRY if bounded_broadcasts else None
+        # Status broadcasts are cosmetic UI signalling; without an explicit
+        # policy Temporal retries a failing activity forever, wedging the
+        # serialized spawn loop behind a dead broadcaster. Always the shared
+        # QUICK_ACTIVITY_RETRY constant — never an inline RetryPolicy.
+        broadcast_retry = QUICK_ACTIVITY_RETRY
 
         try:
             await _broadcast_trigger_idle(
@@ -380,29 +432,47 @@ class TriggerListenerWorkflow:
                 WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY
             ),
         }
-        if not unbounded_child_runs:
-            # Replay-only: pre-patch histories recorded 1h caps on the
-            # child-start command. See UNBOUNDED_CHILD_RUNS_PATCH.
-            child_options["execution_timeout"] = timedelta(hours=1)
-            child_options["run_timeout"] = timedelta(hours=1)
         if search_attributes is not None:
             child_options["search_attributes"] = search_attributes
 
+        child_payload = {
+            "nodes": filtered_nodes,
+            "edges": filtered_edges,
+            "session_id": session_id,
+            "workflow_id": workflow_id,
+            "workflow_slug": workflow_slug,
+            "tenant_id": tenant_id,
+            "execution_id": listener_data.get("execution_id"),
+            "root_execution_id": listener_data.get("root_execution_id"),
+            "data_scope_id": listener_data.get("data_scope_id"),
+        }
+        frozen_routing = listener_data.get(TEMPORAL_ROUTING_INPUT_KEY)
+        if isinstance(frozen_routing, dict):
+            child_payload[TEMPORAL_ROUTING_INPUT_KEY] = dict(
+                frozen_routing
+            )
+            if "user_id" in listener_data:
+                child_payload["user_id"] = listener_data.get("user_id")
+        if graph_version >= 2 and generation > 0:
+            event_session_id = str(
+                trigger_output.get("session_id") or ""
+            ).strip()
+            child_payload.update(
+                {
+                    "graphVersion": graph_version,
+                    "generation": generation,
+                    # The Temporal child id is the execution-scoped Context
+                    # identity for this firing. The control-plane
+                    # ``execution_id`` remains the generation/root identity.
+                    "context_execution_id": child_id,
+                }
+            )
+            if event_session_id and event_session_id != "default":
+                child_payload["context_session_id"] = event_session_id
+
         await workflow.start_child_workflow(
             "MachinaWorkflow",
-            args=[
-                {
-                    "nodes": filtered_nodes,
-                    "edges": filtered_edges,
-                    "session_id": session_id,
-                    "workflow_id": workflow_id,
-                    "workflow_slug": workflow_slug,
-                    "tenant_id": tenant_id,
-                    "execution_id": listener_data.get("execution_id"),
-                    "root_execution_id": listener_data.get("root_execution_id"),
-                    "data_scope_id": listener_data.get("data_scope_id"),
-                }
-            ],
+            args=[child_payload],
             **child_options,
         )
 

@@ -148,12 +148,20 @@ export default defineConfig(({ mode }) => {
       // uvicorn serves the SPA itself on 5678. Keeps OAuth callback
       // URLs (…:5678/api/...) valid in both modes and removes the
       // cross-origin dependence in dev.
+      //
+      // changeOrigin MUST stay false: the backend derives OAuth redirect
+      // URIs from the incoming Host header (services/oauth_utils.get_base_url
+      // -> websocket.base_url). changeOrigin:true would rewrite Host to the
+      // proxy target (localhost:5679), so the derived redirect URI would be
+      // :5679 — breaking the browser-facing :5678 callback the OAuth app is
+      // registered with (e.g. Microsoft AADSTS50011 redirect-URI mismatch).
+      // Preserving the original Host keeps the :5678 callback correct.
       proxy: Object.fromEntries(
         ['/api', '/ws', '/webhook', '/health', '/mcp'].map((prefix) => [
           prefix,
           {
             target: `http://localhost:${requireEnv('PYTHON_BACKEND_PORT')}`,
-            changeOrigin: true,
+            changeOrigin: false,
             ws: prefix === '/ws',
           },
         ])
@@ -163,7 +171,8 @@ export default defineConfig(({ mode }) => {
       // `company dev --force` sets VITE_FORCE to re-run dependency
       // pre-bundling — Vite's own recovery for "Outdated Optimize Dep"
       // (equivalent to `vite --force`, which can't be threaded through
-      // the pnpm run -> npm run indirection as an argv flag).
+      // the `bun run client:start` -> `npm run start` indirection as an
+      // argv flag).
       force: !!getEnv('VITE_FORCE', ''),
       // Pre-bundle the heavy deps reached through lazily-loaded panels
       // (chat/markdown stack, canvas) so a late discovery can't trigger
@@ -215,12 +224,7 @@ export default defineConfig(({ mode }) => {
               '@hookform/resolvers',
             ],
             'vendor-flow': ['reactflow'],
-            'vendor-radix': [
-              'radix-ui',
-              '@radix-ui/react-collapsible',
-              '@radix-ui/react-dialog',
-              '@radix-ui/react-slot',
-            ],
+            'vendor-radix': ['radix-ui'],
             'vendor-icons': ['lucide-react', '@lobehub/icons'],
             'vendor-query': [
               '@tanstack/react-query',

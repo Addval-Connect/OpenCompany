@@ -61,10 +61,12 @@ _MIGRATED_PLUGINS = (
     "browser",
     "cloudflare",
     "code",
+    "discord",
     "email",
     "gcloud",
     "github",
     "google",
+    "microsoft",
     "stripe",
     "telegram",
     "twitter",
@@ -77,9 +79,11 @@ _MIGRATED_PLUGINS = (
 _PLUGINS_WITH_HANDLERS = (
     "android",
     "cloudflare",
+    "discord",
     "gcloud",
     "github",
     "google",
+    "microsoft",
     "stripe",
     "telegram",
     "twitter",
@@ -91,7 +95,9 @@ _PLUGINS_WITH_HANDLERS = (
 # from its package ``__init__.py``.
 _PLUGINS_WITH_ROUTERS = (
     "android",
+    "discord",
     "google",
+    "microsoft",
     "twitter",
 )
 

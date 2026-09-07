@@ -56,7 +56,7 @@ phase plan lives in `~/.claude/plans/properly-fix-the-tech-dreamy-tarjan.md`.
 If the canary fan-out causes regressions in production:
 
 1. Set `EVENT_FRAMEWORK_ENABLED=false` in `.env` (or the process environment).
-2. Restart the server (`npm run start` / `uvicorn` reload). Pydantic Settings re-reads on startup.
+2. Restart the server (`company start` / `uvicorn` reload). Pydantic Settings re-reads on startup.
 3. Confirm pass-through: `dispatch.emit()` logs `event-framework disabled — emit no-op` at DEBUG.
 
 No DB migrations, no schema changes — the rollback is one env var + restart. The legacy `event_waiter` collector/processor keeps trigger nodes firing because plugin producers still call `event_waiter.dispatch(...)` alongside `dispatch.emit(...)` (the dual-dispatch pattern stays for the in-memory canvas-Run path; the Redis-Streams branch itself was retired in Wave 15.3).
@@ -103,14 +103,16 @@ chatTrigger. The scoping DECISION lives in the core call site
 session stays unscoped) and the narrowing in core dispatch — plugin
 `_events.py` factories only plumb the field of their own wire shape.
 
-Worker is embedded in the FastAPI process (`main.py:211-292`
-`TemporalWorkerManager.start()` runs as `asyncio.create_task()`). Activities
+Worker is embedded in the FastAPI process (`main.py:321-332` schedules
+`run_temporal_lifecycle` from `services/temporal/lifecycle.py` as one
+`asyncio.create_task()`; that module owns the connect loop and the
+`TemporalWorkerManager` / `TemporalWorkerPool` start). Activities
 and the WebSocket connection pool share memory + event loop, so the fan-out
 to FE clients is a direct in-process call — no Redis Streams hop required.
 
 ## Search Attributes setup
 
-The framework requires 6 custom Search Attributes on the Temporal
+The framework requires 7 custom Search Attributes on the Temporal
 namespace. Registration is **idempotent + automatic on Temporal client
 connect** (`services/temporal/client.py:TemporalClientWrapper.connect`):
 
@@ -122,6 +124,7 @@ connect** (`services/temporal/client.py:TemporalClientWrapper.connect`):
 | `TriggerNodeId` | KEYWORD | Per-trigger event-history queries |
 | `EventTriggerKind` | KEYWORD | Coarse classification (webhook / polling / …) |
 | `EventReceivedAt` | DATETIME | Time-range queries |
+| `ControlEventTypes` | KEYWORD_LIST | The push event types a `WorkflowControlWorkflow` currently has triggers for (upserted as triggers register); `dispatch.emit` skips controllers whose list does not contain the event type. Absent on pre-upgrade histories = match-all. |
 
 Declarations live in
 [`services/temporal/search_attributes.py:EVENT_SEARCH_ATTRIBUTES`](../server/services/temporal/search_attributes.py).
@@ -138,7 +141,7 @@ temporal operator search-attribute create \
   --namespace default \
   --name EventType \
   --type Keyword
-# ... repeat for the other 5 attributes
+# ... repeat for the other 6 attributes (ControlEventTypes is --type KeywordList)
 ```
 
 ### Verification
@@ -147,7 +150,7 @@ temporal operator search-attribute create \
 temporal operator search-attribute list --namespace default
 ```
 
-Should show the 6 framework attributes alongside Temporal's built-in
+Should show the 7 framework attributes alongside Temporal's built-in
 default attributes (`WorkflowType`, `WorkflowId`, `ExecutionStatus`, …).
 
 ## Temporal contract for plugin authors
@@ -225,6 +228,62 @@ live in `nodes/<plugin>/_events.py`. Cross-cutting factories
 See RFC §6.4 for the classification rule + the canonical
 `telegram/_events.py` example.
 
+### UI-only lifecycle events broadcast directly, never through `emit`
+
+`dispatch.emit` exists to reach **Temporal consumers**: it runs a Visibility
+`ListWorkflowExecutions` query to find running listeners, then broadcasts
+in-process as a side effect. That query is only worth paying for when some node
+type registered the event via `register_canary_trigger_type`.
+
+The Context conversation event (`context.updated`, in
+`nodes/context/_events.py`) and the Memory mutation event (`memory.updated`,
+in `nodes/tool/simple_memory/_events.py`) have no canary consumer, so the
+query is guaranteed to match nothing — once per save/mutation. They call
+`get_status_broadcaster().broadcast({...})` directly instead, which is the same
+pattern `nodes/telegram/_events.py` uses for status. The CloudEvents envelope,
+`source`, `type`, `subject` and `data` are identical either way, so the wire
+contract the frontend sees does not change.
+
+Rule of thumb: **if no `register_canary_trigger_type` call names your event
+type, broadcast it directly.** Reach for `emit` only when a Temporal workflow
+has to receive it. `tests/nodes/test_context_events.py` locks this for Context
+by parsing the module's imports (AST, not grep, so the docstring can explain
+the reasoning without tripping the assertion).
+
+### Context events are emitted at the persistence boundary
+
+`save_conversation` (`services/agent_context/conversation.py`) is the one
+place every Context writer passes through — the in-process agent loop, the
+Temporal LLM activity, and the specialized-provider bridge all persist
+through it. So the "conversation advanced" notification is emitted there
+rather than at each call site, via a fanout registry in
+`services/agent_context/listeners.py`:
+
+```python
+register_conversation_listener(async_fn)   # nodes/context/__init__.py
+await notify_conversation_saved(workflow_id=..., generation=..., agent_node_id=..., message_count=...)
+```
+
+Same shape as the plugin registries in `plugin_system.md`, and for the same
+reason: the store must never import `nodes/`. A new writer gets live updates for
+free, and no caller carries broadcast code.
+
+Two properties are load-bearing and have tests in
+`tests/services/agent_context/test_conversation.py`:
+
+- **After commit.** The notification fires only after the durable upsert, so
+  it can never be observed ahead of the state it describes.
+- **A listener can never fail a save.** `notify_conversation_saved` swallows
+  and logs at WARNING (visible at the default log level — a silently failing
+  listener is how "the panel never updates live" becomes undiagnosable).
+  Saves run inside the Temporal LLM activity's post-send window, after the
+  provider has been called and billed — a throwing listener there would fail
+  a run over a UI notification.
+
+Clears are deliberately **not** routed through the store listener: the
+clear handler and the Context node's Reset hook dispatch `context.updated`
+themselves (a delete is not a save, and only the caller knows it happened).
+
 ## Verification
 
 Each Phase-A milestone has a verification command:
@@ -234,7 +293,7 @@ Each Phase-A milestone has a verification command:
 | A1 | `pytest tests/test_plugin_contract.py::TestStartToCloseTimeoutOverridesAreCommented` |
 | A2 | `python -c "from services.plugin.scaling import RetryPolicy; assert 'NodeUserError' in RetryPolicy().non_retryable_error_types"` |
 | A3 | `python -c "from core.config import Settings; print(Settings().temporal_graceful_shutdown_seconds)"` |
-| A4 | After Temporal connect: `temporal operator search-attribute list \| grep -E 'EventType\|EventSource\|EventWorkflowId\|TriggerNodeId\|EventTriggerKind\|EventReceivedAt'` — all 6 lines |
+| A4 | After Temporal connect: `temporal operator search-attribute list \| grep -E 'EventType\|EventSource\|EventWorkflowId\|TriggerNodeId\|EventTriggerKind\|EventReceivedAt\|ControlEventTypes'` — all 7 lines |
 
 Full test surface landed in Phase A9. Phase B (plugin `_events.py`
 modules), Phase C (Temporal trigger-waiter migration), and Phase D
@@ -249,7 +308,7 @@ inspection surface:
 
 - **Visibility list**: `client.list_workflows(query="ExecutionStatus='Failed' AND EventWorkflowId='<deployment_workflow_id>'")` returns every failed run for a deployment. The same Search Attributes the cancel sweep uses for cleanup (per `services/temporal/search_attributes.py`) make this query work.
 - **Failure detail**: `client.get_workflow_history(workflow_id, run_id)` returns the full Event History, including the `ActivityTaskFailed` event's error message + stacktrace + each retry attempt timestamp.
-- **Temporal Web UI**: http://localhost:5680 — the same data, browsable.
+- **Temporal Web UI**: `http://localhost:<TEMPORAL_UI_PORT>` — the same data, browsable.
 
 This is why Wave 12 explicitly does NOT add a custom `event_dlq` SQLModel table. Doing so would reinvent the Temporal primitives the rest of the framework was built AROUND, not against. The pre-Temporal `services/execution/models.py::DLQEntry` for the legacy `WorkflowExecutor` is a separate concern and stays where it is.
 
@@ -274,7 +333,13 @@ Locked by `TestCloudEventTypeMatchesSearchAttribute` in [`test_canary_registry.p
 
 `event_waiter.dispatch` / `broadcaster.send_custom_event` calls inside canary-registered plugin `_events.py` files (chat / webhook / task / telegram / email) had zero consumers in canary-on mode — the deployment manager skips `setup_event_trigger` when `is_canary_trigger_type(...)` is True, so no legacy waiter ever registered. Removed.
 
-- `dispatch.emit(envelope, wire_routing_key=...)` is the single delivery path. It signals legacy `EventType` consumers and running workflow controllers through one Temporal Visibility query, while broadcasting to the frontend on the same wire key. Each controller filters against its durable trigger registry.
+- `dispatch.emit(envelope, wire_routing_key=...)` is the single delivery path. It signals legacy `EventType` consumers and running workflow controllers through one Temporal Visibility query, while broadcasting to the frontend on the same wire key. Each controller filters against its durable trigger registry — note this is a match on the **CloudEvents type**, not on the trigger node's own parameters.
+
+- **The trigger node's own filter is applied in `TriggerListenerWorkflow._spawn_child_run`**, gated on the `machina-trigger-listener-node-filter` patch. That method is the single choke point: `WorkflowControlWorkflow._spawn_push_run` constructs a `TriggerListenerWorkflow` purely to call it, so both the controller path and the legacy listener path go through one branch. The predicate runs in `evaluate_trigger_filter_activity` rather than inline, because filter builders live in plugin folders and reach imports the workflow sandbox forbids; the recorded boolean keeps replay deterministic. It receives the CloudEvents **`data` member, not the envelope** (`event_waiter.dispatch` unpacks to `(event_type, data)` and hands filters the inner payload), and fails **open** — an unknown node type, malformed payload or raising builder all admit the event, because over-firing is recoverable while a dropped trigger event looks like a broken product.
+
+  Before this, `filter_params` was carried in `listener_data` and never read, so the `EventType` Search Attribute was the only narrowing and every event of the right type spawned a run: a `webhookTrigger` bound to `/a` fired on a POST to `/b` (all webhooks share one CloudEvents type and are unscoped), a `taskTrigger` watching one agent fired on every task, and a `whatsappReceive` scoped to one group fired on every message. The canvas-Run path applied these filters, so Run and deploy disagreed about what the same node does.
+
+  `listener_data["filter_params"]` is the only possible source: the graph snapshot carries no parameters (`node.data` holds just the label, and `load_persisted_workflow_graph_activity` returns nodes and edges only), so the hot graph re-read cannot supply them. Editing a deployed trigger's filter therefore takes effect on **re-deploy** — consistent with the trigger node itself, which is pre-executed with the event as its output and never re-reads its parameters at run time.
 - For workflow-control generations, trigger definitions, push-event signals,
   and polling activities live directly in the generation's
   `WorkflowControlWorkflow`. There are no separate listener workflow runs;

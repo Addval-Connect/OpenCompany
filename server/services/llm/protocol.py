@@ -2,7 +2,7 @@
 
 The dataclasses in this module deliberately contain only JSON-safe data.  SDK
 objects are useful while normalising a response, but must never leak into the
-agent/Temporal message history.  ``MessageWireV2`` is represented as a plain
+agent/Temporal message history.  ``MessageWire`` is represented as a plain
 dictionary so it can be recorded by Temporal without a custom payload codec.
 
 All providers implement :class:`LLMProvider` (structural typing via Protocol).
@@ -27,15 +27,6 @@ from typing import (
     runtime_checkable,
 )
 
-
-MESSAGE_WIRE_VERSION = 2
-"""Current durable message representation version."""
-
-SUPPORTED_MESSAGE_WIRE_VERSIONS = frozenset({1, 2})
-"""Every durable version this worker can decode; never derive from current."""
-
-NATIVE_MESSAGE_WIRE_VERSIONS = frozenset({2})
-"""Versioned native-agent formats accepted by the Temporal activity."""
 
 MAX_PROVIDER_STATE_DEPTH = 20
 BINARY_STATE_MARKER = "__opencompany_bytes_base64__"
@@ -73,10 +64,9 @@ def decode_binary_state(value: Any) -> Any:
         raise ValueError("Invalid durable binary-state base64") from exc
 
 
-class MessageWireV2(TypedDict):
-    """Versioned JSON object recorded in memory and Temporal histories."""
+class MessageWire(TypedDict):
+    """The one JSON message shape recorded in memory and Temporal histories."""
 
-    version: int
     role: str
     content: str
     blocks: List[Dict[str, Any]]
@@ -187,6 +177,10 @@ class ContentBlock:
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Media descriptor for ``type == "image"`` blocks, discriminated by
+    # ``kind``: durable ``file_ref`` (a FileRef dump) or transient ``bytes``
+    # (hydrated request material — the wire codec refuses to serialize it).
+    source: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -263,6 +257,9 @@ class LLMResponse:
     thinking: Optional[str] = None
     tool_calls: List[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
+    # Some context-management APIs expose active (post-compaction) usage at
+    # the top level and a separate iteration list for total billed work.
+    billing_usage: Optional[Usage] = None
     model: str = ""
     finish_reason: str = "stop"
     raw: Any = None
@@ -271,6 +268,8 @@ class LLMResponse:
     def __post_init__(self) -> None:
         """Keep the flat response API while exposing a replayable message."""
 
+        if self.billing_usage is None:
+            self.billing_usage = self.usage
         if self.assistant_message is None:
             blocks: List[ContentBlock] = []
             if self.thinking:
@@ -464,15 +463,14 @@ class LLMError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Durable MessageWireV2 codec
+# Durable MessageWire codec
 # ---------------------------------------------------------------------------
 
 
-def message_to_wire(message: Message) -> MessageWireV2:
-    """Serialize a message to the versioned, JSON-safe wire contract."""
+def message_to_wire(message: Message) -> MessageWire:
+    """Serialize a message to the JSON-safe wire contract."""
 
     return {
-        "version": MESSAGE_WIRE_VERSION,
         "role": message.role,
         "content": message.content,
         "blocks": [_block_to_wire(block) for block in message.blocks],
@@ -484,26 +482,23 @@ def message_to_wire(message: Message) -> MessageWireV2:
 
 
 def message_from_wire(value: Mapping[str, Any]) -> Message:
-    """Decode MessageWireV2 (and the pre-version flat native shape)."""
+    """Decode the wire shape produced by :func:`message_to_wire`."""
 
-    version = value.get("version", value.get("wire_version", 1))
-    if version not in SUPPORTED_MESSAGE_WIRE_VERSIONS:
-        raise ValueError(f"Unsupported message wire version: {version!r}")
+    if not isinstance(value, Mapping) or not (
+        value.get("role") or value.get("type")
+    ):
+        raise ValueError("Invalid message wire object: missing role")
 
     calls = [
         _tool_call_from_wire(call)
         for call in value.get("tool_calls", ())
         if isinstance(call, Mapping)
     ]
-    blocks = (
-        [
-            _block_from_wire(block)
-            for block in value.get("blocks", ())
-            if isinstance(block, Mapping)
-        ]
-        if version in NATIVE_MESSAGE_WIRE_VERSIONS
-        else []
-    )
+    blocks = [
+        _block_from_wire(block)
+        for block in value.get("blocks", ())
+        if isinstance(block, Mapping)
+    ]
     return Message(
         role=str(value.get("role") or value.get("type") or "user"),
         content=str(value.get("content") or ""),
@@ -515,7 +510,7 @@ def message_from_wire(value: Mapping[str, Any]) -> Message:
     )
 
 
-def messages_to_wire(messages: Iterable[Message]) -> List[MessageWireV2]:
+def messages_to_wire(messages: Iterable[Message]) -> List[MessageWire]:
     return [message_to_wire(message) for message in messages]
 
 
@@ -563,6 +558,15 @@ def _tool_call_from_wire(value: Mapping[str, Any]) -> ToolCall:
     )
 
 
+def _durable_source(source: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Only ref-shaped image sources are durable; hydrated bytes are transient."""
+    if source is None:
+        return None
+    if source.get("kind") == "bytes":
+        raise ValueError("image bytes must not enter durable state")
+    return _json_safe(dict(source))
+
+
 def _block_to_wire(block: ContentBlock) -> Dict[str, Any]:
     return {
         "type": block.type,
@@ -573,12 +577,14 @@ def _block_to_wire(block: ContentBlock) -> Dict[str, Any]:
         "tool_call_id": block.tool_call_id,
         "name": block.name,
         "metadata": _json_safe(block.metadata),
+        "source": _durable_source(block.source),
     }
 
 
 def _block_from_wire(value: Mapping[str, Any]) -> ContentBlock:
     tool_call = value.get("tool_call")
     metadata = value.get("metadata")
+    source = value.get("source")
     return ContentBlock(
         type=str(value.get("type") or "text"),
         text=str(value.get("text") or ""),
@@ -590,6 +596,7 @@ def _block_from_wire(value: Mapping[str, Any]) -> ContentBlock:
         tool_call_id=_optional_str(value.get("tool_call_id")),
         name=_optional_str(value.get("name")),
         metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+        source=dict(source) if isinstance(source, Mapping) else None,
     )
 
 
@@ -718,6 +725,7 @@ class LLMProvider(Protocol):
         max_tokens: int = 4096,
         thinking: Optional[ThinkingConfig] = None,
         tools: Optional[List[ToolDef]] = None,
+        context_management: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse: ...
 
     async def fetch_models(self, api_key: str) -> List[str]: ...

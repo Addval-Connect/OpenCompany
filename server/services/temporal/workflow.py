@@ -19,10 +19,36 @@ from temporalio import workflow
 from ._retry_policies import DEFAULT_ACTIVITY_RETRY, QUICK_ACTIVITY_RETRY
 from services.workflow_naming import node_label_slug
 
+# ``conditions`` is pure -- ``re`` + comparisons, no IO, no clock, no
+# randomness -- so it is safe to evaluate inside a workflow.
+#
+# Importing the submodule still executes ``services/execution/__init__.py``
+# first (Python always initialises the parent package), which drags in the
+# executor, cache, recovery sweeper and DLQ. That is tolerated, not avoided:
+# nothing in that subtree imports back into ``services.temporal``, so there is
+# no cycle, and none of it pulls redis or sqlalchemy at import time. The
+# pass-through keeps the sandbox from re-importing the chain per workflow.
+with workflow.unsafe.imports_passed_through():
+    from services.execution.conditions import evaluate_condition
+
+# Conditional edges were not evaluated on this path at all before this patch --
+# a condition set in the editor rendered a label and did nothing once execution
+# routed through Temporal. Gating the skip keeps replay deterministic for
+# histories recorded while every node was scheduled unconditionally.
+CONDITIONAL_EDGES_PATCH = "machina-conditional-edges-v1"
+
 # Config handles - nodes connecting via these are config nodes (not executed)
-# AI Agent handles: input-memory, input-tools, input-model, input-task, input-teammates
+# AI Agent handles: input-context, input-tools, input-model, input-task, input-teammates
 # Zeenie handles: input-skill, input-tools
-CONFIG_HANDLES = {"input-tools", "input-memory", "input-model", "input-skill", "input-task", "input-teammates"}
+CONFIG_HANDLES = {
+    "input-context",
+    "input-tools",
+    "input-memory",  # replay/import compatibility for V1 graph snapshots
+    "input-model",
+    "input-skill",
+    "input-task",
+    "input-teammates",
+}
 
 
 def _is_config_edge(edge: Dict[str, Any], node_map: Dict[str, Dict[str, Any]]) -> bool:
@@ -87,14 +113,22 @@ AGENT_WORKFLOW_TYPES = frozenset(
     ]
 )
 
-# Temporal patch marker for the root -> agent child-workflow identity change.
-# Keep the legacy branch until every pre-patch history is outside the
-# namespace's replay/reset window, then deprecate the marker in a later
-# release before removing that branch.
-AGENT_CHILD_ID_V2_PATCH = "machina-agent-child-id-v2"
-COOPERATIVE_PAUSE_SCHEDULING_PATCH = (
-    "machina-cooperative-pause-scheduling-v1"
-)
+AGENT_CONTEXT_GRAPH_VERSION = 2
+# Root dispatch consumes an immutable routing snapshot carried in workflow
+# input rather than process-local Settings, so flipping an environment
+# value can never change how an in-flight run dispatches.
+TEMPORAL_ROUTING_INPUT_KEY = "_temporal_routing_v1"
+TEMPORAL_ROUTING_INPUT_VERSION = 1
+# Direct Temporal callers predating the input helper may omit the snapshot.
+# Keep that path deterministic and on the manager's queue while retaining the
+# shipped child/per-type protocols. Normal executor/deployment starts always
+# provide an explicit snapshot.
+_SAFE_FROZEN_ROUTING = {
+    "version": TEMPORAL_ROUTING_INPUT_VERSION,
+    "agent_workflow_enabled": True,
+    "per_type_dispatch_enabled": True,
+    "worker_pool_enabled": False,
+}
 # Agent child workflows used to carry 1h execution/run timeouts, and node
 # activities a 10-minute start_to_close. A run may legitimately execute —
 # or stay cooperatively paused — for months, and Temporal's timeout
@@ -102,9 +136,7 @@ COOPERATIVE_PAUSE_SCHEDULING_PATCH = (
 # long/paused runs. New executions start agent children unbounded and
 # give node activities a generous start_to_close; liveness is enforced
 # by the 2-minute heartbeat timeout (activities self-heartbeat every
-# 30s), not by lifetime caps. Patch keeps replay compatibility for
-# histories recorded with the old caps.
-UNBOUNDED_LIFETIMES_PATCH = "machina-unbounded-lifetimes-v1"
+# 30s), not by lifetime caps.
 # Circuit breaker: a failed trigger-spawned run schedules the
 # workflow_control.pause_on_failure.v1 activity so the deployment pauses
 # (user fixes + resumes) instead of the trigger firing into the same
@@ -112,17 +144,36 @@ UNBOUNDED_LIFETIMES_PATCH = "machina-unbounded-lifetimes-v1"
 # evaluated on the activity side, so flipping config never touches
 # recorded workflow commands; this patch only gates the activity
 # scheduling itself for replay compatibility with older histories.
-PAUSE_ON_FAILURE_PATCH = "machina-pause-on-failure-v1"
-# start_to_close for node activities on the patched path. Generous by
+# start_to_close for node activities. Generous by
 # design: a single node step (agent turn batch, browser op, long shell
 # command) may run for hours; worker-death detection is the heartbeat
 # timeout's job, so a long ceiling costs nothing in liveness.
 _NODE_ACTIVITY_START_TO_CLOSE = timedelta(hours=24)
 
 
-def _agent_child_workflow_id_v2(root_workflow_id: str, agent_node_id: str) -> str:
+def _agent_child_workflow_id(root_workflow_id: str, agent_node_id: str) -> str:
     """Return a deterministic child id unique to one canvas agent and run."""
     return f"{root_workflow_id}-agent-{agent_node_id}"
+
+
+def _frozen_routing_from_input(
+    workflow_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Normalize the immutable routing snapshot without consulting Settings."""
+    raw = workflow_data.get(TEMPORAL_ROUTING_INPUT_KEY)
+    if (
+        not isinstance(raw, dict)
+        or raw.get("version") != TEMPORAL_ROUTING_INPUT_VERSION
+    ):
+        raw = _SAFE_FROZEN_ROUTING
+    return {
+        "version": TEMPORAL_ROUTING_INPUT_VERSION,
+        "agent_workflow_enabled": raw.get("agent_workflow_enabled") is True,
+        "per_type_dispatch_enabled": (
+            raw.get("per_type_dispatch_enabled") is True
+        ),
+        "worker_pool_enabled": raw.get("worker_pool_enabled") is True,
+    }
 
 
 # Durable protocol identifier: existing Temporal histories and child-workflow
@@ -192,7 +243,7 @@ class MachinaWorkflow:
             return
         try:
             await workflow.execute_activity(
-                "workflow_control.pause_on_failure.v1",
+                "workflow_control.pause_on_failure",
                 {
                     "workflow_id": workflow_id,
                     "reason": str((errors[0] or {}).get("error", "run_failed"))[:500],
@@ -299,6 +350,12 @@ class MachinaWorkflow:
         # (one-off Runs without a saved DB row).
         workflow_slug = workflow_data.get("workflow_slug") or workflow_id
         tenant_id = workflow_data.get("tenant_id")
+        graph_version = int(
+            workflow_data.get("graphVersion")
+            or workflow_data.get("graph_version")
+            or 0
+        )
+        generation = int(workflow_data.get("generation") or 0)
         # Stable per-run execution id. The executor passes the same value
         # it uses as this workflow's Temporal id (``<slug>-<uuid8>``), so
         # the fallback to ``workflow.info().workflow_id`` is identical by
@@ -310,12 +367,7 @@ class MachinaWorkflow:
         # histories must keep the label-derived child ids they recorded;
         # new histories use the root Temporal id + exact canvas node id so
         # two same-label agents can start in the same graph execution.
-        use_agent_child_id_v2 = workflow.patched(AGENT_CHILD_ID_V2_PATCH)
-        use_cooperative_pause_schedule_gate = workflow.patched(
-            COOPERATIVE_PAUSE_SCHEDULING_PATCH
-        )
-        use_unbounded_lifetimes = workflow.patched(UNBOUNDED_LIFETIMES_PATCH)
-        use_pause_on_failure = workflow.patched(PAUSE_ON_FAILURE_PATCH)
+        frozen_routing = _frozen_routing_from_input(workflow_data)
 
         workflow.logger.info(f"Starting workflow orchestration: {len(nodes)} nodes, {len(edges)} edges")
 
@@ -336,6 +388,8 @@ class MachinaWorkflow:
 
         # 2. Build dependency maps
         deps, node_map = self._build_dependency_maps(exec_nodes, exec_edges)
+        conditional_edges = self._build_conditional_edge_map(exec_edges, node_map)
+        use_conditional_edges = workflow.patched(CONDITIONAL_EDGES_PATCH)
 
         # 3. Initialize state
         outputs: Dict[str, Any] = {}  # node_id -> result
@@ -372,8 +426,7 @@ class MachinaWorkflow:
                 # ``_trigger_output`` is ``{not_triggered: True}``, no
                 # downstream template should resolve against them.
                 if not trigger_output.get("not_triggered"):
-                    if use_cooperative_pause_schedule_gate:
-                        await self._wait_until_resumed()
+                    await self._wait_until_resumed()
                     await workflow.execute_activity(
                         "store_node_output_activity",
                         {
@@ -433,6 +486,19 @@ class MachinaWorkflow:
                     auto_completed_this_pass += 1
                     continue
 
+                # Every dependency is done, so any incoming condition is now
+                # decidable. Mirrors WorkflowExecutor._find_ready_nodes: OR-any
+                # across the conditional edges, and a skip still counts as
+                # "completed" for dependency purposes, so skipping is NOT
+                # transitive -- an unconditional downstream node still runs.
+                if use_conditional_edges and node_id in conditional_edges:
+                    if not self._conditions_met(node_id, conditional_edges[node_id], outputs):
+                        workflow.logger.info(f"Skipping {node_id}: no incoming edge condition matched")
+                        completed.add(node_id)
+                        execution_trace.append(node_id)
+                        auto_completed_this_pass += 1
+                        continue
+
                 # Build immutable context for this node
                 context = {
                     "node_id": node_id,
@@ -450,17 +516,57 @@ class MachinaWorkflow:
                     "pre_executed": node.get("_pre_executed", False),
                     "trigger_output": node.get("_trigger_output"),
                 }
+                if (
+                    graph_version >= AGENT_CONTEXT_GRAPH_VERSION
+                    and generation > 0
+                ):
+                    context.update(
+                        {
+                            "graphVersion": graph_version,
+                            "generation": generation,
+                            "root_execution_id": workflow_data.get(
+                                "root_execution_id"
+                            )
+                            or execution_id,
+                            "data_scope_id": workflow_data.get(
+                                "data_scope_id"
+                            ),
+                            # Context thread identity is distinct from the
+                            # output/data namespace. Trigger listeners provide
+                            # a per-firing execution id and, for chat events,
+                            # the explicit conversation session.
+                            "context_execution_id": workflow_data.get(
+                                "context_execution_id"
+                            ),
+                            "context_session_id": workflow_data.get(
+                                "context_session_id"
+                            ),
+                        }
+                    )
+                if "user_id" in workflow_data:
+                    context["user_id"] = workflow_data.get("user_id")
+                context["temporal_worker_pool_enabled"] = bool(
+                    frozen_routing.get("worker_pool_enabled")
+                )
 
                 # F4.B: agent-as-child-workflow takes precedence over the
                 # activity path for the 15 migrating agent types when its
                 # flag is on. Tool calls inside the agent loop become
                 # per-type activities (F4.A path) automatically.
-                dispatch = self._resolve_dispatch(node_type)
-                if use_cooperative_pause_schedule_gate:
-                    # A preceding child start yields to the workflow event
-                    # loop, so a pause signal may have landed since ``ready``
-                    # was computed. Re-admit every command in the batch.
-                    await self._wait_until_resumed()
+                dispatch = self._resolve_dispatch(
+                    node_type,
+                    graph_version=graph_version,
+                    generation=generation,
+                    context_v2_enabled=(
+                        graph_version >= AGENT_CONTEXT_GRAPH_VERSION
+                        and generation > 0
+                    ),
+                    routing_snapshot=frozen_routing,
+                )
+                # A preceding child start yields to the workflow event loop,
+                # so a pause signal may have landed since ``ready`` was
+                # computed. Re-admit every command in the batch.
+                await self._wait_until_resumed()
                 if dispatch["kind"] == "child_workflow":
                     # ``workflow.start_child_workflow`` is ``async def`` —
                     # awaiting it returns the ``ChildWorkflowHandle`` once
@@ -473,23 +579,17 @@ class MachinaWorkflow:
                     # ``machina-agent-child-id-v2``. New runs use the actual
                     # root Temporal workflow id plus the exact canvas node id;
                     # labels are mutable and need not be unique.
-                    if use_agent_child_id_v2:
-                        child_workflow_id = _agent_child_workflow_id_v2(
-                            workflow.info().workflow_id,
-                            node_id,
-                        )
-                    else:
-                        child_workflow_id = f"{workflow_slug}-{node_label_slug(node)}"
+                    child_workflow_id = _agent_child_workflow_id(
+                        workflow.info().workflow_id,
+                        node_id,
+                    )
+                    # Unbounded by design: a run may execute — or stay
+                    # cooperatively paused — for months, and Temporal's
+                    # timeout timers keep ticking through a pause.
                     child_start_kwargs: Dict[str, Any] = dict(
                         args=[context],
                         id=child_workflow_id,
                     )
-                    if not use_unbounded_lifetimes:
-                        # Replay-only: pre-patch histories recorded 1h caps
-                        # on the child-start command. New runs are unbounded
-                        # (see UNBOUNDED_LIFETIMES_PATCH).
-                        child_start_kwargs["execution_timeout"] = timedelta(hours=1)
-                        child_start_kwargs["run_timeout"] = timedelta(hours=1)
                     handle = await workflow.start_child_workflow(
                         dispatch["name"],
                         **child_start_kwargs,
@@ -502,6 +602,14 @@ class MachinaWorkflow:
                     # execute_node_activity otherwise. ``activity_id`` =
                     # node_id so the Temporal Web UI history tab labels
                     # each activity by the canvas node it ran.
+                    # Honor each plugin's declared RetryPolicy.
+                    activity_retry_policy = retry_policy
+                    from services.node_registry import get_node_class
+
+                    node_cls = get_node_class(node_type)
+                    declared_retry = getattr(node_cls, "retry_policy", None)
+                    if declared_retry is not None:
+                        activity_retry_policy = declared_retry.to_temporal()
                     start_kwargs: Dict[str, Any] = dict(
                         args=[context],
                         activity_id=node_id,
@@ -509,13 +617,9 @@ class MachinaWorkflow:
                         # self-heartbeat every 30s); start_to_close only
                         # bounds a single legitimate step. Pre-patch
                         # histories replay against the old 10min cap.
-                        start_to_close_timeout=(
-                            _NODE_ACTIVITY_START_TO_CLOSE
-                            if use_unbounded_lifetimes
-                            else timedelta(minutes=10)
-                        ),
+                        start_to_close_timeout=_NODE_ACTIVITY_START_TO_CLOSE,
                         heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=retry_policy,
+                        retry_policy=activity_retry_policy,
                     )
                     if dispatch.get("queue") is not None:
                         start_kwargs["task_queue"] = dispatch["queue"]
@@ -560,7 +664,7 @@ class MachinaWorkflow:
         # Build final result
         success = len(errors) == 0 and len(completed) == len(node_map)
 
-        if errors and use_pause_on_failure:
+        if errors:
             await self._pause_deployment_on_failure(workflow_data, nodes, errors)
 
         workflow.logger.info(f"Workflow complete: success={success}, " f"executed={len(execution_trace)}/{len(node_map)}")
@@ -585,7 +689,15 @@ class MachinaWorkflow:
                 inputs[dep_id] = outputs[dep_id].get("result", {})
         return inputs
 
-    def _resolve_dispatch(self, node_type: str) -> Dict[str, Any]:
+    def _resolve_dispatch(
+        self,
+        node_type: str,
+        *,
+        graph_version: int = 0,
+        generation: int = 0,
+        context_v2_enabled: bool = False,
+        routing_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Resolve dispatch kind for a node type.
 
         Returns one of:
@@ -595,20 +707,56 @@ class MachinaWorkflow:
             — F4.A per-type activity OR legacy fallback, depending on
             ``temporal_per_type_dispatch``.
 
-        Deterministic: all lookups go through frozen dicts (Settings,
-        _NODE_CLASS_REGISTRY, AGENT_WORKFLOW_TYPES). Safe inside
-        ``MachinaWorkflow.run`` per the workflow-definition contract.
+        New histories pass ``routing_snapshot`` from workflow input so no
+        mutable Settings value can alter their command shape. ``None`` is the
+        replay-only compatibility path for pre-patch histories.
         """
-        from core.config import Settings
+        if routing_snapshot is None:
+            from core.config import Settings
 
-        settings = Settings()
-        if getattr(settings, "temporal_agent_workflow_enabled", False) and node_type in AGENT_WORKFLOW_TYPES:
+            settings = Settings()
+            agent_workflow_enabled = getattr(
+                settings,
+                "temporal_agent_workflow_enabled",
+                False,
+            )
+            per_type_dispatch_enabled = getattr(
+                settings,
+                "temporal_per_type_dispatch",
+                False,
+            )
+            worker_pool_enabled = getattr(
+                settings,
+                "temporal_worker_pool_enabled",
+                False,
+            )
+        else:
+            agent_workflow_enabled = (
+                routing_snapshot.get("agent_workflow_enabled") is True
+            )
+            per_type_dispatch_enabled = (
+                routing_snapshot.get("per_type_dispatch_enabled") is True
+            )
+            worker_pool_enabled = (
+                routing_snapshot.get("worker_pool_enabled") is True
+            )
+        if agent_workflow_enabled and node_type in AGENT_WORKFLOW_TYPES:
             return {"kind": "child_workflow", "name": "AgentWorkflow"}
 
-        name, queue = self._resolve_activity(node_type)
+        name, queue = self._resolve_activity(
+            node_type,
+            per_type_dispatch_enabled=per_type_dispatch_enabled,
+            worker_pool_enabled=worker_pool_enabled,
+        )
         return {"kind": "activity", "name": name, "queue": queue}
 
-    def _resolve_activity(self, node_type: str) -> tuple[str, str | None]:
+    def _resolve_activity(
+        self,
+        node_type: str,
+        *,
+        per_type_dispatch_enabled: Optional[bool] = None,
+        worker_pool_enabled: Optional[bool] = None,
+    ) -> tuple[str, str | None]:
         """Resolve (activity_name, task_queue) for a node type.
 
         F4.A: when ``settings.temporal_per_type_dispatch`` is on AND the
@@ -635,18 +783,32 @@ class MachinaWorkflow:
         Imports are inside the method to keep the workflow module's
         top-level import set minimal and to avoid import-cycle drift.
         """
-        from core.config import Settings
         from services.node_registry import get_node_class
 
-        settings = Settings()
-        if not settings.temporal_per_type_dispatch:
+        if (
+            per_type_dispatch_enabled is None
+            or worker_pool_enabled is None
+        ):
+            from core.config import Settings
+
+            settings = Settings()
+            if per_type_dispatch_enabled is None:
+                per_type_dispatch_enabled = (
+                    settings.temporal_per_type_dispatch
+                )
+            if worker_pool_enabled is None:
+                worker_pool_enabled = (
+                    settings.temporal_worker_pool_enabled
+                )
+
+        if not per_type_dispatch_enabled:
             return "execute_node_activity", None
 
         cls = get_node_class(node_type)
         if cls is None:
             return "execute_node_activity", None
 
-        queue = cls.task_queue if settings.temporal_worker_pool_enabled else None
+        queue = cls.task_queue if worker_pool_enabled else None
         return f"node.{cls.type}.v{cls.version}", queue
 
     async def _wait_any_complete(self, running: Dict[str, Any]) -> tuple:
@@ -750,6 +912,47 @@ class MachinaWorkflow:
                 deps[tgt].add(src)
 
         return deps, node_map
+
+    def _build_conditional_edge_map(
+        self,
+        edges: List[Dict],
+        node_map: Dict[str, Dict],
+    ) -> Dict[str, List[Dict]]:
+        """Group incoming edges that carry a condition, keyed by target node.
+
+        Only targets that appear here are gated; a node with no conditional
+        incoming edge keeps the unconditional "all deps done" rule.
+        """
+        conditional: Dict[str, List[Dict]] = {}
+        for edge in edges:
+            target = edge.get("target")
+            if target not in node_map:
+                continue
+            if not (edge.get("data") or {}).get("condition"):
+                continue
+            conditional.setdefault(target, []).append(edge)
+        return conditional
+
+    def _conditions_met(
+        self,
+        target_node_id: str,
+        edges: List[Dict],
+        outputs: Dict[str, Any],
+    ) -> bool:
+        """Return whether any conditional incoming edge admits this node.
+
+        OR-any, matching ``WorkflowExecutor._evaluate_incoming_conditions``.
+        A source that produced no output evaluates against ``{}`` rather than
+        raising, so a skipped upstream cannot wedge the graph.
+        """
+        for edge in edges:
+            condition = (edge.get("data") or {}).get("condition")
+            if not condition:
+                continue
+            source_output = outputs.get(edge.get("source")) or {}
+            if evaluate_condition(condition, source_output):
+                return True
+        return False
 
     def _find_ready_nodes(
         self,

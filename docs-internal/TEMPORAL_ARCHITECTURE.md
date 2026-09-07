@@ -30,10 +30,12 @@ Each workflow node executes as a **Temporal activity** with its own isolated con
 **Running with Temporal** — the Temporal server and the embedded worker start automatically with every launch script:
 
 ```bash
-npm run start            # Starts the app; the backend lifespan starts the Temporal dev server when TEMPORAL_ENABLED
-npm run dev              # Starts Temporal server + all services (dev mode)
-npm run stop             # Stops all services including Temporal
+company start            # Starts the app; the backend lifespan starts the Temporal dev server when TEMPORAL_ENABLED
+company dev              # Starts Temporal server + all services (dev mode)
+company stop             # Stops all services including Temporal
 ```
+
+(`bun run start` / `bun run dev` / `bun run stop` are thin wrappers over the same `company` verbs.)
 
 The embedded Temporal worker runs **inside the Python backend** — registered in the `main.py` lifespan via `TemporalWorkerManager`, not as a separate process.
 
@@ -49,7 +51,7 @@ This invokes `run_standalone_worker()` from `services/temporal/worker.py`.
 ## System Architecture
 
 ```
-                        TEMPORAL SERVER (port 5681)
+                TEMPORAL SERVER (port TEMPORAL_FRONTEND_GRPC_PORT)
                                   |
               Task Queue: machina-tasks  (workflows + framework activities)
   +---------------------------------------------------------------+
@@ -93,7 +95,7 @@ This invokes `run_standalone_worker()` from `services/temporal/worker.py`.
 Each node runs as a separate Temporal activity with:
 - **Own context** - No shared mutable state between nodes
 - **Own retry policy** - Failed nodes retry independently (up to 3 attempts)
-- **Own timeout** - Long AI nodes don't block short nodes (10 min default)
+- **Own timeout** - Long AI nodes don't block short nodes (`_NODE_ACTIVITY_START_TO_CLOSE` = 24 h ceiling in `services/temporal/workflow.py`; liveness comes from the 2-minute heartbeat, not the start-to-close cap)
 - **Own worker** - Can execute on any available worker in the cluster
 
 ### 2. Workflow = Pure Orchestrator
@@ -181,9 +183,13 @@ while True:
         activity_name, activity_queue = self._resolve_activity(node_type)
         start_kwargs = dict(
             args=[context],
-            start_to_close_timeout=timedelta(minutes=10),
+            activity_id=node_id,
+            # Heartbeat is the liveness mechanism; start_to_close only
+            # bounds a single legitimate step (24h; pre-patch histories
+            # replay against the old 10min cap).
+            start_to_close_timeout=_NODE_ACTIVITY_START_TO_CLOSE,
             heartbeat_timeout=timedelta(minutes=2),
-            retry_policy=retry_policy,
+            retry_policy=activity_retry_policy,  # plugin cls.retry_policy wins when declared
         )
         if activity_queue is not None:
             start_kwargs["task_queue"] = activity_queue
@@ -321,9 +327,9 @@ Env overrides: `TEMPORAL_<QUEUE>_CONCURRENCY` (int) and `TEMPORAL_<QUEUE>_RATE_L
 - **Resource-based slot supplier** (Wave 18.4): `ai-heavy` + `browser` (unpredictable workloads) use `ResourceBasedSlotSupplier` targeting 80% host CPU + memory, `minimum_slots=1`, `maximum_slots` = the per-queue concurrency. Requires `temporalio>=1.25.0` (pinned).
 - **SDK tracing interceptor ownership**: `TracingInterceptor` is registered exactly once on the shared `Client.connect(...)`. The Temporal Python SDK automatically prepends compatible client interceptors to every `Worker` built from that client. Worker constructors must not repeat `TracingInterceptor`; doing so creates paired OpenTelemetry spans for one execution.
 - **Application observability interceptor** (Wave 17.3, `services/temporal/_interceptors.py`): workers explicitly register `ObservabilityWorkerInterceptor` for `activity_retry` WARN logs when `activity.info().attempt > 1` — the "worker died and Temporal re-dispatched" signal — and replay-guarded `workflow_start` logs. This is separate from SDK tracing and remains worker-owned.
-- **Periodic activity heartbeat** (Wave 17.6, `plugin/base.py::as_activity`): 30s background beat during long bodies so a laptop-sleep crash is detected within one `heartbeat_timeout` (2 min) instead of `start_to_close` (10 min).
+- **Periodic activity heartbeat** (Wave 17.6, `plugin/base.py::as_activity`): 30s background beat during long bodies so a laptop-sleep crash is detected within one `heartbeat_timeout` (2 min) instead of `start_to_close` (24 h).
 - **Cron catch-up bound** (Wave 17.1, `services/temporal/schedules.py`): `SchedulePolicy(catchup_window=24h)` + `SKIP` overlap — a laptop offline a week does not replay 168 hourly ticks on wake.
-- **One-shot LLM-step retry** (Wave 17.2): `LLM_STEP_RETRY(maximum_attempts=1)` on `agent.execute_llm_step.v1` — LLM calls are not idempotent; the workflow surfaces the failure instead of silently re-billing the prompt. `agent.refresh_tools.v1` deliberately keeps 3 attempts (idempotent canvas rebuild).
+- **LLM-step retry** (Wave 17.2, since reverted): `LLM_STEP_RETRY` on `agent.execute_llm_step` is now **unlimited** (`maximum_attempts=0`, 5 s → 5 min exponential backoff) — see the docstring in `services/temporal/_retry_policies.py`. The one-shot policy Wave 17.2 shipped meant one transient provider error killed a months-long deployment and tripped the circuit breaker; terminal outcomes still fail fast because `_as_temporal_llm_error` marks non-retryable categories (invalid_request, authentication, ...) with `non_retryable=True`, and provider `retry_after` hints ride `ApplicationError.next_retry_delay`. Accepted trade-off: an ambiguous loss can re-bill a prompt. `agent.refresh_tools` keeps the 3-attempt default (idempotent canvas rebuild).
 
 **Metric watchlist** (Temporal Web UI / metrics endpoint): `schedule_to_start_latency` (elevated = raise pollers or slots), `worker_task_slots_available` (0 = raise concurrency or add hosts), `poll_success_rate` (target >= 90%), `sticky_cache_evictions` (persistent growth = raise `max_cached_workflows`).
 
@@ -335,7 +341,7 @@ When `TEMPORAL_AGENT_WORKFLOW_ENABLED=true` and the node type is in the migratin
 
 ```
 AgentWorkflow.run(context):
-  0. execute_activity("agent.prepare_payload.v1")
+  0. execute_activity("agent.prepare_payload")
        resolves the DB-backed payload from the canvas context — runs
        workflow_service._param_resolver.resolve so {{node.field}}
        templates in prompt / system_message become real values BEFORE
@@ -348,7 +354,7 @@ AgentWorkflow.run(context):
   emit_phase("starting", status="executing")
   loop until "final" or max_iterations:
     1. emit_phase("llm_step", iteration=N)
-    2. execute_activity("agent.execute_llm_step.v1")
+    2. execute_activity("agent.execute_llm_step")
          returns {kind, assistant_message, calls?, content?, usage}.
          assistant_message is MessageWireV2: ordered text/reasoning/tool
          blocks plus JSON-safe provider continuation state (Gemini thought
@@ -382,7 +388,7 @@ AgentWorkflow.run(context):
     4. for each tool result with an ``operations`` field
        (canvas-mutating tools — today only ``agentBuilder``):
          if payload["auto_rebind_tools"] is True:
-           execute_activity("agent.refresh_tools.v1", {operations: …})
+           execute_activity("agent.refresh_tools", {operations: …})
               translates add_node ops with component_kind=="tool" OR
               usable_as_tool=True (minus chat-model plugins) into the
               same tool_payload shape prepare_agent_payload emits.
@@ -390,36 +396,36 @@ AgentWorkflow.run(context):
               yielding fresh AgentToolSpec / ToolDef declarations.
            tools.extend(refresh_result["tools"])
            tool_index.update(...)
-           # next execute_llm_step.v1 sees the new tools.
-    5. execute_activity("agent.persist_turn.v1")
+           # next execute_llm_step sees the new tools.
+    5. execute_activity("agent.persist_turn")
          append_to_memory_markdown(content, "human", prompt) +
          (content, "ai", response); trim window; broadcast
          node_parameters_updated CloudEvents (source_hint="agent").
     6. if token_total >= compaction_threshold:
-         execute_activity("agent.compact_memory.v1")
+         execute_activity("agent.compact_context")
          null-guarded against worker-bootstrap race; replaces messages
          with summary only when result.success is True.
-  execute_activity("agent.store_output.v1")
+  execute_activity("agent.store_output")
        wraps workflow_service.store_node_output for output_main /
        output_top / output_0 — same writes NodeExecutor.execute does
-       at services/node_executor.py:197-199, so downstream nodes
+       at services/node_executor.py:198-200, so downstream nodes
        can resolve {{aiAgent.response}} via ParameterResolver.
   emit_phase("completed", status="success")
 ```
 
-The `agent.prepare_payload.v1` result is recorded in history and therefore
+The `agent.prepare_payload` result is recorded in history and therefore
 acts as the deterministic engine selector. New executions default to
 `llm_engine="native"` with Message Wire V2 and use `ChatUnifier` plus the
 native provider SDKs for every turn. Histories whose recorded prepare result
 has no engine marker are pre-cutover histories: their messages are in a retired
-wire format the native reader cannot interpret, so `agent.execute_llm_step.v1`
+wire format the native reader cannot interpret, so `agent.execute_llm_step`
 refuses them with a non-retryable
 `ApplicationError(type="InvalidAgentLLMEngine")` rather than misreading them.
 The operator fix is to Reset the deployment, which starts a fresh generation.
 Changing the environment cannot change an execution after it starts,
 and a native run never falls back after a provider request starts.
 
-`emit_phase(phase, status?)` is a thin helper that schedules `agent.broadcast_progress.v1`. The activity emits `WorkflowEvent.agent_progress` (CloudEvents v1.0, `type="com.opencompany.agent.progress"`) for FE consumers; when `status` is supplied it also drives a raw-dict `update_node_status` for the canvas-glow color (executing / success / error). Same dual-channel pattern F4.A's `_node_activity` uses. When this workflow is itself a delegated child (`context["parent_node_id"]` set), every `emit_phase` call ALSO schedules a second broadcast against the parent's `node_id` with `phase="delegating"` — the parent's canvas badge then advances in real time while the child loops, instead of freezing at "executing" glow until the child completes.
+`emit_phase(phase, status?)` is a thin helper that schedules `agent.broadcast_progress`. The activity emits `WorkflowEvent.agent_progress` (CloudEvents v1.0, `type="com.opencompany.agent.progress"`) for FE consumers; when `status` is supplied it also drives a raw-dict `update_node_status` for the canvas-glow color (executing / success / error). Same dual-channel pattern F4.A's `_node_activity` uses. When this workflow is itself a delegated child (`context["parent_node_id"]` set), every `emit_phase` call ALSO schedules a second broadcast against the parent's `node_id` with `phase="delegating"` — the parent's canvas badge then advances in real time while the child loops, instead of freezing at "executing" glow until the child completes.
 
 Each LLM step is one activity and each ordinary tool call is one per-type activity. Team-lead Task Manager assignments are different: persistence happens first, then the lead starts a deterministic detached `DelegatedTaskWorkflow` with `ParentClosePolicy.ABANDON` and receives `queued` immediately. The runner owns the root-wide permit, claim, child `AgentWorkflow`, terminal result/usage persistence, `taskTrigger`, and permit release, so the assigning lead can return without polling. Direct non-team delegation retains the child-workflow path. Non-agent tools and excluded types (`rlm_agent`, `claude_code_agent`) still go through `execute_activity`. Failures surface as durable task failures and trigger review rather than being lost when the lead invocation closes.
 
@@ -429,32 +435,51 @@ Durable event listeners retain their deployment graph as a fallback, but each fi
 
 **Canvas-aware tools** opt into receiving the parent workflow's `nodes`/`edges` by declaring `needs_canvas: ClassVar[bool] = True` on their `BaseNode` subclass. The F4.B tool dispatch reads this via `services.node_registry.get_node_class(node_type).needs_canvas` and forwards `context.get("nodes")` / `context.get("edges")` into `tool_payload`; default plugins keep the empty-canvas optimisation. Today only `agentBuilder` opts in (it walks edges to resolve its calling agent and mutates the canvas). Operations inside agentBuilder reload via `database.get_workflow(workflow_id)` so in-run duplicate detection sees mutations from earlier calls in the same workflow run — see [agent_builder section in CLAUDE.md](../CLAUDE.md).
 
-`collect_agent_activities()` registers **16 agent activities**. Seven are the
-core loop activities:
+`collect_agent_activities()` registers the agent activities — read the live set
+from that function rather than trusting a count here, which drifts on every
+addition. Seven are the core loop activities:
 
 | Activity | Purpose |
 |---|---|
-| `agent.prepare_payload.v1` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / auto_rebind_tools), records `llm_engine` + `message_wire_version`, and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit` + `UserSettings.auto_rebind_tools_after_canvas_change`. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
-| `agent.execute_llm_step.v1` | One LLM turn. The native branch decodes Message Wire V2, rebuilds `ToolDef` values, calls `run_native_llm_step(ChatUnifier, ...)` with SDK retries disabled, heartbeats while awaiting the provider, and returns the exact assistant message + tool calls + normalized usage. Guards against un-invokable payloads: post-filter system-only message lists raise `ApplicationError(type="EmptyAgentPrompt", non_retryable=True)`. |
-| `agent.refresh_tools.v1` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
-| `agent.persist_turn.v1` | Appends the latest human/assistant exchange to memory markdown, trims the window, broadcasts `node.parameters.updated`. |
-| `agent.compact_memory.v1` | Context-pressure compaction when cumulative active-context tokens hit the threshold. Best-effort: continues with un-compacted history on failure; it is not an agent termination control. |
-| `agent.store_output.v1` | Writes `output_main` / `output_top` / `output_0` so downstream nodes resolve `{{aiAgent.response}}` via `ParameterResolver`. |
-| `agent.broadcast_progress.v1` | Emits `WorkflowEvent.agent_progress` (CloudEvents v1.0) + optional raw-dict `update_node_status` for canvas-glow color. Single helper drives every phase emit. |
+| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / auto_rebind_tools), records `llm_engine` + `message_wire_version`, and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit` + `UserSettings.auto_rebind_tools_after_canvas_change`. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
+| `agent.execute_llm_step` | One LLM turn. The native branch decodes Message Wire V2, rebuilds `ToolDef` values, calls `run_native_llm_step(ChatUnifier, ...)` with SDK retries disabled, heartbeats while awaiting the provider, and returns the exact assistant message + tool calls + normalized usage. Guards against un-invokable payloads: post-filter system-only message lists raise `ApplicationError(type="EmptyAgentPrompt", non_retryable=True)`. |
+| `agent.refresh_tools` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
+| `agent.persist_turn` | Appends the latest human/assistant exchange to memory markdown, trims the window, broadcasts `node.parameters.updated`. |
+| `agent.compact_context` | Context-pressure compaction when cumulative active-context tokens hit the threshold (the shared client-side summarizer). Best-effort: continues with un-compacted history on failure; it is not an agent termination control. |
+| `agent.store_output` | Writes `output_main` / `output_top` / `output_0` so downstream nodes resolve `{{aiAgent.response}}` via `ParameterResolver`. |
+| `agent.broadcast_progress` | Emits `WorkflowEvent.agent_progress` (CloudEvents v1.0) + optional raw-dict `update_node_status` for canvas-glow color. Single helper drives every phase emit. |
 
-The other nine support skills and durable delegation:
+The other ten support skills and durable delegation (17 `agent.*` activities in total at the time of writing; none carry a `.v1` suffix — only `node.{type}.v{n}` and `poll.*` activities are versioned):
 
 | Activity | Purpose |
 |---|---|
-| `agent.skill.invoke.v1` | Executes one progressive skill action with a history-recorded, retry-safe result. |
-| `agent.skill.clear.v1` | Clears the agent's turn-scoped skill state. |
-| `agent.begin_delegation.v1` | Idempotently persists and claims a direct delegation before child startup. |
-| `agent.queue_delegation.v1` | Persists a team task before it waits for a root-wide concurrency permit. |
-| `agent.acquire_subagent_permit.v1` | Heartbeats while polling the durable root coordinator for a subagent permit. |
-| `agent.release_subagent_permit.v1` | Idempotently releases a root-wide subagent permit. |
-| `agent.register_task_execution.v1` | Persists the runner and child Temporal identities for trace inspection. |
-| `agent.finish_delegation.v1` | Idempotently records a delegated child's terminal result and usage. |
-| `agent.finalize_team.v1` | Finalizes a team after its required tasks reach accepted or terminal states. |
+| `agent.skill.invoke` | Executes one progressive skill action with a history-recorded, retry-safe result. |
+| `agent.skill.clear` | Clears the agent's turn-scoped skill state. |
+| `agent.begin_delegation` | Idempotently persists and claims a direct delegation before child startup. |
+| `agent.queue_delegation` | Persists a team task before it waits for a root-wide concurrency permit. |
+| `agent.cancel_delegation` | Cancels a queued/running delegated task and records the cancellation idempotently. |
+| `agent.acquire_subagent_permit` | Heartbeats while polling the durable root coordinator for a subagent permit. |
+| `agent.release_subagent_permit` | Idempotently releases a root-wide subagent permit. |
+| `agent.register_task_execution` | Persists the runner and child Temporal identities for trace inspection. |
+| `agent.finish_delegation` | Idempotently records a delegated child's terminal result and usage. |
+| `agent.finalize_team` | Finalizes a team after its required tasks reach accepted or terminal states. |
+
+**Context needs no dedicated activities.** The plain conversation store
+(see [agent_context_flow.md](./agent_context_flow.md)) rides the existing
+pipeline: `agent.prepare_payload` loads the stored conversation for
+`(workflow_id, generation, agent_node_id)` and returns it with the
+`conversation_key` (load failures are LOUD — `ConversationLoadFailed`
+retryable / `ConversationTooLarge` non-retryable at 1 MB), and
+`agent.execute_llm_step` saves `[...sent, assistant]` best-effort after each
+provider call. A continue-as-new rollover carries the live transcript in its
+resume marker, so nothing reconstructs from the store mid-run. The
+journal-era activities (`agent.prepare_context`,
+`agent.reconstruct_context_messages`, `agent.append_context`) are retired;
+`agent.compact_context` (the shared client-side summarizer that bounds the
+carried transcript) remains.
+Tool calls scheduled by the workflow carry the model's unmerged `tool_args`
+in the per-type activity payload so ToolNodes validate against their
+`ToolInput` via `execute_as_tool` (see `tests/nodes/test_tool_call_dispatch.py`).
 
 The F4.B compaction threshold is prepared from the model context length and
 the ratio configuration. It currently does not read
@@ -473,15 +498,29 @@ Certain nodes provide configuration rather than executing:
 
 ```python
 # Config handles - nodes connecting via these are filtered out
-CONFIG_HANDLES = {"input-tools", "input-memory", "input-model", "input-skill", "input-task", "input-teammates"}
+# (services/temporal/workflow.py)
+CONFIG_HANDLES = {
+    "input-context",
+    "input-tools",
+    "input-memory",  # replay/import compatibility for V1 graph snapshots only
+    "input-model",
+    "input-skill",
+    "input-task",
+    "input-teammates",
+}
 
 # Trigger node types - event listeners, never scheduled as blocking activities
-# Authoritative list: server/constants.py WORKFLOW_TRIGGER_TYPES (frozenset).
-TRIGGER_NODE_TYPES = frozenset([
-    "webhookTrigger", "whatsappReceive", "workflowTrigger",
-    "chatTrigger", "taskTrigger",
+# Authoritative list: server/constants.py WORKFLOW_TRIGGER_TYPES (frozenset,
+# 17 entries at the time of writing). Omitting a trigger there is a silent
+# failure: find_trigger_nodes filters on this set, so deploy ignores the node.
+WORKFLOW_TRIGGER_TYPES = frozenset([
+    "start", "cronScheduler",
+    "webhookTrigger", "whatsappReceive",
+    "whatsappBusinessReceive", "whatsappBusinessStatus",
+    "discordReceive", "discordInteraction",
+    "workflowTrigger", "chatTrigger", "taskTrigger",
     "twitterReceive", "googleGmailReceive", "telegramReceive",
-    "emailReceive",
+    "emailReceive", "msMailReceive",
 ])
 
 # Android service types (connect directly to agent input-tools) -- authoritative list
@@ -504,7 +543,7 @@ Trigger nodes that aren't the firing trigger are:
 | Scenario | Behavior |
 |----------|----------|
 | Ordinary node or agent-support activity fails transiently | Temporal retries up to 3 attempts with backoff unless the error type is non-retryable. |
-| `AgentWorkflow` LLM-step activity fails | `LLM_STEP_RETRY` allows one attempt. Provider SDK retries are also disabled so an ambiguous failure is not silently billed again. |
+| `AgentWorkflow` LLM-step activity fails | `LLM_STEP_RETRY` retries without limit (`maximum_attempts=0`, 5 s → 5 min backoff; `services/temporal/_retry_policies.py`) unless the provider error category is non-retryable (invalid_request, authentication, ...). Provider SDK retries stay disabled so Temporal owns the retry schedule and `retry_after` hints. |
 | Worker crashes mid-execution | Temporal reschedules on another worker |
 | Ordinary node times out | Temporal applies that activity's retry policy; plugin timeouts vary by node type. |
 | All retries exhausted | Workflow receives failure, stops execution |
@@ -519,20 +558,33 @@ server/services/temporal/
 │   └── _execute_via_websocket()  # WebSocket execution
 ├── plugin_activities.py # collect_plugin_activities() -> per-type node.{type}.v{ver} activities (F4.A)
 ├── agent_workflow.py    # AgentWorkflow loop + detached DelegatedTaskWorkflow
-├── agent_activities.py  # collect_agent_activities() -> 16 agent.*.v1 activities (F4.B)
+├── agent_activities.py  # collect_agent_activities() -> the agent.* activities (F4.B)
 ├── workflow.py          # MachinaWorkflow class
 │   ├── run()                     # Main orchestrator
 │   ├── _filter_executable_graph() # Config node filtering
 │   ├── _build_dependency_maps()   # Graph analysis
 │   ├── _find_ready_nodes()        # Dependency resolution
 │   └── _wait_any_complete()       # FIRST_COMPLETED wait
-├── worker.py            # TemporalWorkerManager
+├── workflow_control_workflow.py  # WorkflowControlWorkflow (per-generation controller: triggers, signals, polling, pause)
+├── trigger_listener_workflow.py  # TriggerListenerWorkflow (legacy push-trigger listener)
+├── polling_trigger_workflow.py   # PollingTriggerWorkflow (legacy polling listener)
+├── schedules.py         # Temporal Schedule creation for cronScheduler
+├── search_attributes.py # EVENT_SEARCH_ATTRIBUTES (7 custom SAs, incl. ControlEventTypes)
+├── _retry_policies.py   # DEFAULT_ACTIVITY_RETRY / QUICK_ACTIVITY_RETRY / LLM_STEP_RETRY / PERMIT_WAIT_RETRY / ...
+├── _interceptors.py     # ObservabilityWorkerInterceptor (activity_retry WARN, workflow_start logs)
+├── plugin_registry.py   # Temporal plugin registry
+├── worker.py            # TemporalWorkerManager + TemporalWorkerPool
 │   ├── start()                   # Start embedded worker
 │   ├── stop()                    # Cleanup
 │   └── run_standalone_worker()   # For horizontal scaling
+├── lifecycle.py         # run_temporal_lifecycle (dev-server supervision, connect loop, wiring, watchdog)
+├── _runtime.py / _install.py / _handlers.py / _refresh.py  # dev-server supervisor, pooch installer, WS + refresh hooks
 ├── executor.py          # TemporalExecutor entry point
+├── ws_client.py         # WebSocket connection pool for the legacy activity path
 └── client.py            # TemporalClientWrapper (runtime heartbeat disabled)
 ```
+
+Read the live module list from the directory; the tree above is a map, not an inventory.
 
 ## Implementation Notes
 
@@ -574,15 +626,15 @@ client = await Client.connect(server_address, namespace=namespace, runtime=runti
 
 ## Server Management
 
-The Temporal binary + persistence are managed in-process by the plugin-folder pattern at [`server/services/temporal/`](../server/services/temporal/). Single supervised process — the official `temporal` CLI's `server start-dev` mode, per [docs.temporal.io/develop/python/set-up-your-local-python](https://docs.temporal.io/develop/python/set-up-your-local-python). Five sibling files (`_install.py`, `_runtime.py`, `_handlers.py`, `_refresh.py`, `client.py`, plus `__init__.py` for registry wiring) match the [Wave 11 plugin-folder pattern](./plugin_system.md#self-contained-plugin-folders) that `server/nodes/whatsapp/` uses for its Go binary.
+The Temporal binary + persistence are managed in-process by the plugin-folder pattern at [`server/services/temporal/`](../server/services/temporal/). Single supervised process — the official `temporal` CLI's `server start-dev` mode, per [docs.temporal.io/develop/python/set-up-your-local-python](https://docs.temporal.io/develop/python/set-up-your-local-python). The server-management sibling files (`_install.py`, `_runtime.py`, `_handlers.py`, `_refresh.py`, `lifecycle.py`, `client.py`, plus `__init__.py` for registry wiring) match the [Wave 11 plugin-folder pattern](./plugin_system.md#self-contained-plugin-folders) that `server/nodes/whatsapp/` uses for its Go binary; the rest of the package (see the file structure above) is the execution engine itself.
 
-**What runs**: one process — `temporal server start-dev --port 5681 --ui-port 5680 --db-filename ~/.opencompany/temporal.db --namespace default`. Both gRPC + Web UI bind to the same process (per docs.temporal.io/cli/server — "all running in a single process"). SQLite-backed durability; history persisted across restarts.
+**What runs**: one process — `temporal server start-dev --port $TEMPORAL_FRONTEND_GRPC_PORT --ui-port $TEMPORAL_UI_PORT --db-filename ~/.opencompany/temporal.db --namespace default`. Both gRPC + Web UI bind to the same process (per docs.temporal.io/cli/server — "all running in a single process"). SQLite-backed durability; history persisted across restarts.
 
 **Modern libs doing the heavy lifting** (zero custom infrastructure code):
 - **[`pooch`](https://pypi.org/project/pooch/)** — `services/temporal/_install.py` downloads the official `temporal` CLI archive from `https://temporal.download/cli/archive/latest?platform=<os>&arch=<arch>`. Cross-platform (Windows zip / macOS+Linux tar.gz), cached at `<DATA_DIR>/packages/temporal/` via `_cache_dir() = core.paths.package_dir("temporal")` (pooch's `path=` argument). The retrieve call passes an explicit `downloader=pooch.HTTPDownloader(timeout=300, progressbar=True)`: the timeout is per-socket-read (not total transfer), so arbitrarily slow links can finish the ~114 MB fetch — pooch's 30 s default aborted them — and `progressbar` must live on the downloader because `retrieve()` ignores its own kwarg when `downloader=` is explicit. Failed downloads never poison the cache (pooch writes to a temp file and renames atomically on success). Standalone entry: `python -m services.temporal._install` — invoked **fatally** by `company build` step [6/6] (so first `company start` doesn't pay the download; contract locked by `test_temporal_install_is_fatal_on_failure`) and **non-fatally** by npm postinstall (`scripts/install.js` try/catch — `TemporalServerRuntime._pre_spawn()` re-downloads lazily on first `company start`, so a failed eager fetch never fails `npm install -g`). The binary cache survives `company clean` (`packages` is in `_OPENCOMPANY_KEEP`, `cli/commands/clean.py`). Pre-fix this used `pooch.os_cache("opencompany-temporal")` (`~/.cache/OpenCompany/opencompany-temporal/` etc.) — a separate OS-cache namespace operators reported as "not local"; it now sits under DATA_DIR alongside the Stripe binary and the shared npm tree.
 - **`BaseProcessSupervisor` + `BaseSupervisor`** (`server/services/_supervisor/`) — the in-house supervisor base classes that `server/nodes/whatsapp/_runtime.py` also uses. Provides cross-platform signal handling (POSIX `setsid` + Windows Job Objects + `CREATE_NEW_PROCESS_GROUP` for graceful `CTRL_BREAK_EVENT` shutdown), restart policy via tenacity, log draining, status snapshots. We subclass both — zero custom supervisor logic.
 
-**Lifecycle wiring (July 2026)**: backend-owned, and modular — the whole Temporal runtime story lives in [`services/temporal/lifecycle.py`](../server/services/temporal/lifecycle.py) (`run_temporal_lifecycle`); `main.py` only schedules it as one background task. The module owns: (1) dev-server supervision via `TemporalServerRuntime.ensure_started()` before each connect attempt — a TCP probe on the gRPC port skips the spawn when a server (previously spawned or externally managed) is already listening, and non-loopback `TEMPORAL_SERVER_ADDRESS` values are never spawned at; (2) the forever-retrying connect loop; (3) the config-gated startup sweep; (4) executor + worker manager + worker pool wiring; (5) the boot-time workflow-control reconcile (`services.deployment.handlers.reconcile_active_controls_on_boot`); and (6) a **resident dev-server watchdog** — after startup the task stays alive, probing every `TEMPORAL_HEALTH_MONITOR_INTERVAL_SECONDS` and respawning a dev-server child that died (or restarting a supervisor-owned child that wedged: port bound but gRPC not SERVING for 4 consecutive probes). The runtime registers with `services._supervisor.register_supervisor` so `shutdown_all_supervisors()` actually stops it at teardown. The CLI no longer supervises Temporal: `cli/commands/_temporal_specs.py` and the `_supervised_runtime.py` shim were deleted (the shim was a full second server-venv Python process, ~81 MB resident, plus a ~28 MB resident `uv run` parent — pure supervision overhead).
+**Lifecycle wiring (July 2026)**: backend-owned, and modular — the whole Temporal runtime story lives in [`services/temporal/lifecycle.py`](../server/services/temporal/lifecycle.py) (`run_temporal_lifecycle`); `main.py` only schedules it as one background task. The module owns: (1) dev-server supervision via `TemporalServerRuntime.ensure_started()` before each connect attempt — a TCP probe on the gRPC port skips the spawn when a server (previously spawned or externally managed) is already listening, and non-loopback `TEMPORAL_SERVER_ADDRESS` values are never spawned at; (2) the forever-retrying connect loop; (3) the config-gated startup sweep; (4) executor + worker manager + worker pool wiring; (5) the boot-time workflow-control reconcile (`services.deployment.handlers.reconcile_active_controls_on_boot`); and (6) a **resident dev-server watchdog** — after startup the task stays alive, probing every `TEMPORAL_HEALTH_MONITOR_INTERVAL_SECONDS` and respawning a dev-server child that died (or restarting a supervisor-owned child that wedged: port bound but gRPC not SERVING for 4 consecutive probes). The runtime registers with `services._supervisor.register_supervisor` so `shutdown_all_supervisors()` actually stops it at teardown. The CLI no longer supervises Temporal: the `_temporal_specs.py` command helpers and the `_supervised_runtime.py` shim were deleted (the shim was a full second server-venv Python process, ~81 MB resident, plus a ~28 MB resident `uv run` parent — pure supervision overhead).
 
 **Worker crash-restart (months-long durability)**: the SDK `Worker` is single-use — a second `run()` on the same instance raises `RuntimeError("Already started")`. Both restart loops therefore REBUILD a fresh worker per attempt: `TemporalWorkerManager._run_worker` via `_build_worker()`, and every `TemporalWorkerPool` queue worker runs under `_run_queue_worker` (previously a bare `worker.run()` task — one crash silently killed the queue's only worker and its activities pended forever). Backoff knobs: `TEMPORAL_WORKER_RESTART_BACKOFF_SECONDS` / `_MAX_SECONDS`. Locked by `tests/temporal/test_worker_restart.py`.
 
@@ -597,7 +649,7 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 
 **Startup sweep (debug-only escape hatch)**: [`TemporalClientWrapper.terminate_running_workflows`](../server/services/temporal/client.py) — gated on `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP` (default **`false`**; keep it false — setting `true` converts every boot into a namespace-wide terminate sweep). Even when enabled, any control row in an active state (the shared `WORKFLOW_CONTROL_ACTIVE_STATES`, which includes `resetting`) vetoes the sweep. History is preserved (UI shows workflows as `Terminated`, not deleted); only active execution stops.
 
-**Port management**: Temporal owns ports 5681 (gRPC) + 5680 (Web UI). Both bound by the same `temporal.exe` process; both listed in `cli.config.Config.all_ports` so `company stop`'s port-freeing pre-flight covers them.
+**Port management**: Temporal owns `TEMPORAL_FRONTEND_GRPC_PORT` (gRPC) + `TEMPORAL_UI_PORT` (Web UI). Both bound by the same `temporal.exe` process; both listed in `cli.config.Config.all_ports` so `company stop`'s port-freeing pre-flight covers them.
 
 **Direct CLI access**: the pooch-installed `temporal` binary lives under `<DATA_DIR>/packages/temporal/` (= `~/.opencompany/packages/temporal/` by default, on every OS). Run `temporal --version`, `temporal workflow list`, etc. directly from there.
 
@@ -606,13 +658,13 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 | Setting | Env var | `.env.template` default | Purpose |
 |---|---|---|---|
 | `temporal_enabled` | `TEMPORAL_ENABLED` | `true` | Master toggle. When false, `WorkflowService` falls back to the sequential executor. |
-| `temporal_server_address` | `TEMPORAL_SERVER_ADDRESS` | `localhost:5681` | Address the Python SDK client connects to. |
+| `temporal_server_address` | `TEMPORAL_SERVER_ADDRESS` | `localhost:<TEMPORAL_FRONTEND_GRPC_PORT>` | Address the Python SDK client connects to. |
 | `temporal_namespace` | `TEMPORAL_NAMESPACE` | `default` | Bootstrapped at server start. |
 | `temporal_task_queue` | `TEMPORAL_TASK_QUEUE` | `machina-tasks` | Default task queue for the embedded worker. |
 | `temporal_per_type_dispatch` | `TEMPORAL_PER_TYPE_DISPATCH` | `true` | F4.A flag — per-type activity dispatch. |
 | `temporal_agent_workflow_enabled` | `TEMPORAL_AGENT_WORKFLOW_ENABLED` | `true` | F4.B flag — agent-as-child-workflow. |
-| `temporal_frontend_grpc_port` | `TEMPORAL_FRONTEND_GRPC_PORT` | `5681` | gRPC port (`--port`). Drives the readiness probe. |
-| `temporal_ui_port` | `TEMPORAL_UI_PORT` | `5680` | Web UI port (`--ui-port`). CLI default is `--port + 1000`; pinned into the serial 5678-block instead. |
+| `temporal_frontend_grpc_port` | `TEMPORAL_FRONTEND_GRPC_PORT` | see `.env.template` | gRPC port (`--port`). Drives the readiness probe. |
+| `temporal_ui_port` | `TEMPORAL_UI_PORT` | see `.env.template` | Web UI port (`--ui-port`). CLI default is `--port + 1000`; pinned into the serial block that starts at `PYTHON_BACKEND_PORT` instead. |
 | `temporal_sqlite_path` | `TEMPORAL_SQLITE_PATH` | `temporal.db` | SQLite file (`--db-filename`). Resolved relative to `DATA_DIR` (= `~/.opencompany/`) unless absolute — flat under `~/.opencompany/` like `credentials.db` / `workflow.db`. |
 | `temporal_graceful_shutdown_seconds` | `TEMPORAL_GRACEFUL_SHUTDOWN_SECONDS` | `30` | `CTRL_BREAK_EVENT` (Windows) / `SIGTERM` (POSIX) → tree-kill grace window. Shared with the embedded worker shutdown. |
 | `temporal_terminate_running_on_startup` | `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP` | `false` | Debug-only startup sweep (see the durability contract above). Keep false so running and paused deployments survive restarts. |
@@ -625,17 +677,11 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 
 Full recovery-policy semantics: [temporal-workflow-control.md → Recovery policies](./temporal-workflow-control.md#recovery-policies).
 
-The legacy `TEMPORAL_SERVER_READY_TIMEOUT_SECONDS` knob (CLI-supervised-era readiness wait) was removed — it had no consumer since the backend-owned cutover.
-
-One temporary agent-engine cutover variable is also read directly rather than
-through `Settings`:
-
-| Env var | `.env.template` default | Purpose |
-|---|---|---|
+The legacy `TEMPORAL_SERVER_READY_TIMEOUT_SECONDS` knob (CLI-supervised-era readiness wait) was removed — it had no consumer since the backend-owned cutover. The temporary agent-engine cutover variable that was read directly rather than through `Settings` is gone too: the engine selector is now recorded per execution by `agent.prepare_payload` (see above).
 
 ## Debugging
 
-The Web UI is at http://localhost:5680; the UI's HTTP API rides the gRPC port + 1000 (6681).
+The Web UI is at `http://localhost:<TEMPORAL_UI_PORT>`; the UI's HTTP API rides the gRPC port + 1000.
 
 ### Reading Temporal tracing output
 
@@ -684,10 +730,10 @@ duplicate execution.
 
 ```bash
 # Temporal Web UI
-open http://localhost:5680
+open http://localhost:$TEMPORAL_UI_PORT
 
 # List workflows via the local CLI binary (under <DATA_DIR>/packages/temporal/)
-~/.opencompany/packages/temporal/.../temporal.exe workflow list --address localhost:5681
+~/.opencompany/packages/temporal/.../temporal.exe workflow list --address localhost:$TEMPORAL_FRONTEND_GRPC_PORT
 
 # Re-fetch the binary at any time
 uv run python -m services.temporal._install

@@ -86,6 +86,22 @@ def _derive_auto_ui_hints(group: Sequence[str]) -> Dict[str, Any]:
     return hints
 
 
+def _icon_fingerprint(path: Any) -> str:
+    """Short content hash used to version a plugin icon URL.
+
+    Content-based rather than mtime-based so a fresh checkout of the same
+    bytes keeps the same URL (and the same browser cache entry). Truncated
+    to 12 hex chars — cache-busting, not integrity. Unreadable files fall
+    back to a constant so registration never breaks over an icon.
+    """
+    import hashlib
+
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "0"
+
+
 class BaseNode:
     """Abstract plugin node. Do not instantiate directly — subclass
     :class:`ActionNode`, :class:`TriggerNode`, or :class:`ToolNode`.
@@ -132,6 +148,7 @@ class BaseNode:
         node_id: str,
         workflow_id: str,
         execution_id: str,
+        generation: int,
         graph: Dict[str, Any],
         database: Any,
     ) -> Dict[str, Any]:
@@ -163,6 +180,11 @@ class BaseNode:
 
     component_kind: ClassVar[str] = "generic"
     usable_as_tool: ClassVar[bool] = False
+    # Explicit agent capability used by graph validation/migration. Rendering
+    # kind and palette group are intentionally not proxies: several
+    # non-agents render with componentKind="agent", while Codex-style agents
+    # have historically been missing from central type lists.
+    requires_context: ClassVar[bool] = False
 
     # Whether this plugin requires the parent workflow's full canvas
     # (``nodes`` + ``edges`` arrays) in its NodeContext. Default ``False``
@@ -280,13 +302,27 @@ class BaseNode:
             get_icon,
             get_color,
             get_plugin_icon_path,
+            get_plugin_icon_ref,
             get_plugin_meta,
         )
 
-        if get_plugin_icon_path(cls.type) is not None:
-            icon = f"/api/schemas/nodes/{cls.type}/icon"
+        # Co-located SVG, then the plugin's own meta.json (library
+        # reference), then the central visuals.json. Same shape as the
+        # color lookup below: plugin folder first, central registry as the
+        # legacy fallback.
+        icon_path = get_plugin_icon_path(cls.type)
+        if icon_path is not None:
+            # Fingerprinted URL — standard asset-cache-busting. The icon
+            # route serves `Cache-Control: max-age=86400` on a URL that
+            # otherwise never changes, so replacing an SVG left every
+            # browser showing the old artwork for up to a day. A content
+            # hash in the URL makes the long cache correct instead of
+            # harmful: changed bytes mint a new URL, identical bytes keep
+            # the cached one. Computed once at registration, like every
+            # other field in this dict.
+            icon = f"/api/schemas/nodes/{cls.type}/icon?v={_icon_fingerprint(icon_path)}"
         else:
-            icon = get_icon(cls.type)
+            icon = get_plugin_icon_ref(cls.type) or get_icon(cls.type)
         color = get_plugin_meta(cls.type, "color") or get_color(cls.type)
         meta: Dict[str, Any] = {
             "displayName": cls.display_name or cls.type,
@@ -300,8 +336,31 @@ class BaseNode:
             meta["subtitle"] = cls.subtitle
         if color:
             meta["color"] = color
-        if cls.handles:
-            meta["handles"] = list(cls.handles)
+        handles = [dict(handle) for handle in cls.handles]
+        is_invokable_tool = cls.usable_as_tool or (
+            cls.component_kind == "tool"
+            and cls.ui_hints.get("isMasterSkillEditor") is not True
+        )
+        if is_invokable_tool and not any(
+            handle.get("name") == "output-tool"
+            and handle.get("kind") == "output"
+            for handle in handles
+        ):
+            # The backend NodeSpec is the topology source of truth. Before
+            # generic handle rendering, SquareNode synthesized this endpoint
+            # from frontend group membership, which left dual-purpose plugin
+            # specs incomplete and made their tool connection disappear.
+            handles.append(
+                {
+                    "name": "output-tool",
+                    "kind": "output",
+                    "position": "top",
+                    "label": "Tool",
+                    "role": "tools",
+                }
+            )
+        if handles:
+            meta["handles"] = handles
         if cls.credentials:
             meta["credentials"] = [c.id for c in cls.credentials]
         if cls.hide_output_handle:
@@ -312,6 +371,8 @@ class BaseNode:
             meta["visibility"] = cls.visibility
         ui_hints = _derive_auto_ui_hints(cls.group)
         ui_hints.update(cls.ui_hints)
+        if cls.requires_context:
+            ui_hints["requiresContext"] = True
         # How long this node may legitimately run, so the client can size its
         # request budget instead of keeping its own list of "slow" node types.
         #
@@ -356,6 +417,23 @@ class BaseNode:
                 context=context,
                 connection_factory=_make_connection_factory(cls, context),
             )
+            # An LLM-invoked tool call carries its unmerged model arguments
+            # in ``context["tool_args"]`` (Temporal per-type activity path).
+            # ToolNodes must take execute_as_tool so a split ToolInput schema
+            # validates the model's arguments — plain execute validates
+            # against Params, whose extra="ignore" silently drops them (a
+            # Simple Memory remember degraded to a no-op list this way).
+            # Dual-purpose ActionNodes keep their documented merged-params
+            # contract unchanged.
+            from services.plugin.tool import ToolNode
+
+            tool_args = context.get("tool_args")
+            if isinstance(tool_args, dict) and isinstance(instance, ToolNode):
+                return await instance.execute_as_tool(
+                    tool_args,
+                    parameters,
+                    ctx,
+                )
             return await instance.execute(node_id, parameters, ctx)
 
         _legacy.__node_class__ = cls  # type: ignore[attr-defined]
@@ -433,14 +511,26 @@ class BaseNode:
         if isinstance(context.raw, dict):
             context.raw["_raw_parameters"] = parameters
 
-        try:
-            params_obj = self._validate_params(parameters)
-        except ValidationError as e:
-            return self._wrap_error(
-                start_time=start_time,
-                error=f"Invalid parameters: {e.errors()[0].get('msg', str(e))}",
-                error_type="ValidationError",
-            )
+        # Split-schema ToolNodes arrive here only through execute_as_tool,
+        # which has already validated model arguments against ToolInput and
+        # persisted configuration against Params. Reuse that exact object so
+        # the operation cannot accidentally observe a merged payload.
+        validated_tool_input = (
+            context.raw.get("_validated_tool_input")
+            if context.raw.get("_split_tool_schema") is True
+            else None
+        )
+        if isinstance(validated_tool_input, BaseModel):
+            params_obj = validated_tool_input
+        else:
+            try:
+                params_obj = self._validate_params(parameters)
+            except ValidationError as e:
+                return self._wrap_error(
+                    start_time=start_time,
+                    error=f"Invalid parameters: {e.errors()[0].get('msg', str(e))}",
+                    error_type="ValidationError",
+                )
 
         op_name = self._pick_operation(parameters)
         op_spec = self._operations.get(op_name)
@@ -532,10 +622,22 @@ class BaseNode:
         node_params: Dict[str, Any],
         context: NodeContext,
     ) -> Dict[str, Any]:
-        """LLM-invoked tool call. The AI model supplies ``tool_args`` for
-        fields it decides to fill; ``node_params`` carries static config
-        the user set on the node (e.g. an API endpoint base URL). Merge
-        wins for the LLM so it can override.
+        """LLM-invoked tool call with separate input/config validation.
+
+        The AI model supplies ``tool_args`` while ``node_params`` carries
+        persisted configuration. ToolNode subclasses may declare a distinct
+        ``ToolInput`` model. The two payloads are validated independently and
+        made available to the operation as follows:
+
+        * Default/legacy tools (``ToolInput is Params``) receive the combined
+          Params object. Model arguments retain their historical precedence,
+          except fields explicitly listed in ``server_controlled_fields``.
+        * Split-schema tools receive the validated ToolInput object; validated
+          configuration is available only through
+          ``ctx.raw["_tool_config"]``. It is never copied into model input.
+
+        Trusted workflow/node scope always remains on NodeContext and is never
+        sourced from model arguments.
 
         Unwraps the :meth:`_wrap_success` envelope to a flat dict —
         tool-call responses fed back into an LLM shouldn't include
@@ -546,8 +648,84 @@ class BaseNode:
         method is idempotent there. ActionNode+``usable_as_tool`` classes
         get their ``{success, result}`` envelope unwrapped.
         """
-        merged = {**node_params, **tool_args}
-        envelope = await self.execute(context.node_id, merged, context)
+        from services.plugin.tool import ToolNode
+
+        is_tool_node = isinstance(self, ToolNode)
+        if not is_tool_node:
+            # Dual-purpose ActionNodes retain the established tool contract.
+            # ToolInput is a ToolNode extension and must not change them.
+            envelope = await self.execute(
+                context.node_id,
+                {**node_params, **tool_args},
+                context,
+            )
+            if "success" not in envelope:
+                return envelope
+            if envelope.get("success") is False:
+                return {
+                    "error": envelope.get("error", "tool execution failed")
+                }
+            result = envelope.get("result")
+            return result if isinstance(result, dict) else {"result": result}
+
+        input_model = type(self).tool_input_model()
+
+        try:
+            validated_input = input_model.model_validate(tool_args)
+            # Only arguments the model actually supplied participate in the
+            # compatibility merge. Otherwise ToolInput defaults would
+            # overwrite an operator's persisted value even though the model
+            # never attempted to set that field.
+            input_payload = validated_input.model_dump(exclude_unset=True)
+
+            if input_model is self.Params:
+                # Validate the persisted subset on its own before combining
+                # it with invocation arguments. Required Params fields are
+                # often model-supplied on legacy tools, hence the derived
+                # partial model rather than treating an omitted argument as a
+                # malformed node configuration.
+                type(self).partial_config_model().model_validate(node_params)
+                # Preserve the legacy contract for existing plugins, while
+                # allowing a plugin to lock specific persisted settings.
+                effective = {**node_params, **input_payload}
+                for field_name in getattr(type(self), "server_controlled_fields", ()):
+                    if field_name in node_params:
+                        effective[field_name] = node_params[field_name]
+                validated_config = self.Params.model_validate(effective)
+                invocation_payload = validated_config.model_dump()
+                split_schema = False
+            else:
+                validated_config = self.Params.model_validate(node_params)
+                invocation_payload = input_payload
+                split_schema = True
+        except ValidationError as e:
+            first = e.errors()[0] if e.errors() else {}
+            return {
+                "error": f"Invalid tool input/configuration: {first.get('msg', str(e))}",
+                "error_type": "ValidationError",
+            }
+
+        # A NodeContext belongs to one invocation, but preserve pre-existing
+        # escape-hatch values for tests/adapters that deliberately reuse one.
+        marker = object()
+        previous_config = context.raw.get("_tool_config", marker)
+        previous_input = context.raw.get("_validated_tool_input", marker)
+        previous_split = context.raw.get("_split_tool_schema", marker)
+        context.raw["_tool_config"] = validated_config
+        context.raw["_validated_tool_input"] = validated_input
+        context.raw["_split_tool_schema"] = split_schema
+        try:
+            envelope = await self.execute(context.node_id, invocation_payload, context)
+        finally:
+            for key, previous in (
+                ("_tool_config", previous_config),
+                ("_validated_tool_input", previous_input),
+                ("_split_tool_schema", previous_split),
+            ):
+                if previous is marker:
+                    context.raw.pop(key, None)
+                else:
+                    context.raw[key] = previous
         # ToolNode skips the envelope wrap entirely — its _wrap_success
         # returns the flat Output dict directly. Detect by the absence
         # of the {success, ...} envelope keys.
@@ -869,6 +1047,11 @@ class BaseNode:
                     "parent_node_id",
                     "team_lead_node_id",
                     "root_execution_id",
+                    # The model's unmerged arguments for an LLM-invoked tool
+                    # call; routes ToolNodes through execute_as_tool in the
+                    # legacy handler so split-schema ToolInput validation
+                    # applies on the Temporal path too.
+                    "tool_args",
                 ):
                     if key in context:
                         extras[key] = context[key]
@@ -883,6 +1066,7 @@ class BaseNode:
                     workflow_id=workflow_id,
                     outputs=context.get("inputs", {}),
                     extras=extras or None,
+                    user_id=str(context.get("user_id") or "owner"),
                 )
 
                 result["node_id"] = node_id
@@ -951,7 +1135,15 @@ def _make_connection_factory(
     node_cls: Type[BaseNode],
     context: Dict[str, Any],
 ) -> Callable[[str], Connection]:
-    user_id = context.get("user_id", "owner")
+    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
+
+    # Credentials are scoped by ``credential_customer_id``, NOT by the
+    # tenancy principal. Reading ``user_id`` here is what made a real
+    # authenticated subject break every OAuth-backed node: tokens are
+    # stored under the installation's customer id, not the logged-in user's.
+    user_id = context.get(
+        "credential_customer_id", DEFAULT_CREDENTIAL_CUSTOMER_ID
+    )
     session_id = context.get("session_id", "default")
     node_id = context.get("node_id")
     # Precompute credential lookup once.

@@ -6,11 +6,10 @@ Every in-process and durable agent execution goes through
 
 from __future__ import annotations
 
-import functools
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Awaitable, Dict, Any, List, Optional, Callable, Type, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Type, TYPE_CHECKING
 
 import json
 
@@ -61,8 +60,6 @@ from services.llm.config import (
     resolve_max_tokens as native_resolve_max_tokens,
     resolve_temperature as native_resolve_temperature,
 )
-from services.llm.vertex import is_vertex_express_key
-from services.llm.messages import filter_empty_messages as _filter_native_messages
 from services.agent_runtime import AgentToolSpec, run_native_agent_loop
 
 
@@ -295,6 +292,36 @@ def _build_skill_system_prompt(skill_data: List[Dict[str, Any]], log_prefix: str
     return build_skill_system_prompt(skill_data, log_prefix)
 
 
+@dataclass
+class _AgentContextRuntime:
+    """Plain conversation binding for one Context-connected agent.
+
+    The key ``(workflow_id, generation, agent_node_id)`` addresses one row in
+    the ``agent_conversations`` store; ``history`` is that row's transcript
+    replayed as native messages, and ``save`` writes the loop's live message
+    list back per turn (called via the agent loop's ``conversation_saver``,
+    which already treats failures as best-effort).
+    """
+
+    workflow_id: str
+    generation: int
+    agent_node_id: str
+    database: Any
+    history: List[NativeMessage]
+
+    async def save(self, messages: List[NativeMessage]) -> None:
+        from services.agent_context import save_conversation
+        from services.llm.protocol import message_to_wire
+
+        await save_conversation(
+            self.database,
+            workflow_id=self.workflow_id,
+            generation=self.generation,
+            agent_node_id=self.agent_node_id,
+            messages=[dict(message_to_wire(message)) for message in messages],
+        )
+
+
 class AIService:
     """AI model service backed by the native provider SDK layer."""
 
@@ -325,6 +352,85 @@ class AIService:
     def detect_provider(self, model: str) -> str:
         """Detect AI provider from model name."""
         return detect_provider_from_model(model)
+
+    async def _prepare_context(
+        self,
+        *,
+        node_id: str,
+        context_data: Optional[Dict[str, Any]],
+        execution_context: Optional[Dict[str, Any]],
+        workflow_id: Optional[str],
+        database: Any,
+    ) -> Optional["_AgentContextRuntime"]:
+        """Load the agent's stored conversation for this generation.
+
+        Returns ``None`` when no Context node is connected or the run carries
+        no admitted generation (manual canvas runs persist nothing by
+        design). A failing load raises instead of silently starting an
+        amnesiac run that burns tokens on an empty prompt.
+        """
+
+        if not context_data or context_data.get("kind") != "context":
+            return None
+
+        from services.agent_context import load_conversation
+        from services.llm.protocol import message_from_wire
+
+        raw_context = execution_context or {}
+        admitted_workflow_id = str(
+            workflow_id or raw_context.get("workflow_id") or ""
+        )
+        descriptor_workflow_id = str(context_data.get("workflow_id") or "")
+        if (
+            admitted_workflow_id
+            and descriptor_workflow_id
+            and admitted_workflow_id != descriptor_workflow_id
+        ):
+            raise ValueError("Context workflow scope mismatch")
+        resolved_workflow_id = admitted_workflow_id or descriptor_workflow_id
+        if not resolved_workflow_id:
+            return None
+        admitted_generation = int(
+            raw_context.get("generation")
+            or raw_context.get("workflow_generation")
+            or 0
+        )
+        descriptor_generation = int(context_data.get("generation") or 0)
+        if (
+            admitted_generation
+            and descriptor_generation
+            and admitted_generation != descriptor_generation
+        ):
+            raise ValueError("Context generation scope mismatch")
+        generation = admitted_generation or descriptor_generation
+        if generation <= 0:
+            return None
+
+        try:
+            wires = await load_conversation(
+                database,
+                workflow_id=resolved_workflow_id,
+                generation=generation,
+                agent_node_id=node_id,
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Conversation load failed for workflow "
+                f"{resolved_workflow_id} generation {generation} agent "
+                f"{node_id}: {exc}"
+            ) from exc
+        history = [
+            message_from_wire(wire)
+            for wire in wires
+            if isinstance(wire, dict)
+        ]
+        return _AgentContextRuntime(
+            workflow_id=resolved_workflow_id,
+            generation=generation,
+            agent_node_id=node_id,
+            database=database,
+            history=history,
+        )
 
     def _extract_text_content(self, content, ai_response=None) -> str:
         """Extract text content from various response formats.
@@ -860,6 +966,19 @@ class AIService:
             # Broadcast: Initializing model
             await broadcast_status("initializing", {"message": f"Initializing {provider} model...", "provider": provider, "model": model, "active_skills": [], "last_skills": [], "last_tool_name": None, "last_capability": None})
 
+            context_runtime = await self._prepare_context(
+                node_id=node_id,
+                context_data=memory_data,
+                execution_context=context,
+                workflow_id=workflow_id,
+                database=database or self.database,
+            )
+            if context_runtime is not None:
+                # Simple Memory is an explicit tool when a Context node is
+                # connected; legacy automatic recall/persistence remains only
+                # for immutable V1 snapshots.
+                memory_data = None
+
             # Build initial messages for state. The SystemMessage is
             # PREPENDED after tool building (below), because the
             # delegation-guidance block at the end of the tool-building
@@ -870,7 +989,15 @@ class AIService:
             # and the LLM would never see the delegation contract,
             # which is exactly what previously broke ``aiAgent``-driven
             # delegation through the ``input-tools`` handle.
-            initial_messages: List[NativeMessage] = []
+            initial_messages: List[NativeMessage] = (
+                [
+                    message
+                    for message in context_runtime.history
+                    if message.role != "system"
+                ]
+                if context_runtime is not None
+                else []
+            )
 
             # Add memory history from connected simpleMemory node (markdown-based)
             session_id = None
@@ -1057,6 +1184,7 @@ class AIService:
                     config["nodes"] = context.get("nodes", [])
                     config["edges"] = context.get("edges", [])
                     config["workspace_dir"] = context.get("workspace_dir", "")
+                    config["user_id"] = context.get("user_id", "owner")
                     # Stable per-run id so session-keyed tools (browser)
                     # reuse one instance across the agent loop.
                     config["execution_id"] = context.get("execution_id")
@@ -1273,6 +1401,11 @@ class AIService:
                 max_iterations=recursion_limit,
                 progress_callback=_emit_progress if broadcaster else None,
                 rebind_from_operations=_rebind_from_operations if auto_rebind_enabled else None,
+                conversation_saver=(
+                    context_runtime.save
+                    if context_runtime is not None
+                    else None
+                ),
             )
 
             # Extract the AI response (last message in the accumulated messages)
@@ -1394,6 +1527,12 @@ class AIService:
             # Add memory info if used
             if session_id:
                 result["memory"] = {"session_id": session_id, "history_loaded": history_count}
+            if context_runtime is not None:
+                result["context"] = {
+                    "workflow_id": context_runtime.workflow_id,
+                    "generation": context_runtime.generation,
+                    "agent_node_id": context_runtime.agent_node_id,
+                }
 
             log_execution_time(logger, "ai_agent_loop", start_time, time.time())
             log_api_call(logger, provider, model, "agent", True)
@@ -1516,10 +1655,9 @@ class AIService:
                 task_manager_bound = any(info.get("node_type") == "taskManager" for info in effective_tool_data)
                 durable_delegates = [info for info in effective_tool_data if info.get("delegate_tool_name")]
                 if task_manager_bound and durable_delegates:
-                    teammate_lines = "\n".join(
-                        f"- {info.get('node_id')}: {info.get('label') or info.get('node_type')} ({info.get('node_type')})"
-                        for info in durable_delegates
-                    )
+                    from services.plugin.edge_walker import format_teammate_roster_line
+
+                    teammate_lines = "\n".join(format_teammate_roster_line(info) for info in durable_delegates)
                     system_message += (
                         "\n\n## Durable Team Delegation\n"
                         "All teammate assignments MUST use task_manager with operation='assign_task'. "
@@ -1636,10 +1774,31 @@ class AIService:
             # Broadcast: Initializing
             await broadcast_status("initializing", {"message": f"Initializing {provider} model...", "provider": provider, "model": model, "active_skills": [], "last_skills": [], "last_tool_name": None, "last_capability": None})
 
+            context_runtime = await self._prepare_context(
+                node_id=node_id,
+                context_data=memory_data,
+                execution_context=context,
+                workflow_id=workflow_id,
+                database=database or self.database,
+            )
+            if context_runtime is not None:
+                memory_data = None
+
             # Build messages
-            messages: List[NativeMessage] = []
+            messages: List[NativeMessage] = (
+                [
+                    message
+                    for message in context_runtime.history
+                    if message.role != "system"
+                ]
+                if context_runtime is not None
+                else []
+            )
             if system_message:
-                messages.append(NativeMessage(role="system", content=system_message))
+                messages.insert(
+                    0,
+                    NativeMessage(role="system", content=system_message),
+                )
 
             # Load memory history if connected (markdown-based like AI Agent)
             session_id = None
@@ -1762,6 +1921,7 @@ class AIService:
                         config["nodes"] = context.get("nodes", [])
                         config["edges"] = context.get("edges", [])
                         config["workspace_dir"] = context.get("workspace_dir", "")
+                        config["user_id"] = context.get("user_id", "owner")
                         # Stable per-run id so session-keyed tools (browser)
                         # reuse one instance across the agent loop.
                         config["execution_id"] = context.get("execution_id")
@@ -1921,6 +2081,11 @@ class AIService:
                     max_iterations=recursion_limit,
                     progress_callback=_emit_progress if broadcaster else None,
                     rebind_from_operations=_rebind_from_operations if auto_rebind_enabled else None,
+                    conversation_saver=(
+                        context_runtime.save
+                        if context_runtime is not None
+                        else None
+                    ),
                 )
 
                 # Extract response
@@ -1944,6 +2109,11 @@ class AIService:
                     thinking=thinking_config,
                     initial_messages=messages,
                     max_iterations=1,
+                    conversation_saver=(
+                        context_runtime.save
+                        if context_runtime is not None
+                        else None
+                    ),
                 )
                 all_messages = final_state["messages"]
                 ai_response = all_messages[-1] if all_messages else None
@@ -2057,6 +2227,12 @@ class AIService:
 
             if session_id:
                 result["memory"] = {"session_id": session_id, "history_loaded": history_count}
+            if context_runtime is not None:
+                result["context"] = {
+                    "workflow_id": context_runtime.workflow_id,
+                    "generation": context_runtime.generation,
+                    "agent_node_id": context_runtime.agent_node_id,
+                }
 
             if skill_data:
                 result["skills"] = {
@@ -2185,6 +2361,13 @@ class AIService:
             connected_services = tool_info.get("connected_services", [])
 
             default_tool_name, default_tool_description = _resolve_default_tool_name_description(node_type)
+            from services.node_registry import get_node_class
+
+            plugin_cls = get_node_class(node_type)
+            schema_locked = bool(
+                plugin_cls is not None
+                and getattr(plugin_cls, "tool_schema_locked", False)
+            )
             # Team-handle expansion assigns a per-node identity to custom
             # aiAgent delegates. It intentionally outranks schemas and class
             # defaults because those are type-wide and would collide.
@@ -2193,7 +2376,16 @@ class AIService:
             # Check database for stored schema (source of truth)
             db_schema = await self.database.get_tool_schema(node_id) if node_id else None
 
-            if db_schema:
+            if schema_locked:
+                # Security-sensitive first-party tools own both their
+                # canonical name and invocation schema. A stale/custom row
+                # from the generic Tool editor must not replace that
+                # contract.
+                tool_name = default_tool_name or node_type
+                tool_description = (
+                    default_tool_description or f"Execute {node_label} node"
+                )
+            elif db_schema:
                 # Use database schema as source of truth
                 logger.debug(f"[Agent] Using DB schema for tool node {node_id}")
                 tool_name = delegated_name or db_schema.get("tool_name", default_tool_name or f"tool_{node_label}")
@@ -2244,7 +2436,11 @@ class AIService:
             schema_params = dict(node_params)
             if connected_services:
                 schema_params["connected_services"] = connected_services
-            if db_schema and db_schema.get("schema_config"):
+            if (
+                not schema_locked
+                and db_schema
+                and db_schema.get("schema_config")
+            ):
                 schema_params["db_schema_config"] = db_schema["schema_config"]
             schema = self._get_tool_schema(node_type, schema_params)
 
@@ -2291,6 +2487,15 @@ class AIService:
             Pydantic BaseModel class for the tool's arguments
         """
         from pydantic import BaseModel, Field
+
+        # Plugin-locked ToolInput is authoritative even when an older client
+        # left a custom ToolSchema row in the database.
+        from services.node_registry import get_node_class
+
+        plugin_cls = get_node_class(node_type)
+        if plugin_cls is not None and getattr(plugin_cls, "tool_schema_locked", False):
+            tool_input_model = getattr(plugin_cls, "tool_input_model", None)
+            return tool_input_model() if callable(tool_input_model) else plugin_cls.Params
 
         # Check if we have a database-stored schema config (source of truth)
         db_schema_config = params.get("db_schema_config")
@@ -2380,10 +2585,10 @@ class AIService:
         # AI-tool-usable plugin is covered by this lookup (contract invariant
         # test_fast_path_covers_every_plugin_tool). Wave 11.D.13 stripped the
         # per-type ad-hoc schemas that used to live below this gate.
-        from services.node_registry import get_node_class
-
-        plugin_cls = get_node_class(node_type)
         if plugin_cls is not None and hasattr(plugin_cls, "Params"):
+            tool_input_model = getattr(plugin_cls, "tool_input_model", None)
+            if callable(tool_input_model):
+                return tool_input_model()
             return plugin_cls.Params
 
         # Generic schema for other nodes

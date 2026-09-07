@@ -22,8 +22,8 @@ AI_CHAT_MODEL_TYPES: FrozenSet[str] = frozenset(
         "kimiChatModel",
         "mistralChatModel",
         "sarvamChatModel",
-        # Local-server providers (Phase 1 of the LiteLLM adoption — see
-        # plans/i-plan-to-implement-nested-orbit.md).
+        # Local-server providers (Ollama / LM Studio speak the OpenAI wire
+        # format; routed through OpenAIProvider with a localhost base_url).
         "ollamaChatModel",
         "lmstudioChatModel",
     ]
@@ -54,9 +54,13 @@ AI_AGENT_TYPES: FrozenSet[str] = frozenset(
 
 AI_MEMORY_TYPES: FrozenSet[str] = frozenset(
     [
+        # V2 exposes this node through input-tools, while immutable V1
+        # generations still recognize their recorded input-memory topology.
         "simpleMemory",
     ]
 )
+
+AI_CONTEXT_TYPES: FrozenSet[str] = frozenset(["context"])
 
 # Tool node types (connect to AI Agent's input-tools handle)
 AI_TOOL_TYPES: FrozenSet[str] = frozenset(
@@ -66,6 +70,7 @@ AI_TOOL_TYPES: FrozenSet[str] = frozenset(
         "duckduckgoSearch",
         "writeTodos",
         "processManager",
+        "simpleMemory",
     ]
 )
 
@@ -89,7 +94,8 @@ AI_MODEL_TYPES: FrozenSet[str] = AI_AGENT_TYPES | AI_CHAT_MODEL_TYPES
 # (input-memory, input-tools, input-model, input-skill).
 # They don't execute independently - they're used by their parent nodes.
 CONFIG_NODE_TYPES: FrozenSet[str] = (
-    AI_MEMORY_TYPES  # Memory nodes (connect to input-memory)
+    AI_CONTEXT_TYPES  # Context nodes (connect to input-context)
+    | AI_MEMORY_TYPES  # Legacy V1 memory / V2 Memory tool config nodes
     | AI_TOOL_TYPES  # Tool nodes (connect to AI Agent's input-tools)
     | AI_CHAT_MODEL_TYPES  # Model config nodes (connect to input-model)
     | SKILL_NODE_TYPES  # Skill nodes (connect to Zeenie's input-skill)
@@ -348,6 +354,10 @@ EVENT_TRIGGER_TYPES: FrozenSet[str] = frozenset(
     [
         "webhookTrigger",
         "whatsappReceive",
+        "whatsappBusinessReceive",
+        "whatsappBusinessStatus",
+        "discordReceive",
+        "discordInteraction",
         "twitterReceive",
         "workflowTrigger",
         "chatTrigger",
@@ -370,6 +380,7 @@ POLLING_TRIGGER_TYPES: FrozenSet[str] = frozenset(
         "googleGmailReceive",
         "twitterReceive",
         "emailReceive",
+        "msMailReceive",
     ]
 )
 
@@ -388,6 +399,14 @@ WORKFLOW_TRIGGER_TYPES: FrozenSet[str] = frozenset(
         # Event-driven triggers
         "webhookTrigger",
         "whatsappReceive",
+        # Omitting a trigger here is a silent failure, not an error:
+        # find_trigger_nodes filters on this set, so deploy simply ignores
+        # the node -- no listener, no warning. It is why stripeReceive is
+        # canvas-only today.
+        "whatsappBusinessReceive",
+        "whatsappBusinessStatus",
+        "discordReceive",
+        "discordInteraction",
         "workflowTrigger",
         "chatTrigger",
         "taskTrigger",
@@ -395,6 +414,7 @@ WORKFLOW_TRIGGER_TYPES: FrozenSet[str] = frozenset(
         "googleGmailReceive",
         "telegramReceive",
         "emailReceive",
+        "msMailReceive",
     ]
 )
 
@@ -455,3 +475,25 @@ def detect_ai_provider(node_type: str, parameters: dict = None) -> str:
     if "ollama" in nt:
         return "ollama"
     return "openai"
+
+
+# ---------------------------------------------------------------------------
+# Identity namespaces — TWO constants, same value, NEVER aliased.
+#
+# ``user_id`` on an execution context and ``customer_id`` on a stored
+# credential happen to share the literal "owner", but they are different
+# namespaces. Credentials are stored per-installation; tenancy scopes
+# workflows and their Context/Memory. Aliasing them means a future change
+# to who owns a workflow silently re-points every OAuth token lookup, so a
+# real login would break every OAuth-backed node.
+#
+# Enforced by tests/test_identity_namespaces.py.
+# ---------------------------------------------------------------------------
+
+#: The single-owner tenancy principal. Used when auth is disabled, and as
+#: the degenerate namespace in single-owner installs.
+OWNER_PRINCIPAL_ID: str = "owner"
+
+#: Default ``customer_id`` for stored credentials. Deliberately NOT an
+#: alias of OWNER_PRINCIPAL_ID — see the note above.
+DEFAULT_CREDENTIAL_CUSTOMER_ID: str = "owner"

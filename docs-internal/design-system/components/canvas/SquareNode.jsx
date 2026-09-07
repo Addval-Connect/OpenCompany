@@ -91,7 +91,7 @@ export function SquareNode({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: Math.round(size * 0.44),
+          fontSize: Math.round(size * 0.5625), // = theme.nodeSize.squareIcon (36px at the 64px box)
           color: 'var(--fg-default)',
         }}
       >

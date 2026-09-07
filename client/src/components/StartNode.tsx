@@ -51,7 +51,7 @@ const StartNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnectabl
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
+        fontFamily: 'var(--font-body)',
         fontSize: '11px',
         cursor: 'pointer',
       } as NodeStyle}
@@ -61,18 +61,21 @@ const StartNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnectabl
         className="sq-node-box"
         style={{
           position: 'relative',
-          width: '60px',
-          height: '60px',
+          width: theme.nodeSize.square,
+          height: theme.nodeSize.square,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           color: theme.colors.text,
-          fontSize: '28px',
+          fontSize: theme.nodeSize.squareIcon,
           fontWeight: '600',
         }}
       >
-        {/* Play Icon (color reads from definition-driven nodeColor) */}
-        <PlayCircle className="h-7 w-7" style={{ color: nodeColor }} />
+        {/* Play Icon (color reads from definition-driven nodeColor);
+            same node-icon token as every other canvas node */}
+        <PlayCircle
+          style={{ color: nodeColor, width: theme.nodeSize.squareIcon, height: theme.nodeSize.squareIcon }}
+        />
 
         {/* Parameters Button — CSS owns bg/border via .sq-node-gear */}
         <button

@@ -34,6 +34,10 @@ import anyio
 from core.logging import get_logger
 
 from services.cli_agent.config import get_provider_config
+from services.cli_agent.context_bridge import (
+    SpecializedAgentContextBridge,
+    is_context,
+)
 from services.cli_agent.factory import create_cli_provider
 from services.cli_agent.mcp_server import (
     BatchContext,
@@ -79,10 +83,12 @@ class AICliService:
         connected_skill_descriptors: Optional[List[Dict[str, Any]]] = None,
         connected_tools: Optional[List[Dict[str, Any]]] = None,
         connected_memory: Optional[Dict[str, Any]] = None,
+        connected_context: Optional[Dict[str, Any]] = None,
         execution_id: Optional[str] = None,
         allowed_credentials: Optional[List[str]] = None,
         max_parallel: int = DEFAULT_MAX_PARALLEL,
         mcp_port: Optional[int] = None,
+        ai_service: Any = None,
     ) -> BatchResult:
         """Run a list of CLI tasks under one batch.
 
@@ -94,6 +100,43 @@ class AICliService:
         """
         provider = create_cli_provider(provider_name)
         task_list: List[BaseAICliTaskSpec] = list(tasks)
+        connected_tools = list(connected_tools or [])
+        context_bridge: Optional[SpecializedAgentContextBridge] = None
+        context_original_prompts: List[str] = []
+        if is_context(connected_context):
+            from services.plugin.deps import get_database
+
+            provider_id = (
+                "claude_code" if provider_name == "claude" else provider_name
+            )
+            context_bridge = await SpecializedAgentContextBridge.resolve(
+                get_database(),
+                connected_context,
+                provider=provider_id,
+                agent_node_id=node_id,
+            )
+            # The stored conversation is the continuity mechanism; provider
+            # native resume only survives within a warm pool subprocess.
+            # Keep the original prompts so the recorded turn never nests a
+            # rendered transcript inside itself.
+            context_original_prompts = [task.prompt for task in task_list]
+            task_list = [
+                task.model_copy(
+                    update={
+                        "prompt": context_bridge.augment_prompt(
+                            task.prompt
+                        )
+                    }
+                )
+                for task in task_list
+            ]
+
+            # One conversation maps to one provider session.
+            if provider_name == "claude" and len(task_list) != 1:
+                raise ValueError(
+                    "Context-bound Claude batches require exactly one "
+                    "task so one conversation maps to one provider session."
+                )
 
         # Pass the per-workflow workspace dir
         # (``data/workspaces/<workflow_id>/`` — injected into ctx by
@@ -162,10 +205,29 @@ class AICliService:
             workspace_dir,
         )
 
+        # Only a runnable batch needs an MCP surface. Build it through the
+        # same backend pipeline as native agents after inexpensive validation
+        # has succeeded, so abort paths do not require AIService/DB access.
+        connected_tools = await self._canonical_tool_surface(
+            connected_tools,
+            ai_service=ai_service,
+        )
+        from services.cli_agent.workflow_tools import _connected_tool_name
+
+        connected_tool_names = [
+            name
+            for tool in connected_tools
+            if (name := _connected_tool_name(tool))
+        ]
+
         # Per-batch bearer token + MCP context
         from core.env_defaults import env_value
 
         token = issue_token()
+        # Single source for the skill-turn scope: registration (via
+        # BatchContext.execution_id) and the teardown clear must key on
+        # the SAME value or badges never clear.
+        turn_execution_id = execution_id or token
         port = mcp_port or int(
             os.environ.get("OPENCOMPANY_BACKEND_PORT")
             or os.environ.get("MACHINA_BACKEND_PORT")
@@ -178,7 +240,12 @@ class AICliService:
             # A batch token is a safe ephemeral conversation scope when the
             # caller has no durable execution id; never share loaded-skill
             # state across later CLI runs of the same workflow/node.
-            execution_id=execution_id or token,
+            # NOTE: skill-turn state is registered under this exact value,
+            # so the teardown clear MUST use it too — keying the clear on
+            # the bare ``execution_id`` leaves badges lit forever on manual
+            # canvas runs, where ``execution_id`` is None.
+            execution_id=turn_execution_id,
+            user_id=str((connected_context or {}).get("user_id") or "owner"),
             connected_skill_names=set(connected_skill_names or []),
             connected_skill_descriptors=list(connected_skill_descriptors or []),
             allowed_credentials=set(allowed_credentials or []),
@@ -234,9 +301,11 @@ class AICliService:
                     defaults=defaults,
                     mcp_port=port,
                     batch_token=token,
-                    connected_tool_names=[t.get("node_type") for t in (connected_tools or []) if t.get("node_type")],
+                    connected_tool_names=connected_tool_names,
                     connected_skill_names=list(connected_skill_names or []),
-                    memory_bound=bool(connected_memory),
+                    memory_bound=bool(connected_memory) or (
+                        context_bridge is not None and provider_name == "claude"
+                    ),
                 )
                 async with self._lock:
                     self._active_sessions[key].append(session)
@@ -271,14 +340,22 @@ class AICliService:
         # owns the PTY lifetime; the bearer token stays embedded in the
         # spawned claude's argv across batches (CLI handles its own MCP
         # auth — we don't issue/unregister per turn).
-        use_pool = bool(connected_memory) and provider_name == "claude" and len(task_list) == 1
+        use_pool = (
+            provider_name == "claude"
+            and len(task_list) == 1
+            and (bool(connected_memory) or context_bridge is not None)
+        )
         results: List[SessionResult]
         try:
             if use_pool:
                 results = [
                     await self._run_pooled_turn(
                         task=task_list[0],
-                        memory_node_id=connected_memory["node_id"],
+                        session_key=(
+                            context_bridge.pool_key
+                            if context_bridge is not None
+                            else connected_memory["node_id"]
+                        ),
                         cwd=resolved_repo_root,
                         workspace_dir=Path(workspace_dir).resolve(),
                         defaults=defaults,
@@ -299,7 +376,7 @@ class AICliService:
                 self._active_sessions.pop(key, None)
             from services.skill_runtime import clear_skill_turn
 
-            await clear_skill_turn(workflow_id, str(ctx.execution_id or ""), node_id)
+            await clear_skill_turn(workflow_id, str(turn_execution_id), node_id)
             # When ``use_pool`` is True, the bearer token for THIS batch
             # is consumed by ``ClaudeSessionPool.acquire`` directly:
             #   - Cold spawn: pool stores ``token`` on
@@ -341,6 +418,27 @@ class AICliService:
                     "[CC-Agent run_batch] memory persistence failed: %s",
                     exc,
                 )
+
+        if context_bridge is not None:
+            # Persist each completed exchange into the plain conversation
+            # store. Best-effort: the provider already ran and billed, so a
+            # save failure must not fail the batch.
+            for original_prompt, item in zip(
+                context_original_prompts, results
+            ):
+                if not (item.success and item.response):
+                    continue
+                try:
+                    await context_bridge.record_turn(
+                        original_prompt,
+                        item.response,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[CC-Agent run_batch] conversation save failed; "
+                        "continuing: %s",
+                        exc,
+                    )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         n_succeeded = sum(1 for r in results if r.success)
@@ -387,6 +485,58 @@ class AICliService:
         )
         return result
 
+    @staticmethod
+    async def _canonical_tool_surface(
+        connected_tools: List[Dict[str, Any]],
+        *,
+        ai_service: Any = None,
+    ) -> List[Dict[str, Any]]:
+        """Build the CLI/MCP surface through the normal agent tool pipeline."""
+
+        if not connected_tools:
+            return []
+        from services.plugin.deps import get_ai_service
+        from services.tool_identity import ensure_unique_tool_names
+
+        ai_service = ai_service or get_ai_service()
+        surface: List[Dict[str, Any]] = []
+        identities: List[Dict[str, str]] = []
+        for tool_info in connected_tools:
+            tool, execution = await ai_service._build_tool_from_node(tool_info)
+            if tool is None or execution is None:
+                # Skip-and-log, matching the pre-existing contract. Raising
+                # here fails the whole batch over one unbuildable node — and
+                # this path serves every CLI agent, not only Context-bound
+                # ones, so a single bad tool took down runs that never used
+                # it. A surface that ends up entirely empty is caught below.
+                logger.warning(
+                    "[cli_agent] skipping unbuildable connected tool %r",
+                    tool_info.get("node_type"),
+                )
+                continue
+            entry = {
+                **tool_info,
+                "_agent_tool_name": tool.name,
+                "_agent_tool_description": tool.description,
+                "_agent_tool_schema": tool.parameters,
+                "_agent_tool_input_model": tool.args_schema,
+                "_agent_tool_execution": execution,
+            }
+            surface.append(entry)
+            identities.append(
+                {
+                    "name": tool.name,
+                    "node_id": str(tool_info.get("node_id") or ""),
+                    "label": str(
+                        tool_info.get("label")
+                        or tool_info.get("node_type")
+                        or "tool"
+                    ),
+                }
+            )
+        ensure_unique_tool_names(identities)
+        return surface
+
     async def cancel_workflow(self, workflow_id: str) -> int:
         """Cancel every active session for a workflow. Returns count cancelled."""
         cancelled = 0
@@ -427,7 +577,7 @@ class AICliService:
         self,
         *,
         task: BaseAICliTaskSpec,
-        memory_node_id: str,
+        session_key: Any,
         cwd: Path,
         workspace_dir: Path,
         defaults: Dict[str, Any],
@@ -436,6 +586,7 @@ class AICliService:
         connected_tools: List[Dict[str, Any]],
         connected_skill_names: List[str],
         workflow_id: str,
+        context_event_sink: Any = None,
     ) -> SessionResult:
         """Route one memory-bound claude turn through ``ClaudeSessionPool``.
 
@@ -466,7 +617,13 @@ class AICliService:
         await pool.start_reaper()
 
         mcp_endpoint_url = f"http://127.0.0.1:{mcp_port}/mcp/ide/mcp"
-        tool_names = [t.get("node_type") for t in (connected_tools or []) if t.get("node_type")]
+        from services.cli_agent.workflow_tools import _connected_tool_name
+
+        tool_names = [
+            name
+            for tool in (connected_tools or [])
+            if (name := _connected_tool_name(tool))
+        ]
 
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         # Project-local claude auth dir — same as ``AICliSession.env``.
@@ -474,13 +631,13 @@ class AICliService:
 
         env["CLAUDE_CONFIG_DIR"] = str(OPENCOMPANY_CLAUDE_DIR)
         # Composio-style parent-run-ID for MCP correlation.
-        parent_run_id = f"{workflow_id}:{memory_node_id}:{mcp_bearer_token[:8]}"
+        parent_run_id = f"{workflow_id}:{session_key}:{mcp_bearer_token[:8]}"
         env["OPENCOMPANY_PARENT_RUN_ID"] = parent_run_id
         env["MACHINA_PARENT_RUN_ID"] = parent_run_id  # legacy child-process contract
 
         try:
             pooled = await pool.acquire(
-                memory_node_id,
+                session_key,
                 spec=task,
                 cwd=cwd,
                 env=env,
@@ -491,6 +648,7 @@ class AICliService:
                 connected_skill_names=connected_skill_names,
                 workspace_dir=workspace_dir,
                 workflow_id=workflow_id,
+                context_event_sink=context_event_sink,
             )
         except BaseException:
             # A cold spawn can fail before the pool adopts the token. The

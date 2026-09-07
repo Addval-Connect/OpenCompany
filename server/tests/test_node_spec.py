@@ -795,6 +795,9 @@ class TestUIHintsInNodeSpec:
         spec = get_node_spec("masterSkill")
         assert spec is not None
         assert spec["displayName"] == "Master Skill"
+        assert {
+            handle.get("name") for handle in spec.get("handles", [])
+        } == {"output-tool"}
         hints = spec.get("uiHints", {})
         assert hints.get("isMasterSkillEditor") is True
         assert hints.get("hideRunButton") is True
@@ -922,7 +925,12 @@ class TestNodeSpecContractInvariants:
             "hasCodeEditor",
             "isMasterSkillEditor",
             "isMemoryPanel",
+            "isMemoryToolPanel",
+            "isContextPanel",
+            "isDataPanel",
             "isToolPanel",
+            "requiresContext",
+            "systemManaged",
             # writeTodos: render the editable Current Todos manager in the
             # middle section (in addition to isToolPanel).
             "isTodoEditor",
@@ -931,6 +939,9 @@ class TestNodeSpecContractInvariants:
             "isProcessManagerPanel",
             # gallery: workspace file browser with drag-to-parameter.
             "isGalleryPanel",
+            # canvas: pushed-content display board (parameter panel host;
+            # the docked canvas sidebar reads the same flag to find nodes).
+            "isCanvasPanel",
             # Auto-derived on every node from BaseNode.start_to_close_timeout:
             # how long it may legitimately run. Lets the client size its
             # request budget instead of keeping its own list of slow types.
@@ -1028,9 +1039,9 @@ class TestPluginContractInvariants:
                 assert h.get("kind") in {"input", "output"}, f"{t}.{h.get('name')}: kind={h.get('kind')!r} not input/output"
                 assert h.get("position") in self.VALID_POSITIONS, f"{t}.{h.get('name')}: position={h.get('position')!r} invalid"
 
-    def test_agent_kind_has_skill_tool_memory_handles(self):
+    def test_agent_kind_has_skill_tool_context_handles(self):
         # Contract: anything registered as an agent must accept skill,
-        # tools, memory, and task inputs (the core n8n AIAgent handle
+        # tools, Context, and task inputs (the core AIAgent handle
         # set). Keeps the AIAgentNode renderer honest.
         for t in self._plugin_types():
             spec = get_node_spec(t)
@@ -1042,7 +1053,7 @@ class TestPluginContractInvariants:
             if "social" in (spec.get("group") or []):
                 continue
             names = {h.get("name") for h in spec.get("handles") or []}
-            for required in ("input-skill", "input-tools", "input-memory", "input-task"):
+            for required in ("input-skill", "input-tools", "input-context", "input-task"):
                 assert required in names, f"{t}: componentKind=agent missing handle {required!r}; got {sorted(names)}"
 
     def test_trigger_kind_emits_output(self):
@@ -1152,6 +1163,55 @@ class TestWave10GContractInvariants:
             code_field = (schema.get("properties") or {}).get("code")
             assert code_field, f"{t}: `code` field missing from input schema"
             assert code_field.get("editor") == "code", f"{t}.code: expected `editor: 'code'`, got {code_field.get('editor')!r}"
+
+    def test_plugin_meta_icon_refs_are_wellformed(self):
+        """A plugin may point at a library glyph from its own ``meta.json``
+        instead of vendoring an SVG. Two ways that goes silently wrong:
+
+        * A key in ``icons`` that is not a real node type never matches, so
+          the node keeps whatever fallback it had and the author sees no
+          error.
+        * A library prefix the frontend does not register resolves to null,
+          rendering nothing.
+
+        Whether a *name* exists inside the library is checked on the
+        frontend, in ``client/src/assets/icons/index.test.ts`` -- Python
+        cannot see lucide's exports.
+        """
+        import json
+        from pathlib import Path
+
+        from models.node_metadata import NODE_METADATA
+
+        # Kept in step with ICON_LIBRARIES in client/src/assets/icons/index.ts.
+        known_libraries = {"lucide", "lobehub", "asset"}
+        nodes_dir = Path(__file__).resolve().parents[1] / "nodes"
+
+        problems: list[str] = []
+        for meta_path in nodes_dir.rglob("meta.json"):
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                problems.append(f"{meta_path}: unreadable ({exc})")
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            refs = list((data.get("icons") or {}).items())
+            for node_type, _ref in refs:
+                if node_type not in NODE_METADATA:
+                    problems.append(
+                        f"{meta_path}: icons key {node_type!r} is not a registered node type"
+                    )
+
+            for ref in [data.get("icon"), *[r for _, r in refs]]:
+                if not ref or ":" not in str(ref):
+                    continue  # emoji or absent — nothing to validate
+                library = str(ref).split(":", 1)[0]
+                if library not in known_libraries:
+                    problems.append(f"{meta_path}: unknown icon library {library!r} in {ref!r}")
+
+        assert not problems, "malformed plugin meta.json icon refs:\n  " + "\n  ".join(problems)
 
     def test_every_asset_icon_has_matching_svg(self):
         """Wave 10.B: every ``asset:<key>`` string emitted by a plugin

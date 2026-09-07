@@ -2,10 +2,10 @@
 
 ## Overview
 
-The pricing service provides centralized cost tracking for both LLM tokens and external API services (Twitter/X, Google Maps). It supports:
+The pricing service provides centralized cost tracking for both LLM tokens and external API services (Twitter/X, Google Maps, TikHub). It supports:
 
 - **LLM Token Costs**: Per-model pricing with input/output/cache/reasoning token breakdown
-- **API Service Costs**: Per-request/resource pricing for third-party APIs (Twitter/X, Google Maps, Search APIs)
+- **API Service Costs**: Per-request/resource pricing for third-party APIs (Twitter/X, Google Maps, TikHub, Search APIs)
 - **Automatic Tracking**: HTTPX event hooks for transparent API call tracking
 - **Manual Tracking**: Helper functions for services that don't use HTTPX
 
@@ -286,6 +286,10 @@ async def track_google_usage(node_id, service, action, resource_count, context):
     # ... save to database ...
 ```
 
+### Example: TikHub Plugin (flat per-request)
+
+TikHub bills roughly $0.001 per successful request and does not charge non-2xx responses, so `server/nodes/scraper/tikhub_action/_sdk.py::track_tikhub_usage(ctx, action, endpoint_path)` records one `resource_count=1` metric only after a 2xx and never for the local `list_endpoints` operation. It takes the `NodeContext` (not the raw dict), reads `session_id` / `workflow_id` from it, wraps everything in `try/except` + `logger.warning` so a metrics failure never fails a call that already cost money, and returns the USD figure for the node's `cost_usd` output key. `pricing.json` carries `api.tikhub` (`request` 0.001, `meta` 0.0) and `operation_map.tikhub` (`call` / `fetch_url` -> `request`, `account` -> `meta`); the credential entry sets `"usage_service": "tikhub"` so the spend shows in the Credentials modal usage table. See [tikhub_service.md](./tikhub_service.md).
+
 ### Example: Search Plugins (declarative cost)
 
 The search plugins (`server/nodes/search/{brave_search,serper_search,perplexity_search}`) no longer call a `_track_search_usage()` helper. Each declares its cost inline on the `@Operation` decorator instead:
@@ -411,19 +415,24 @@ summary = await db.get_api_usage_summary(service='twitter')
 
 ## Frontend Display
 
-The CredentialsModal displays usage statistics via `renderApiUsagePanel()`:
+The credentials modal displays usage statistics through two section components, both wired via
+`credentials/useCredentialPanel.ts`:
 
 ```typescript
-// client/src/components/CredentialsModal.tsx
+// client/src/components/credentials/sections/ApiUsageSection.tsx   -> per-service API cost
+// client/src/components/credentials/sections/LlmUsageSection.tsx   -> per-provider token cost
 
-// Fetch usage data
-const { getApiUsage, apiUsage, apiUsageLoading } = usePricing();
-await getApiUsage('twitter');
-
-// Render panel
-{renderApiUsagePanel('twitter', 'Twitter')}
-{renderApiUsagePanel('google_maps', 'Google Maps')}
+const { getAPIUsageSummary, getProviderUsageSummary } = useApiKeys();
 ```
+
+**Both render precomputed costs, never the pricing config.** `get_api_usage_summary` is a
+`SUM(APIUsageMetric.cost)` GROUP BY, and the `cost` column was calculated at write time by
+`PricingService`. Nothing on the client reads or writes `pricing.json`.
+
+There is no UI for editing pricing. `PricingConfigModal` + `usePricing` existed but were never
+mounted anywhere and were deleted; the `get_pricing_config` / `save_pricing_config` WS handlers
+remain registered with no client caller. Editing `pricing.json` means editing the file. (The third
+handler in that module, `get_api_usage_summary`, IS live — `useApiKeys` calls it.)
 
 ### Display Format
 
@@ -499,12 +508,10 @@ Alternatively, for a service billed per operation, skip the helper entirely and 
 }
 ```
 
-### 4. Add Frontend Display
+### 4. Frontend Display
 
-```typescript
-// In CredentialsModal.tsx, in the relevant panel:
-{renderApiUsagePanel('new_service', 'New Service')}
-```
+Nothing to add. `ApiUsageSection` renders whatever services come back from
+`get_api_usage_summary`, so a new service appears as soon as it records its first metric.
 
 ## Key Files
 
@@ -521,5 +528,6 @@ Alternatively, for a service billed per operation, skip the helper entirely and 
 | `server/services/plugin/operation.py` | `@Operation` decorator + `OperationSpec.cost` metadata |
 | `server/models/database.py` | `APIUsageMetric`, `TokenUsageMetric` models |
 | `server/core/database.py` | `save_api_usage_metric()`, `get_api_usage_summary()` |
-| `client/src/components/CredentialsModal.tsx` | `renderApiUsagePanel()` UI component |
-| `client/src/hooks/usePricing.ts` | Frontend hook for pricing/usage data |
+| `client/src/components/credentials/sections/ApiUsageSection.tsx` | Per-service API usage + cost display |
+| `client/src/components/credentials/sections/LlmUsageSection.tsx` | Per-provider token usage + cost display |
+| `client/src/hooks/useApiKeys.ts` | `getAPIUsageSummary` / `getProviderUsageSummary` |

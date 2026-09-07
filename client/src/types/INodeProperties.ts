@@ -34,7 +34,28 @@ export type NodeConnectionType =
   | 'ai'        // AI service responses
   | 'file'      // File data
   | 'binary'    // Binary data specific
-  | 'webhook';  // Webhook data
+  | 'webhook'   // Webhook data
+  | 'context'   // Durable agent context
+  | 'memory'    // Explicit memory tool
+  | 'tool'
+  | 'skill'
+  | 'task'
+  | 'teammates';
+
+/** Lossless mirror of one backend NodeSpec handle.
+ *
+ * `inputs` / `outputs` remain available for legacy consumers, while this
+ * field preserves the React Flow handle id, placement, label, offset and
+ * semantic role declared by the backend.
+ */
+export interface INodeHandleDescription {
+  name: string;
+  kind: 'input' | 'output';
+  position: 'top' | 'bottom' | 'left' | 'right';
+  offset?: string;
+  label?: string;
+  role?: string;
+}
 
 // Enhanced output definition with data structure info
 export interface INodeOutputDefinition {
@@ -187,6 +208,16 @@ export interface INodeOperationDefinition {
  * exactly one panel; defaults to `false` (the panel renders normally).
  */
 export interface INodeUIHints {
+  /** Graph capability: this node must own one system-managed Context node. */
+  requiresContext?: boolean;
+  /** The graph lifecycle owns this node; it is not directly palette-created. */
+  systemManaged?: boolean;
+  /** MiddleSection: render the authorized Context inspector. */
+  isContextPanel?: boolean;
+  /** MiddleSection: render explicit durable Memory item controls. */
+  isMemoryToolPanel?: boolean;
+  /** MiddleSection: render the Data node's mounts + read-only browser. */
+  isDataPanel?: boolean;
   /** ParameterPanel: skip the Input section (e.g. start, skill, monitor). */
   hideInputSection?: boolean;
   /** ParameterPanel: skip the Output section (e.g. start, skill). */
@@ -210,6 +241,9 @@ export interface INodeUIHints {
   isProcessManagerPanel?: boolean;
   /** MiddleSection: render the workspace gallery (drag files to params). */
   isGalleryPanel?: boolean;
+  /** MiddleSection: render the pushed-content Canvas board. The docked
+   * canvas sidebar reads the same flag to find Canvas nodes. */
+  isCanvasPanel?: boolean;
   /** Special-case panel for gmaps_create with map preview. */
   showLocationPanel?: boolean;
   /** ConsolePanel: this node is a chat-message target. */
@@ -261,6 +295,8 @@ export interface INodeTypeDescription {
   };
   inputs: string[] | INodeInputDefinition[];
   outputs: string[] | INodeOutputDefinition[];
+  /** Exact backend-declared handle topology. */
+  handles?: INodeHandleDescription[];
   properties: INodeProperties[];
   credentials?: INodeCredentialDescription[];
   resources?: INodeResourceDefinition[];
@@ -272,7 +308,7 @@ export interface INodeTypeDescription {
   // NOTE: runtime output shape is no longer declared on the frontend. It is
   // served lazy by the backend at GET /api/schemas/nodes/{nodeType}.json and
   // consumed by InputSection via useNodeOutputSchemaQuery. See
-  // docs-internal/schema_source_of_truth_rfc.md.
+  // docs-internal/ARCHIVE/schema_source_of_truth_rfc.md.
 }
 
 // Node type interface that nodes must implement

@@ -13,7 +13,7 @@ Documented root causes and fixes for errors encountered in OpenCompany developme
 **Contributing factors**:
 - Each worktree contains its own `.venv/`, `node_modules/`, and source tree (thousands of files)
 - Windows Search Indexer and Defender monitor directory trees recursively from the project root
-- pnpm hardlinks from `.pnpm-store` into each worktree's `node_modules/` create additional file-system contention
+- The package manager's store layout (pnpm's `.pnpm-store` hardlinks at the time; bun's isolated linker now symlinks each worktree's `node_modules/` through its `node_modules/.bun/` store) creates additional file-system contention
 - Killing the hung Python process does NOT help -- the next attempt restarts the scan queue from scratch
 
 **Fix**: Move or remove worktrees from inside the project root.
@@ -62,7 +62,7 @@ Restart-Service SysMain
 
 **Fix** (if admin is unavailable): **Reboot**. This is what clears the stuck kernel cache reliably.
 
-**Prevention** (`scripts/start.js`): A preflight probe times `import sqlalchemy`. If it exceeds 8 seconds, it fails fast with actionable remediation steps instead of letting uvicorn hang silently.
+**Prevention** (`cli/commands/start.py`, `_sqlalchemy_preflight`): a preflight probe times `import sqlalchemy` in the server venv. If it exceeds 8 seconds, it fails fast with actionable remediation steps instead of letting uvicorn hang silently.
 
 ---
 
@@ -231,7 +231,7 @@ WhatsApp RPC timeout - Go service not responding at ws://localhost:5683/ws/rpc
 
 WhatsApp service health check (`/health`) returns 200 OK, but the WebSocket RPC connection fails.
 
-**Root cause**: The RPCClient WebSocket connect timeout was set to 2.0 seconds (`routers/whatsapp.py`). The Go whatsmeow service's WebSocket handshake can take 2-3 seconds on Windows, especially on cold start or when Defender is scanning the binary. A 2.1s handshake exceeds the 2.0s deadline.
+**Root cause**: The RPCClient WebSocket connect timeout was set to 2.0 seconds (in the WhatsApp RPC client, today `server/nodes/whatsapp/_service.py`). The Go whatsmeow service's WebSocket handshake can take 2-3 seconds on Windows, especially on cold start or when Defender is scanning the binary. A 2.1s handshake exceeds the 2.0s deadline.
 
 **Fix**: Increased the connect timeout from 2.0s to 5.0s in `RPCClient.connect()`:
 
@@ -248,7 +248,7 @@ self.ws = await asyncio.wait_for(
 
 ## 5. `ERR_CONNECTION_REFUSED` on Frontend Auth Check
 
-**Symptom**: After `pnpm run dev`, browser console shows repeated errors:
+**Symptom**: After `bun run dev`, browser console shows repeated errors:
 ```
 GET http://localhost:5678/api/auth/status net::ERR_CONNECTION_REFUSED
 Failed to check auth status (attempt 4/6): TypeError: Failed to fetch
@@ -357,3 +357,30 @@ The "auth successful" line fires even when you only *initiated* the login and ne
 So an incomplete login against a config left over from a previous session was reported as success.
 
 **Fix** (landed at tag v0.0.88): `nodes/stripe/_handlers.py` snapshots `config.toml`'s mtime at step 1 (`pre_mtime`), threads it into `_complete_login(binary, next_step, pre_mtime)`, and requires `post_mtime > pre_mtime AND is_logged_in()` to declare success. The mtime advance is ground truth for "*this* attempt wrote fresh credentials". The `exceeded max attempts` stderr is forgiven only when the mtime actually advanced.
+
+---
+
+## 11. `bun install` Copies Every Package / 2-Minute First Vite Build (Windows)
+
+**Symptom**: After a fresh install, `company build` step `[1/6]` takes ~70 s and step `[2/6]` (Vite) takes ~2 min, while a second Vite build on the same tree takes ~35 s. The same `build.log` shows uv complaining `Failed to hardlink files; falling back to full copy ... different filesystems`. Under pnpm the same cycle was ~15 s + ~16 s.
+
+**Root cause**: installs that *write* files instead of linking them. pnpm keeps its store per drive on the project's drive (`D:\.pnpm-store`) and hardlinks from it, so a fresh install wrote no new bytes and Windows Defender's real-time first-touch scan had nothing new to scan on the next build. bun's cache lives under the user profile on `C:`; with the project on `D:` NTFS cannot hardlink across volumes, and bun 1.4.0 was also observed to copy on Windows even from a same-drive cache unless `--backend=hardlink` is forced. Every install therefore re-writes ~600 MB into `node_modules/.bun/`, and the first build pays the Defender scan on all of it (measured: 626 MB store, one hardlink path per file). uv has the identical cross-drive problem (`%LOCALAPPDATA%\uv\cache` on `C:`).
+
+**Fix**: `company build` passes `--backend=hardlink` on Linux/Windows. That only helps when the cache is on the project's drive, which is a per-machine setting — set user environment variables `BUN_INSTALL_CACHE_DIR` (e.g. `D:\startup\projects\.bun-cache`) and `UV_CACHE_DIR` on the same drive as the checkout. Measured after both: purge → `bun install` 15 s (files show two hardlink paths: cache + store) → first Vite build 41 s. A Defender exclusion for the checkout removes the first-touch tax for whatever still gets written.
+
+---
+
+## 12. processManager Rejects Every `start`: `Working directory must be inside workspace` (Windows)
+
+**Symptom**: A delegated agent's `process_manager` tool call fails on every `start` and the agent loops re-issuing the same call:
+```
+dispatch op NodeUserError: Working directory must be inside workspace (D:\...\.opencompany\workspaces) or daemons (D:\...\.opencompany\daemons). node_id=2:processManager:4
+```
+A downstream `httpRequest` probe of the dev server the agent tried to launch then fails with `httpx.ConnectError: All connection attempts failed` and a double full traceback.
+
+**Root cause**: Canvas node ids are colon-namespaced (`2:processManager:4`; fresh seeds use `<uuid>:processManager:4`). `processManager` defaulted its cwd to `os.path.join(workspace_dir, ctx.node_id)`, and `ntpath.join` parses a leading `2:` as a drive letter — discarding `workspace_dir` entirely. `.resolve()` keeps the drive-relative garbage, so the `ProcessService.start` containment guardrail correctly rejected it. `WindowsPath / node_id` has the same drive-reset behaviour (the `cli_agent` one-shot worktree path). Latent since the April 2026 guardrail; surfaced when `4f35db97` made the Task_Completed re-delegation flow actually run tool work. Reproduce on any OS:
+```
+python -c "import ntpath; print(ntpath.join(r'D:\ws\AI_Employee_1', '2:processManager:4'))"   # -> 2:processManager:4
+```
+
+**Fix** (`21fb1a9a`): `core.paths.safe_path_component` sanitizes a wire identifier before it becomes a path component; `processManager` and `cli_agent/session.py` route the node id through it. The guardrail error now names the rejected resolved path and says to omit `cwd` (the designed happy path — the process-manager skill never passes one), and `httpRequest` maps `ConnectError` / `TimeoutException` to `NodeUserError`. Rule: never join a node id, model-supplied name, or any other wire identifier into a path raw — go through `safe_path_component`. Locked by `tests/nodes/test_process_manager_cwd.py`.

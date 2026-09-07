@@ -21,6 +21,9 @@
   "apifyActor": {
     "skill": "apify-skill"
   },
+  "tikhubAction": {
+    "skill": "tikhub-skill"
+  },
   "appLauncher": {
     "icon": "🚀",
     "skill": "app-launcher-skill"
@@ -99,6 +102,20 @@
   },
   "currentTimeTool": {
     "icon": "🕐"
+  },
+  "data": {
+    "icon": "🗂️",
+    "color": "#50fa7b"
+  },
+  "dataSource": {
+    "icon": "🗂️"
+  },
+  "vision": {
+    "icon": "👁️",
+    "color": "#bd93f9"
+  },
+  "visionAnalyze": {
+    "icon": "👁️"
   },
   "deepseekChatModel": {
     "icon": "lobehub:deepseek"
@@ -184,6 +201,12 @@
   },
   "googleTasks": {
     "skill": "google-tasks-skill"
+  },
+  "msMail": {
+    "skill": "ms-mail-skill"
+  },
+  "msCalendar": {
+    "skill": "ms-calendar-skill"
   },
   "groqChatModel": {
     "icon": "lobehub:groq"

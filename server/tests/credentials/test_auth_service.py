@@ -1,6 +1,6 @@
 """Tests for AuthService (single point of access for credentials).
 
-Locks in invariants 7 and 8 from docs-internal/credentials_panel.md:
+Locks in invariants 7 and 8 from docs-internal/ARCHIVE/credentials_panel.md:
   - store_api_key requires models=[]
   - Memory cache hit path does not query DB on every call
   - clear_cache wipes _api_key_cache, _oauth_cache (one merged cache
@@ -55,6 +55,28 @@ class TestApiKeyOps:
         await auth_service.store_api_key("openai", "sk-other", models=[], session_id="other")
         assert await auth_service.get_api_key("openai", "default") == "sk-default"
         assert await auth_service.get_api_key("openai", "other") == "sk-other"
+
+    async def test_list_key_scopes_enumerates_accounts(self, auth_service):
+        await auth_service.store_api_key("discord", "bot-a", models=[])
+        await auth_service.store_api_key("discord", "bot-b", models=[], session_id="discord:222")
+        await auth_service.store_api_key("openai", "sk-x", models=[])
+
+        assert await auth_service.list_key_scopes("discord") == ["default", "discord:222"]
+
+    async def test_list_key_scopes_reads_through_to_storage(self, auth_service):
+        """Must not answer from the lazily-populated key cache.
+
+        The cache only holds scopes that happen to have been read already, so
+        answering from it would hide accounts that exist but were never
+        fetched this process.
+        """
+        await auth_service.store_api_key("discord", "bot-b", models=[], session_id="discord:222")
+        auth_service._api_key_cache.clear()
+
+        assert await auth_service.list_key_scopes("discord") == ["discord:222"]
+
+    async def test_list_key_scopes_empty_for_unknown_provider(self, auth_service):
+        assert await auth_service.list_key_scopes("discord") == []
 
 
 class TestMemoryCache:

@@ -8,12 +8,26 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Type
+from dataclasses import asdict, dataclass, field
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Type,
+)
 
 from pydantic import BaseModel, ValidationError
 
 from core.logging import get_logger
+from services.llm.media import (
+    hydrate_image_blocks,
+    image_blocks_from_tool_result,
+)
 from services.llm.messages import filter_empty_messages
 from services.llm.protocol import (
     LLMError,
@@ -92,6 +106,7 @@ async def run_native_llm_step(
     max_tokens: int,
     thinking: Optional[ThinkingConfig] = None,
     tools: Optional[Sequence[ToolDef | AgentToolSpec]] = None,
+    context_management: Optional[Dict[str, Any]] = None,
     sdk_max_retries: int = 0,
     explicit_max_retries: int = 2,
     translate_errors: bool = True,
@@ -107,18 +122,24 @@ async def run_native_llm_step(
         raise RuntimeError("ChatUnifier is required for native agent execution")
 
     definitions = [_tool_definition(tool) for tool in (tools or ())]
+    # Hydrate once, outside the retry loop, on throwaway copies — refs stay
+    # the durable form; bytes exist only for this provider call.
+    prepared = await hydrate_image_blocks(
+        filter_empty_messages(messages), provider=provider, model=model
+    )
     attempts = max(0, int(explicit_max_retries)) + 1
     for attempt in range(attempts):
         try:
             return await chat_unifier.chat(
                 provider=provider,
                 api_key=api_key,
-                messages=filter_empty_messages(messages),
+                messages=prepared,
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 thinking=thinking,
                 tools=definitions or None,
+                context_management=context_management,
                 sdk_max_retries=max(0, int(sdk_max_retries)),
                 # Preserve structured metadata until this agent-step boundary.
                 translate_errors=False,
@@ -153,7 +174,14 @@ def _validated_tool_args(
 
     try:
         value = spec.args_schema.model_validate(call.args or {})
-        return value.model_dump(mode="json"), None
+        # Only fields the model actually supplied participate in
+        # ToolNode.execute_as_tool's ``{**node_params, **tool_args}`` merge.
+        # Materializing Pydantic defaults would let schema metadata
+        # silently override operator node configuration: a node the user
+        # set to method=POST would be reset to the schema's GET default
+        # merely because the model omitted the field. Defaults are schema
+        # metadata, not model-authored arguments.
+        return value.model_dump(mode="json", exclude_unset=True), None
     except ValidationError as exc:
         return None, str(exc)
 
@@ -175,6 +203,16 @@ async def run_native_agent_loop(
     rebind_from_operations: Optional[
         Callable[[List[Dict[str, Any]]], Awaitable[List[AgentToolSpec]]]
     ] = None,
+    context_management: Optional[Dict[str, Any]] = None,
+    compaction_pause_callback: Optional[
+        Callable[
+            [int, LLMResponse, List[Message]],
+            Awaitable[Optional[List[Message]]],
+        ]
+    ] = None,
+    conversation_saver: Optional[
+        Callable[[List[Message]], Awaitable[None]]
+    ] = None,
 ) -> Dict[str, Any]:
     """Run the shared buffered native tool-agent loop.
 
@@ -189,6 +227,17 @@ async def run_native_agent_loop(
     thinking_parts: List[str] = []
     last_response: Optional[LLMResponse] = None
     iteration = 0
+    async def save_now() -> None:
+        """Persist the full current transcript; never fails the loop."""
+        if conversation_saver is None:
+            return
+        try:
+            await conversation_saver(list(messages))
+        except Exception:  # noqa: BLE001 — persistence must not fail a turn
+            logger.warning(
+                "[Agent loop] conversation save failed; continuing",
+                exc_info=True,
+            )
 
     for iteration in range(1, max_iterations + 1):
         if progress_callback is not None:
@@ -197,19 +246,26 @@ async def run_native_agent_loop(
             except Exception as exc:  # progress is observational
                 logger.debug("[Agent loop] progress callback failed: %s", exc)
 
-        response = await run_native_llm_step(
-            chat_unifier,
-            provider=provider,
-            api_key=api_key,
-            messages=messages,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            thinking=thinking,
-            tools=current_tools,
-        )
+        definitions = [_tool_definition(tool) for tool in current_tools]
+        try:
+            response = await run_native_llm_step(
+                chat_unifier,
+                provider=provider,
+                api_key=api_key,
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                thinking=thinking,
+                tools=current_tools,
+                context_management=context_management,
+            )
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise
         last_response = response
-        usage = add_usage(usage, response.usage)
+        usage = add_usage(usage, response.billing_usage or response.usage)
 
         assistant = response.assistant_message
         if assistant is None:
@@ -219,6 +275,9 @@ async def run_native_agent_loop(
                 tool_calls=list(response.tool_calls),
             )
         messages.append(assistant)
+        # This save is intentionally before any requested tool executes,
+        # so a crash mid-tools never loses the assistant's turn.
+        await save_now()
 
         if response.thinking:
             thinking_parts.append(
@@ -233,6 +292,22 @@ async def run_native_agent_loop(
             logger.warning("[Agent loop] provider response blocked by safety filters")
 
         calls = list(response.tool_calls or assistant.tool_calls or ())
+        if (
+            str(response.finish_reason).strip().lower() == "compaction"
+            and not calls
+        ):
+            # Anthropic's durability pause returns only a compaction block.
+            # It has already been saved above; continue from that exact
+            # block instead of exposing it as the user's final response.
+            if compaction_pause_callback is not None:
+                replacement = await compaction_pause_callback(
+                    iteration,
+                    response,
+                    list(messages),
+                )
+                if replacement is not None:
+                    messages = list(replacement)
+            continue
         if not calls:
             return {
                 "messages": messages,
@@ -259,7 +334,7 @@ async def run_native_agent_loop(
 
         specs = _tool_specs_by_name(current_tools)
         iteration_new_tools: List[AgentToolSpec] = []
-        for call in calls:
+        for call_index, call in enumerate(calls, start=1):
             if call.name not in specs:
                 result: Any = {
                     "error": "Unknown tool",
@@ -278,6 +353,16 @@ async def run_native_agent_loop(
                         result["raw_arguments"] = call.raw_arguments
                 else:
                     try:
+                        # AgentToolSpec.execution is the trusted server-side
+                        # config consumed by execute_tool. Attach the provider
+                        # call identity there, never to model-controlled args,
+                        # so stateful tools can make mutations idempotent.
+                        spec = specs[call.name]
+                        spec.execution["tool_call_id"] = call.id
+                        spec.execution["operation_id"] = (
+                            f"{provider}:iteration:{iteration}:"
+                            f"tool:{call_index}:{call.id or call.name}"
+                        )
                         result = await tool_executor(call.name, args or {})
                     except Exception as exc:
                         # Tool failures are fed back to the model.
@@ -308,14 +393,19 @@ async def run_native_agent_loop(
                         "[Agent loop] tool rebind failed: %s", exc, exc_info=True
                     )
 
-            messages.append(
-                Message(
-                    role="tool",
-                    content=json.dumps(result, default=str),
-                    tool_call_id=call.id,
-                    name=call.name,
-                )
+            tool_message = Message(
+                role="tool",
+                content=json.dumps(result, default=str),
+                tool_call_id=call.id,
+                name=call.name,
             )
+            # Tools opt into vision via `llm_media` refs; blocks stay ~450 B
+            # in durable state (hydration happens per provider call).
+            tool_message.blocks.extend(image_blocks_from_tool_result(result))
+            messages.append(tool_message)
+
+        # One save per turn covers every tool result appended above.
+        await save_now()
 
         if iteration_new_tools:
             current_tools.extend(iteration_new_tools)
@@ -333,6 +423,7 @@ async def run_native_agent_loop(
         ),
     )
     messages.append(terminal)
+    await save_now()
     return {
         "messages": messages,
         "iteration": iteration,

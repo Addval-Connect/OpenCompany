@@ -7,7 +7,6 @@ dependencies = [
     # Core
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
 
     # Database
@@ -45,6 +44,13 @@ dependencies = [
     # project's MIT licence) and over pydub / ffprobe, which both require
     # an ffmpeg binary on PATH that nothing installs on Windows.
     "tinytag>=2.0.0",
+    # Data node read tiers (nodes/tool/data_source/_readers.py). First-class
+    # rather than an optional extra so the LLM-facing tool behaves the same
+    # on every install: openpyxl for XLSX (pure Python), Pillow for image
+    # metadata (was already shipping transitively via qrcode[pil]) — and for
+    # services/media/image_fit.py budget resizing.
+    "openpyxl>=3.1.0",
+    "pillow>=10.0.0",
     # Multipart parsing for the workspace upload route. Already present
     # transitively via mcp; declared explicitly so it survives that
     # dependency changing.
@@ -58,11 +64,14 @@ dependencies = [
     "email-validator>=2.0.0",
 
     # Credential Encryption
-    "cryptography>=44.0.0",
+    # Floor is a security floor: <50.0.0 carries GHSA-g6cj-pr64-35w5
+    # (CVE-2026-69247), a Bleichenbacher oracle in PKCS#7 EnvelopedData
+    # decryption. Do not lower without checking that advisory.
+    "cryptography>=50.0.0",
 
     # Native LLM SDKs. OpenAI also drives the eight OpenAI-compatible
     # providers through configured base URLs.
-    "openai==2.45.0",
+    "openai==2.53.0",
     "anthropic==0.96.0",
     "google-genai==2.11.0",
 
@@ -76,7 +85,6 @@ dependencies = [
     # Utils
     "python-dotenv>=1.0.0",
     "qrcode[pil]>=8.0",
-    "pytz>=2024.1",
     # IANA timezone database for stdlib zoneinfo on Windows (no system
     # tz db there). Was a hidden transitive dep of apscheduler until
     # Wave 15.2 retired it; currentTimeTool's ZoneInfo(...) needs it.
@@ -92,12 +100,23 @@ dependencies = [
     # Apify Web Scraping
     "apify-client>=1.8.0",
 
+    # TikHub social scraping SDK. Auto-generated from TikHub's openapi.json;
+    # capped below 3 because the resource/method surface regenerates per
+    # release. Pulls typer for its own `tikhub` CLI (not imported by us).
+    "tikhub>=2.1.2,<3",
+
     # Crawlee Web Scraping
     "crawlee[beautifulsoup]>=1.4.0",
     "html2text>=2024.2.26",
 
     # Telegram Bot API
     "python-telegram-bot>=22.6",
+
+    # Discord Gateway. Capped below 3 because the major version tracks the
+    # gateway/API version the client speaks, which is a wire contract rather
+    # than a library detail. Installed without the [voice] extra: voice is out
+    # of scope and the extra pulls PyNaCl plus a native build.
+    "discord.py>=2.7.1,<3",
 
     # Markdown formatting (GFM to platform-native)
     "markdown-it-py>=3.0.0",
@@ -122,7 +141,6 @@ dependencies = [
     "google-api-python-client>=2.100.0",
     "google-auth>=2.27.0",
     "google-auth-oauthlib>=1.2.0",
-    "google-auth-httplib2>=0.2.0",
 
     # Temporal (durable workflow execution). Floor 1.25: Wave 18 uses
     # PollerBehaviorAutoscaling + max_activities_per_second +
@@ -191,11 +209,11 @@ aws = [
 # PEP 735 dependency groups — included by ``uv sync`` (and ``uv sync
 # --group dev``) by default, but NOT shipped to PyPI consumers. Pre-fix
 # the dev tools lived in ``[project.optional-dependencies].dev`` which
-# meant every ``pnpm install`` (= ``uv sync`` without ``--extra dev``)
+# meant every ``bun install`` (= ``uv sync`` without ``--extra dev``)
 # uninstalled them — broke contributor test workflows on every install
 # / dependency bump. Moving them here keeps ``pip install
 # opencompany-server`` lean for end-users while making contributor
-# checkouts test-ready straight out of ``pnpm install``.
+# checkouts test-ready straight out of ``bun install``.
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
