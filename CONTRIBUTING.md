@@ -75,6 +75,7 @@ The diagram above shows the full lifecycle of a workflow node: one self-containe
 - Guide: [native_llm_sdk.md](docs-internal/native_llm_sdk.md) → "Adding a New Provider"
 - OpenAI-compatible (DeepSeek, Kimi, Mistral pattern): add the provider configuration to `server/config/llm_defaults.json` and its name to `services/llm/providers/_compat.py::_COMPAT_PROVIDERS`
 - Custom-SDK provider: new file in `server/services/llm/providers/` that calls `register_provider(ProviderSpec(...))` at module bottom (lazy factory + `sdk_exception_refs`; the legacy `factory.py` was removed — `register_provider` is the only entry point)
+- Same SDK, different transport (AWS Bedrock pattern): subclass the existing provider, override `provider_name` + the client, register your own spec — `providers/bedrock.py` is ~200 lines because message translation stays inherited. Remember the factory is **synchronous**, so every credential must arrive through the one `api_key` string, an env var, or config JSON
 - Chat-model node plugin: `server/nodes/model/<provider>_chat_model/__init__.py`; for agent-dropdown exposure also extend the `provider` Literal in `nodes/agent/{ai_agent,chat_agent,_specialized}` and `detect_ai_provider` in `server/constants.py`
 
 **Add a dual-purpose tool (workflow node + AI tool)**

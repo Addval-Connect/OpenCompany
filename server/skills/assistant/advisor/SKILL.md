@@ -1,7 +1,7 @@
 ---
 name: advisor
-description: ALWAYS call the wired chat-model tool (anthropic_chat_model / openai_chat_model / gemini_chat_model) at the START of any complex task to get a plan from a stronger model. Also call when stuck and before declaring done. Pass only the `prompt` field — the operator configured `model` and `api_key`. Returns brief tactical advice; you do the work.
-allowed-tools: anthropic_chat_model openai_chat_model gemini_chat_model
+description: ALWAYS call the wired chat-model tool (anthropic_chat_model / bedrock_chat_model / openai_chat_model / gemini_chat_model) at the START of any complex task to get a plan from a stronger model. Also call when stuck and before declaring done. Pass only the `prompt` field — the operator configured `model` and `api_key`. Returns brief tactical advice; you do the work.
+allowed-tools: anthropic_chat_model bedrock_chat_model openai_chat_model gemini_chat_model
 metadata:
   author: opencompany
   version: "1.0"
@@ -34,6 +34,6 @@ On short reactive tasks dictated by tool output you just read, skip subsequent c
 
 ## Operator note (configuring the advisor node)
 
-- **Model**: pick the provider's strongest current model. As of May 2026: `claude-opus-4-7`, `gpt-5.5-pro-2026-04-23`, `gemini-3.1-pro-preview`.
+- **Model**: pick the provider's strongest current model. As of May 2026: `claude-opus-4-7`, `gpt-5.5-pro-2026-04-23`, `gemini-3.1-pro-preview`. On Bedrock the id is a region-scoped inference profile, not a bare model name — `us.anthropic.claude-opus-5`, not `claude-opus-5`.
 - **System prompt** (optional): "You are an advisor. Brief tactical guidance only — identify pitfalls, suggest changes, validate the plan. Do NOT write full solutions."
 - **Cost**: advisor models are 3-10× the executor's per-token cost. Use sparingly.

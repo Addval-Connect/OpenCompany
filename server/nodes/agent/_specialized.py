@@ -38,6 +38,7 @@ class SpecializedAgentParams(BaseModel):
     provider: Literal[
         "openai",
         "anthropic",
+        "bedrock",  # see ai_agent.Params
         "gemini",
         "openrouter",
         "xai",

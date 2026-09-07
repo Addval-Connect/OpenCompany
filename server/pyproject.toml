@@ -182,6 +182,15 @@ dependencies = [
     # the pooch/npm lazy-binary pattern (that's for non-PyPI binaries).
     # Pinned because pre-1.0 (alpha; API still moving fast).
     "pydantic-monty==0.0.18",
+
+    # SigV4 request signing for the AWS Bedrock LLM provider
+    # (``anthropic.AsyncAnthropicBedrock`` imports boto3 lazily and only on
+    # the credential-chain path; a Bedrock API key needs no signing at all).
+    # A main dependency rather than the ``aws`` extra below: ``uv sync``
+    # prunes anything not in the resolved set, so the postinstall sync that
+    # every ``bun install`` runs would silently uninstall it again and turn a
+    # working Bedrock deployment into a NodeUserError on the next install.
+    "boto3>=1.34.0",
 ]
 
 [project.optional-dependencies]
@@ -202,7 +211,10 @@ keyring = [
     "keyring>=25.0.0",  # OS-native credential storage (Windows/macOS/Linux)
 ]
 aws = [
-    "boto3>=1.34.0",  # AWS Secrets Manager
+    # Kept as a named extra for the AWS Secrets Manager credential backend,
+    # but boto3 is now a main dependency (see the Bedrock note there), so this
+    # resolves to nothing additional. Do not move boto3 back here.
+    "boto3>=1.34.0",
 ]
 
 [dependency-groups]

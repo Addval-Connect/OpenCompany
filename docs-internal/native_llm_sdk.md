@@ -41,6 +41,9 @@ server/services/llm/
 `-- providers/
     |-- __init__.py
     |-- anthropic.py      AnthropicProvider (anthropic SDK)
+    |-- bedrock.py        BedrockProvider — subclasses AnthropicProvider and replaces only the
+    |                     client (AsyncAnthropicBedrock). Owns the two AWS auth modes and the
+    |                     region precedence; drops server-side context_management.
     |-- openai.py         OpenAIProvider (openai SDK)
     |-- gemini.py         GeminiProvider (google-genai SDK)
     |-- openrouter.py     OpenRouterProvider (extends OpenAIProvider with headers)
@@ -55,11 +58,12 @@ providers share `_compat.py` and its explicit `_COMPAT_PROVIDERS` tuple.
 
 ## Supported Providers
 
-The native layer currently supports **13 providers**, grouped by implementation:
+The native layer currently supports **14 providers**, grouped by implementation:
 
 | Provider | Implementation | SDK | Notes |
 |---|---|---|---|
 | `anthropic` | `providers/anthropic.py` | `anthropic` | Extended thinking: `{"type":"adaptive"}` on the 4.7+ flagships, `budget_tokens` on Sonnet 4.6 / Haiku 4.5 (JSON-driven `_model_policy`) |
+| `bedrock` | `providers/bedrock.py` (subclasses `AnthropicProvider`) | `anthropic` + optional `boto3` | Claude on AWS. Model ids are region-scoped **inference profiles** (`us.anthropic.*` / `global.anthropic.*`); bare foundation ids are rejected at invocation. Two auth modes — see below. `supports_model_listing: false` (the inventory lives on the `bedrock` control plane, not `bedrock-runtime`). |
 | `openai` | `providers/openai.py` | `openai` | Reasoning-only o-series (`o3`, `o4-mini`) and GPT-5.x hybrid `reasoning_effort` |
 | `gemini` | `providers/gemini.py` | `google-genai` | Direct SDK (Windows hang fix) |
 | `openrouter` | `providers/openrouter.py` | `openai` | Sets `HTTP-Referer` + `X-Title` headers |
@@ -77,8 +81,8 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 
 ### Native chat path vs agent dropdown — two different counts
 
-- **Native chat path (`execute_chat` / `fetch_models`) supports 13 providers, all native** — Anthropic and Gemini via their own SDKs; OpenAI and OpenRouter via the openai SDK; and 9 more through the shared OpenAI-compatible client with a per-provider `base_url` (xai, deepseek, kimi, mistral, groq, cerebras, ollama, lmstudio, sarvam — registered in `providers/_compat.py`). `execute_chat` delegates every provider to `ChatUnifier.chat`; there is no per-provider branch. `xai` lives here.
-- **The agent dropdown exposes the same 13 providers** for `aiAgent`,
+- **Native chat path (`execute_chat` / `fetch_models`) supports 14 providers, all native** — Anthropic and Gemini via their own SDKs; Bedrock via the anthropic SDK's `AsyncAnthropicBedrock`; OpenAI and OpenRouter via the openai SDK; and 9 more through the shared OpenAI-compatible client with a per-provider `base_url` (xai, deepseek, kimi, mistral, groq, cerebras, ollama, lmstudio, sarvam — registered in `providers/_compat.py`). `execute_chat` delegates every provider to `ChatUnifier.chat`; there is no per-provider branch. `xai` lives here.
+- **The agent dropdown exposes the same 14 providers** for `aiAgent`,
   `chatAgent` (Zeenie), and all specialized agents, including `xai`.
   `test_plugin_shape.py` asserts exact set equality between the registry and
   the `provider` Literal in all three agent Params classes, so registering a
@@ -99,6 +103,7 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 | **Anthropic** | Claude Opus 4.8/4.7 | 1M | 128K | adaptive | omitted (`sampling_params_removed`) |
 | **Anthropic** | Claude Sonnet 4.6 | 1M | 128K | budget | 0-1 |
 | **Anthropic** | Claude Haiku 4.5 | 200K | 64K | budget | 0-1 |
+| **AWS Bedrock** | The same Claude generations, as inference profiles (`us.anthropic.claude-opus-5`, `global.anthropic.claude-sonnet-5`, `us.anthropic.claude-haiku-4-5-*`) | 1M (Opus/Sonnet 5); 200K (Haiku 4.5) | 128K; 64K (Haiku) | budget | 0-1 |
 | **Google** | Gemini 3.8-flash (default), 3.7/3.6/3.5-flash, 3.5-flash-lite, 3.1-pro-preview/flash-lite, 3-flash-preview, 2.5-pro/flash/flash-lite | 1M | 64K | budget (`thinking_level` on 3.x when set explicitly) | 0-2 |
 | **xAI** | Grok 4.20/4.20-multi-agent, 4.5, 4.3, 3 | 131K-2M | 131K | model/provider dependent | 0-2 |
 | **DeepSeek** | deepseek-v4-flash, deepseek-v4-pro (deepseek-chat/reasoner legacy) | 1M | 64K | thinking modes | 0-2 |
@@ -111,6 +116,79 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 | **LM Studio** | Whatever the user has loaded in the LM Studio UI | per-loaded-model (typed via `LlmInstanceInfo.context_length`) | ctx ÷ 4 (capped 4096) | none (per-model) | 0-2 |
 
 `_resolve_max_tokens()` in `server/services/ai.py` (a thin wrapper over `services/llm/config.py::resolve_max_tokens`) clamps user-requested `max_tokens` to the model's actual limit.
+
+## AWS Bedrock
+
+Claude through AWS instead of through Anthropic. `BedrockProvider`
+([`server/services/llm/providers/bedrock.py`](../server/services/llm/providers/bedrock.py))
+subclasses `AnthropicProvider` and replaces exactly one thing — the client
+(`anthropic.AsyncAnthropicBedrock`). Message translation, tool compilation,
+thinking handling and `_normalize` are inherited, so a new Claude generation
+lands on both providers at once.
+
+**Two authentication modes, one credential slot.** The provider factory is
+**synchronous** and cannot await the auth service, so the only credential
+channel is the single `api_key` string `ChatUnifier` hands it. The stored value
+therefore selects the mode:
+
+| Stored credential | Mode | Needs boto3 |
+|---|---|---|
+| `aws-sigv4` (or empty) | SigV4 with the host's own AWS credential chain — env vars, `~/.aws/credentials`, `AWS_PROFILE`, SSO cache, EC2/ECS instance role | yes |
+| anything else | Bedrock **API key** (the `ABSK…` bearer token from the Bedrock console) | no |
+
+The sentinel exists rather than "empty means SigV4" because `services/ai.py` has
+three `if not api_key` gates that refuse to run an agent whose provider has no
+stored key at all — the same reason the local-LLM credentials store the literal
+`"ollama"`. Passing a bearer token *and* AWS credentials together is a
+`ValueError` inside the SDK, so exactly one of the two ever reaches the client.
+
+**Region precedence** (`resolve_region`), highest first: an explicit
+`aws_region` argument → `AWS_REGION` → `AWS_DEFAULT_REGION` →
+`llm_defaults.json:providers.bedrock.aws_region` → `None` (hand the decision
+back to the SDK). `AWS_DEFAULT_REGION` is in that list on purpose: the Anthropic
+SDK reads only `AWS_REGION`, so a host configured the long-standing boto way
+would otherwise fall through to the SDK's `us-east-1` default and 404 on a model
+enabled elsewhere.
+
+**Model ids are inference profiles, not foundation models.** Every current
+Claude model on Bedrock is `INFERENCE_PROFILE`-only: `us.anthropic.claude-opus-5`
+invokes, bare `anthropic.claude-opus-5` does not. Three consequences worth
+knowing before editing config:
+
+- The `bedrock` block in `llm_defaults.json` sits **before** `anthropic` and
+  matches on `anthropic.` (with the dot), not `claude`.
+  `detect_provider_from_model` returns the first `detection_patterns` substring
+  hit in **file order**, so a later block or a `claude` pattern would classify
+  every profile id as first-party Anthropic.
+- `max_output_tokens` / `context_length` keys carry the full `us.` / `global.`
+  prefix — `ModelRegistryService` prefix-matches with `startswith`, so a bare
+  family name silently falls through to `_default`.
+- `pricing.json` keys are the bare `claude-*` family names, because
+  `PricingService.get_pricing` falls back to substring **containment**, which
+  matches a profile-prefixed id.
+
+**Two things it deliberately does not forward.** Server-side context management
+(the `compact-2026-01-12` beta) is first-party-only and would 400 the whole
+request, so `chat()` logs and drops it — the agent runtime's own client-side
+`CompactionService` is unaffected. A configured proxy is ignored with a warning:
+it would break SigV4 (the signature covers the host) and buys nothing in bearer
+mode.
+
+**Failure translation.** The SDK resolves AWS credentials lazily, per request,
+and reports total failure as a bare `RuntimeError`. `chat()` and
+`fetch_models()` turn the credential-specific one into a `NodeUserError` naming
+both remedies, and re-raise every other `RuntimeError` with its traceback
+intact. A missing `boto3` on the SigV4 path is likewise a `NodeUserError` rather
+than an import crash — though `boto3` is a **main dependency** in
+`server/pyproject.toml`, not the `aws` extra, because `uv sync` prunes anything
+outside the resolved set and the postinstall sync on every `bun install` would
+otherwise uninstall it.
+
+**Also wired** (the cross-cutting edits a chat-model plugin does not get for
+free): the `"bedrock"` branch in `constants.py:detect_ai_provider`, the
+`provider` Literal in all three agent Params classes, `provider_names` in
+`protocol.py`, the thinking→`temperature=1.0` rule in `config.py`, and
+`bedrockChatModel` in `node_allowlist.json`.
 
 ## Local LLM Providers (Ollama, LM Studio)
 
@@ -245,6 +323,15 @@ Then add the same provider name to `_COMPAT_PROVIDERS` in
 `providers/_compat.py`. No new provider class or module import is needed: the
 compat loop reuses `OpenAIProvider` and pins the JSON `base_url` in
 `ProviderSpec.client_kwargs`.
+
+A provider that is **not** OpenAI-compatible needs its own module instead —
+`providers/bedrock.py` is the smallest example, and the pattern to copy when the
+new provider is a different transport in front of an existing SDK: subclass the
+existing provider, override `provider_name` and the client, and register a
+`ProviderSpec` at module bottom. The `sdk_exception_refs` stay lazy
+`"module:Class"` strings (`test_lazy_sdk_imports.py` asserts registration
+imports no SDK), and the module must be imported from `providers/__init__.py` for
+its registration side effect to run.
 
 At client creation, a stored `{provider}_proxy` URL takes precedence over that
 configured compat URL. Plain OpenAI uses the SDK default endpoint unless

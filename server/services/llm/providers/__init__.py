@@ -20,6 +20,7 @@ from __future__ import annotations
 # global registry at the bottom of the file. Order is documentation
 # only; Python's module cache makes duplicate registration impossible.
 from services.llm.providers import anthropic  # noqa: F401
+from services.llm.providers import bedrock  # noqa: F401  (Anthropic models via AWS Bedrock)
 from services.llm.providers import openai  # noqa: F401
 from services.llm.providers import gemini  # noqa: F401
 from services.llm.providers import openrouter  # noqa: F401

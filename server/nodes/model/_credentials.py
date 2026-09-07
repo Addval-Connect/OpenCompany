@@ -1,8 +1,8 @@
 """LLM provider credentials (Wave 11.E.1 — per-domain).
 
 One :class:`ApiKeyCredential` per provider. Used by the chat-model
-plugins in this folder (openai, anthropic, gemini, openrouter, groq,
-cerebras, deepseek, kimi, mistral, ollama, lmstudio) plus the xAI
+plugins in this folder (openai, anthropic, bedrock, gemini, openrouter,
+groq, cerebras, deepseek, kimi, mistral, ollama, lmstudio) plus the xAI
 credential referenced by agent plugins. At execution time the plugin's
 The native SDK client pulls the key directly from
 :mod:`services.auth`; this class is the Credentials-modal + discovery
@@ -83,6 +83,39 @@ class AnthropicCredential(_LLMApiKey):
     # Anthropic uses ``x-api-key`` not Bearer.
     key_name = "x-api-key"
     key_location = "header"
+
+
+class BedrockCredential(_LLMApiKey):
+    """Anthropic models served by AWS Bedrock.
+
+    Two accepted values, because Bedrock has two authentication schemes and
+    the factory that builds the client is synchronous — it gets exactly one
+    string from here (see ``services/llm/providers/bedrock.py``):
+
+    * a **Bedrock API key** (the ``ABSK…`` bearer token from the console), or
+    * the sentinel ``aws-sigv4``, meaning "sign with the host's own AWS
+      credential chain" — env vars, ``~/.aws``, ``AWS_PROFILE``, SSO, or an
+      EC2/ECS instance role. Nothing secret is stored in that case.
+
+    ``resolve`` therefore returns the sentinel when the slot is empty instead
+    of raising, so a deployment whose instance role already grants
+    ``bedrock:InvokeModel`` needs no credential entry at all. Same shape and
+    same reason as :class:`_LocalLLM`.
+    """
+
+    id = "bedrock"
+    display_name = "AWS Bedrock"
+    docs_url = "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html"
+    # Bedrock's bearer form; ignored on the SigV4 path, where botocore signs.
+    key_location = "bearer"
+
+    @classmethod
+    async def resolve(cls, *, user_id: str = "owner") -> Dict[str, Any]:
+        from services.llm.providers.bedrock import SIGV4_SENTINEL
+        from services.plugin.deps import get_auth_service
+
+        api_key = await get_auth_service().get_api_key(cls.id)
+        return {"api_key": api_key or SIGV4_SENTINEL}
 
 
 class GeminiCredential(_LLMApiKey):

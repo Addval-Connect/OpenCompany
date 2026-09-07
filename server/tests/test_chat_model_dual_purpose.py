@@ -1,10 +1,15 @@
 """Locks the chat-model dual-purpose scope per the advisor-strategy plan.
 
-Exactly three chat-model plugins (anthropic / openai / gemini) are wired
+Four chat-model plugins (anthropic / bedrock / openai / gemini) are wired
 as standard dual-purpose tools. The other 8 chat-model plugins (groq /
-cerebras / deepseek / kimi / mistral / openrouter / xai / ollama / lmstudio)
+cerebras / deepseek / kimi / mistral / openrouter / ollama / lmstudio)
 remain single-purpose. Adding usable_as_tool=True to one of the latter
 without explicit plan approval should fail this test.
+
+``bedrockChatModel`` joined the original three because it serves the same
+Claude generations through AWS — an operator whose only Anthropic access is
+Bedrock would otherwise have no advisor at all, and the frontier-model
+premise the skill rests on holds identically either side of that door.
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ def _all_chat_model_classes():
 
 
 _ADVISOR_SUPPORTED = frozenset(
-    {"anthropicChatModel", "openaiChatModel", "geminiChatModel"}
+    {"anthropicChatModel", "bedrockChatModel", "openaiChatModel", "geminiChatModel"}
 )
 
 
@@ -67,6 +72,7 @@ class TestAdvisorToolNames:
 
     EXPECTED = {
         "anthropicChatModel": "anthropic_chat_model",
+        "bedrockChatModel": "bedrock_chat_model",
         "openaiChatModel": "openai_chat_model",
         "geminiChatModel": "gemini_chat_model",
     }
