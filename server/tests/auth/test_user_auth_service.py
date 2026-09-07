@@ -306,3 +306,175 @@ class TestUserCount:
         for i in range(3):
             await _register(svc, email=f"user{i}@example.com")
         assert await svc.get_user_count() == 3
+
+
+class TestProvisionUser:
+    """The operator path used by ``scripts/manage_users.py``.
+
+    Its whole reason to exist is that ``register`` refuses a second account in
+    single-owner mode, so the first test here is the load-bearing one.
+    """
+
+    async def test_adds_account_after_registration_closed(self, user_auth):
+        await _register(user_auth)
+        assert await user_auth.can_register() is False
+
+        user, error = await user_auth.provision_user("staff@example.com", "hunter2hunter2", "Staff")
+        assert error is None
+        assert user.email == "staff@example.com"
+        assert user.is_active is True
+        # Never a second owner, whatever the operator asks for.
+        assert user.is_owner is False
+
+    async def test_provisioned_account_can_log_in(self, user_auth):
+        await _register(user_auth)
+        await user_auth.provision_user("staff@example.com", "hunter2hunter2", "Staff")
+
+        user, error = await user_auth.login("staff@example.com", "hunter2hunter2")
+        assert error is None
+        assert user.email == "staff@example.com"
+
+    async def test_bootstraps_owner_on_empty_table(self, user_auth):
+        user, error = await user_auth.provision_user("owner@example.com", "hunter2hunter2", "Owner")
+        assert error is None
+        assert user.is_owner is True
+
+    async def test_rejects_duplicate_email(self, user_auth):
+        await _register(user_auth)
+        user, error = await user_auth.provision_user("OWNER@example.com", "hunter2hunter2", "Dup")
+        assert user is None
+        assert error == "Email already registered"
+
+    async def test_enforces_the_same_validation_as_register(self, user_auth):
+        await _register(user_auth)
+        for email, password, name, expected in [
+            ("short@example.com", "abc", "Short", "at least 8 characters"),
+            ("noname@example.com", "hunter2hunter2", "   ", "Display name is required"),
+            ("long@example.com", "hunter2hunter2", "x" * 101, "100 characters or fewer"),
+            ("", "hunter2hunter2", "No Email", "Email is required"),
+        ]:
+            user, error = await user_auth.provision_user(email, password, name)
+            assert user is None
+            assert expected in error
+
+    @pytest.mark.parametrize(
+        "email",
+        [
+            "no-at-sign",
+            "someone@example.invalid",  # special-use domain
+            "someone@localhost",
+            "someone@nodot",
+        ],
+    )
+    async def test_rejects_addresses_that_cannot_ever_log_in(self, user_auth, email):
+        """The router's ``EmailStr`` does not protect this path.
+
+        ``LoginRequest.email`` is an ``EmailStr``, so an account whose address
+        fails that check 422s at the edge and can never sign in. Provisioning
+        has no FastAPI model in front of it, so the service must apply the same
+        rule -- otherwise the CLI happily creates dead accounts.
+        """
+        await _register(user_auth)
+        user, error = await user_auth.provision_user(email, "hunter2hunter2", "Nope")
+        assert user is None
+        assert error == "Email is not a valid address"
+
+
+class TestPasswordReset:
+    async def test_replaces_the_hash(self, user_auth):
+        await _register(user_auth)
+        user, error = await user_auth.set_user_password("owner@example.com", "newpassword123")
+        assert error is None
+        assert user is not None
+
+        assert (await user_auth.login("owner@example.com", "hunter2hunter2"))[0] is None
+        assert (await user_auth.login("owner@example.com", "newpassword123"))[0] is not None
+
+    async def test_rejects_short_password(self, user_auth):
+        await _register(user_auth)
+        user, error = await user_auth.set_user_password("owner@example.com", "abc")
+        assert user is None
+        assert "at least 8 characters" in error
+
+    async def test_unknown_account(self, user_auth):
+        user, error = await user_auth.set_user_password("nobody@example.com", "newpassword123")
+        assert user is None
+        assert error == "No such account"
+
+
+class TestSetUserDisplayName:
+    async def test_renames(self, user_auth):
+        await _register(user_auth)
+        user, error = await user_auth.set_user_display_name("OWNER@example.com", "  New Name  ")
+        assert error is None
+        assert user.display_name == "New Name"
+        assert (await user_auth.get_user_by_email("owner@example.com")).display_name == "New Name"
+
+    async def test_applies_the_same_name_rules_as_creation(self, user_auth):
+        await _register(user_auth)
+        for name, expected in [("   ", "Display name is required"), ("x" * 101, "100 characters or fewer")]:
+            user, error = await user_auth.set_user_display_name("owner@example.com", name)
+            assert user is None
+            assert expected in error
+        # The stored name is untouched by a rejected rename.
+        assert (await user_auth.get_user_by_email("owner@example.com")).display_name == "Owner"
+
+    async def test_unknown_account(self, user_auth):
+        user, error = await user_auth.set_user_display_name("nobody@example.com", "Nobody")
+        assert user is None
+        assert error == "No such account"
+
+
+class TestSetUserActive:
+    async def test_disabling_blocks_login(self, user_auth):
+        await _register(user_auth)
+        await user_auth.provision_user("staff@example.com", "hunter2hunter2", "Staff")
+
+        user, error = await user_auth.set_user_active("staff@example.com", False)
+        assert error is None
+        assert user.is_active is False
+        assert (await user_auth.login("staff@example.com", "hunter2hunter2"))[0] is None
+
+        await user_auth.set_user_active("staff@example.com", True)
+        assert (await user_auth.login("staff@example.com", "hunter2hunter2"))[0] is not None
+
+    async def test_refuses_to_lock_out_the_owner(self, user_auth):
+        await _register(user_auth)
+        user, error = await user_auth.set_user_active("owner@example.com", False)
+        assert user is None
+        assert "owner" in error
+        assert (await user_auth.login("owner@example.com", "hunter2hunter2"))[0] is not None
+
+
+class TestDeleteUser:
+    async def test_removes_the_row(self, user_auth):
+        await _register(user_auth)
+        await user_auth.provision_user("staff@example.com", "hunter2hunter2", "Staff")
+
+        email, error = await user_auth.delete_user("STAFF@example.com")
+        assert error is None
+        assert email == "staff@example.com"
+        assert await user_auth.get_user_by_email("staff@example.com") is None
+        assert await user_auth.get_user_count() == 1
+
+    async def test_refuses_the_owner(self, user_auth):
+        await _register(user_auth)
+        email, error = await user_auth.delete_user("owner@example.com")
+        assert email is None
+        assert "owner" in error
+        assert await user_auth.get_user_count() == 1
+
+    async def test_unknown_account(self, user_auth):
+        email, error = await user_auth.delete_user("nobody@example.com")
+        assert email is None
+        assert error == "No such account"
+
+
+class TestListUsers:
+    async def test_ordered_by_id(self, user_auth):
+        await _register(user_auth)
+        await user_auth.provision_user("b@example.com", "hunter2hunter2", "B")
+        await user_auth.provision_user("a@example.com", "hunter2hunter2", "A")
+
+        emails = [u.email for u in await user_auth.list_users()]
+        assert emails == ["owner@example.com", "b@example.com", "a@example.com"]

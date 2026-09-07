@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 import bcrypt
 import jwt
 from jwt import PyJWTError
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import func, select
 
@@ -32,6 +33,56 @@ _INVALID_CREDENTIALS = "Invalid email or password"
 # computed at import via bcrypt.gensalt(), which would add a full KDF round
 # to every process start (startup timing is instrumented -- see _startup_log).
 _DUMMY_PASSWORD_HASH = b"$2b$12$C6UzMDM.H6dfI/f/IKcEe.6Vc/qGgQEHOQKMxLbLQ3vRhBnGYDbXK"
+
+
+# The same check `LoginRequest.email` applies. An account created with an
+# address this rejects can never sign in: the login route 422s on the body
+# before any credential is looked at. That was reachable through the operator
+# provisioning path, which has no FastAPI model in front of it.
+_EMAIL_ADAPTER = TypeAdapter(EmailStr)
+
+
+def _validate_display_name(display_name: str) -> tuple[str, Optional[str]]:
+    """Normalise a display name. Returns ``(name, None)`` or ``("", error)``.
+
+    Its own function because creation and rename must agree: the column is
+    ``max_length=100`` and SQLite truncates silently rather than raising, so a
+    path that skips the cap stores altered data.
+    """
+    display_name = (display_name or "").strip()
+    if not display_name:
+        return "", "Display name is required"
+    if len(display_name) > 100:
+        return "", "Display name must be 100 characters or fewer"
+    return display_name, None
+
+
+def _validate_account_input(
+    email: str, password: str, display_name: str
+) -> tuple[str, str, Optional[str]]:
+    """Normalise and validate account input shared by every creation path.
+
+    Returns ``(normalized_email, display_name, None)`` or
+    ``(*, *, error_message)``. Factored out so the public ``/register``
+    endpoint and the operator provisioning path cannot drift apart on what
+    counts as a valid account.
+    """
+    if len(password) < 8:
+        return "", "", "Password must be at least 8 characters"
+
+    display_name, name_error = _validate_display_name(display_name)
+    if name_error:
+        return "", "", name_error
+
+    normalized_email = (email or "").lower().strip()
+    if not normalized_email:
+        return "", "", "Email is required"
+    try:
+        _EMAIL_ADAPTER.validate_python(normalized_email)
+    except ValidationError:
+        return "", "", "Email is not a valid address"
+
+    return normalized_email, display_name, None
 
 
 class UserAuthService:
@@ -92,20 +143,9 @@ class UserAuthService:
         instead of an unhandled IntegrityError surfacing as a 500.
         """
         # Validate before touching the DB.
-        if len(password) < 8:
-            return None, "Password must be at least 8 characters"
-
-        display_name = (display_name or "").strip()
-        if not display_name:
-            return None, "Display name is required"
-        # The column is max_length=100 and SQLite truncates silently rather
-        # than raising, so an over-long name would be stored altered.
-        if len(display_name) > 100:
-            return None, "Display name must be 100 characters or fewer"
-
-        normalized_email = (email or "").lower().strip()
-        if not normalized_email:
-            return None, "Email is required"
+        normalized_email, display_name, error = _validate_account_input(email, password, display_name)
+        if error:
+            return None, error
 
         async with self.database.get_session() as session:
             # Inline the lookups rather than calling get_user_by_email /
@@ -145,6 +185,170 @@ class UserAuthService:
         logger.info(f"User registered: {normalized_email} (owner={is_owner})")
 
         return user, None
+
+    async def provision_user(self, email: str, password: str, display_name: str) -> tuple[Optional[User], Optional[str]]:
+        """Create an account on behalf of an operator, bypassing ``can_register``.
+
+        This is the counterpart to ``register`` for ``AUTH_MODE=single``
+        deployments: registration closes after the owner exists, so without
+        this the only way to add a second login is to open the public
+        ``/register`` form to the whole internet by switching to
+        ``AUTH_MODE=multi``. Reached from ``scripts/manage_users.py``, never
+        from an HTTP route -- there is no admin API surface, and adding one
+        would need an authorisation model the app does not have yet
+        (``is_owner`` is informational today; nothing authorises on it).
+
+        Ownership is not grantable here on purpose: the flag is only set when
+        the table is empty, exactly as ``register`` does it, so provisioning
+        can bootstrap an empty deployment but can never mint a second owner.
+
+        Returns ``(user, None)`` or ``(None, error_message)``.
+        """
+        normalized_email, display_name, error = _validate_account_input(email, password, display_name)
+        if error:
+            return None, error
+
+        # Same one-session check-then-insert as ``register``: two concurrent
+        # provisions would otherwise both see an empty table and both claim
+        # ownership.
+        async with self.database.get_session() as session:
+            existing = (
+                await session.execute(select(User).where(User.email == normalized_email))
+            ).scalars().first()
+            if existing:
+                return None, "Email already registered"
+
+            user_count = int(
+                (await session.execute(select(func.count()).select_from(User))).scalar_one()
+            )
+            is_owner = self.settings.auth_mode == "single" and user_count == 0
+
+            user = User.create(
+                email=normalized_email,
+                password=password,
+                display_name=display_name,
+                is_owner=is_owner,
+            )
+            session.add(user)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                logger.info("Provisioning lost a race on email uniqueness: %s", normalized_email)
+                return None, "Email already registered"
+            await session.refresh(user)
+
+        logger.info("User provisioned by operator: %s (owner=%s)", normalized_email, is_owner)
+        return user, None
+
+    async def set_user_password(self, email: str, password: str) -> tuple[Optional[User], Optional[str]]:
+        """Reset an account's password (operator path).
+
+        There is no password-reset email flow, so this is the only recovery
+        route for a locked-out user. Existing sessions are NOT invalidated:
+        JWTs carry no denylist, so a token minted before the reset keeps
+        working until ``JWT_EXPIRE_MINUTES`` elapses. Deactivate the account
+        instead if the goal is to cut access off now.
+        """
+        if len(password) < 8:
+            return None, "Password must be at least 8 characters"
+
+        normalized_email = (email or "").lower().strip()
+        async with self.database.get_session() as session:
+            user = (
+                await session.execute(select(User).where(User.email == normalized_email))
+            ).scalars().first()
+            if user is None:
+                return None, "No such account"
+            user.set_password(password)
+            await session.commit()
+            await session.refresh(user)
+
+        logger.info("Password reset by operator for user id=%s", user.id)
+        return user, None
+
+    async def set_user_display_name(self, email: str, display_name: str) -> tuple[Optional[User], Optional[str]]:
+        """Rename an account (operator path).
+
+        The name is cosmetic -- it is not an identifier anywhere; ``sub`` and
+        the email carry identity. It does ride in the JWT payload, though, so a
+        session opened before the rename keeps showing the old name until its
+        token is reissued at next login.
+        """
+        name, error = _validate_display_name(display_name)
+        if error:
+            return None, error
+
+        normalized_email = (email or "").lower().strip()
+        async with self.database.get_session() as session:
+            user = (
+                await session.execute(select(User).where(User.email == normalized_email))
+            ).scalars().first()
+            if user is None:
+                return None, "No such account"
+            user.display_name = name
+            await session.commit()
+            await session.refresh(user)
+
+        logger.info("Display name changed by operator for user id=%s", user.id)
+        return user, None
+
+    async def set_user_active(self, email: str, active: bool) -> tuple[Optional[User], Optional[str]]:
+        """Enable or disable an account.
+
+        ``is_active=False`` is the only revocation lever this app has: it is
+        checked by both ``login`` and ``get_current_user``, so an already
+        issued token stops working on its next request.
+        """
+        normalized_email = (email or "").lower().strip()
+        async with self.database.get_session() as session:
+            user = (
+                await session.execute(select(User).where(User.email == normalized_email))
+            ).scalars().first()
+            if user is None:
+                return None, "No such account"
+            if user.is_owner and not active:
+                # Locking out the owner leaves nobody able to log in, and
+                # there is no re-enable path through the UI.
+                return None, "Refusing to deactivate the owner account"
+            user.is_active = active
+            await session.commit()
+            await session.refresh(user)
+
+        logger.info("Account %s by operator: user id=%s", "enabled" if active else "disabled", user.id)
+        return user, None
+
+    async def delete_user(self, email: str) -> tuple[Optional[str], Optional[str]]:
+        """Remove an account row outright (operator path).
+
+        Returns ``(deleted_email, None)`` or ``(None, error_message)``.
+
+        Prefer ``set_user_active(False)``: deactivating is reversible and keeps
+        the audit trail. Deletion exists because nothing else can undo a typo'd
+        ``add``. The owner is protected -- ``provision_user`` only grants
+        ownership when the table is empty, so deleting the owner would leave a
+        deployment nobody can administer.
+        """
+        normalized_email = (email or "").lower().strip()
+        async with self.database.get_session() as session:
+            user = (
+                await session.execute(select(User).where(User.email == normalized_email))
+            ).scalars().first()
+            if user is None:
+                return None, "No such account"
+            if user.is_owner:
+                return None, "Refusing to delete the owner account"
+            await session.delete(user)
+            await session.commit()
+
+        logger.info("Account deleted by operator: %s", normalized_email)
+        return normalized_email, None
+
+    async def list_users(self) -> list[User]:
+        """All accounts, oldest first. Operator/reporting use only."""
+        async with self.database.get_session() as session:
+            result = await session.execute(select(User).order_by(User.id))
+            return list(result.scalars().all())
 
     async def login(self, email: str, password: str) -> tuple[Optional[User], Optional[str]]:
         """
