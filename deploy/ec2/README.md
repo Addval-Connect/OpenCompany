@@ -179,6 +179,12 @@ Until certbot has run, `JWT_COOKIE_SECURE=true` in the rendered `.env` means the
 browser will refuse the login cookie over plain http — so log in only after TLS
 is up, or the form will appear to accept your password and bounce you back.
 
+Both scripts suppress the "run certbot" hint once a certificate exists —
+`bootstrap.sh` by looking for `/etc/letsencrypt/live/<domain>/fullchain.pem`,
+`deploy.sh` by probing `https://<domain>/`. Printed unconditionally it reads as an
+outstanding step on every later update, and acting on it spends Let's Encrypt's
+duplicate-certificate rate limit for nothing.
+
 ## Runtime shape
 
 - **Dedicated host.** The nginx vhost claims `default_server`, so a request with
@@ -513,3 +519,21 @@ sudo tail -f /var/log/opencompany/app.log
 sudo tail -f /var/log/opencompany/error.log
 curl -fsS http://127.0.0.1:<port>/health          # on the host
 ```
+
+### One log line that looks like a failure and is not
+
+Every cold boot logs a Temporal connection failure before it succeeds:
+
+```
+[warning] Temporal connection attempt 1/1 failed: ... ConnectionRefused
+[error  ] Failed to connect to Temporal server at localhost:<port> after 1 attempts
+  [Temporal] Connect attempt 1 failed for localhost:<port> (ns=default); retrying in 3s
+  [Temporal] Worker started, execution engine ready (attempt 2)
+```
+
+The backend and its embedded Temporal server come up in the same process, and the
+first client connect races the server's listener. It retries 3s later and
+succeeds — note the `attempt 2` line, and confirm with `"temporal":
+{"connected": true}` in `/health`. The `error` level on a self-healing retry is
+the application's own logging, not something the deploy configures; do not chase
+it, and do not alert on it.

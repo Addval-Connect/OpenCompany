@@ -173,5 +173,20 @@ sudo /tmp/opencompany-bootstrap/deploy/ec2/bootstrap.sh ${DOMAIN_ARG} ${AWS_REGI
 EOF
 
 say "Deployed"
-[[ -n "$DOMAIN" ]] && echo "  https://${DOMAIN}  (after: sudo certbot --nginx -d ${DOMAIN})"
+# Probe the public endpoint rather than always appending the certbot caveat: on
+# every deploy after the first, TLS is already installed and the parenthetical
+# reads as an outstanding step that is not. -f so a 4xx/5xx counts as not-ready,
+# and a short timeout so an unreachable host costs seconds, not the whole script.
+#
+# A GET discarded to /dev/null, NOT -I: the backend declares its routes GET-only,
+# so a HEAD gets 405 from Starlette and -f treats a perfectly good TLS setup as
+# missing -- which is exactly what the first version of this check did. The body
+# is the ~4 KB SPA shell.
+if [[ -n "$DOMAIN" ]]; then
+    if curl -sf --max-time 8 -o /dev/null "https://${DOMAIN}/" 2>/dev/null; then
+        echo "  https://${DOMAIN}"
+    else
+        echo "  https://${DOMAIN}  (after: sudo certbot --nginx -d ${DOMAIN})"
+    fi
+fi
 echo "  Logs: ssh ${SSH_USER}@${HOST} 'sudo tail -f /var/log/opencompany/app.log'"

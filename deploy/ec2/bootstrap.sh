@@ -468,7 +468,12 @@ fi
 # so `start` would answer "ERROR (already started)" and skip the reload of a
 # re-deployed tree.
 say "Starting ${APP}"
-supervisorctl restart "$APP" || true
+# `restart` is stop+start, and this script already stopped the program further up,
+# so on every update the stop half answers "ERROR (not running)" -- benign by
+# construction, but it reads as a failed deploy in the transcript. Dropped by
+# exact match only, so anything else supervisor has to say still comes through;
+# the status line and the health check below are what actually gate the deploy.
+supervisorctl restart "$APP" 2>&1 | grep -v "^${APP}: ERROR (not running)\$" || true
 sleep 10
 supervisorctl status "$APP" || true
 
@@ -493,7 +498,19 @@ Done.
   State      ${DATA_DIR_VALUE}   (workflow.db, credentials.db, workspaces/)
   Logs       ${LOG_DIR}/app.log, ${LOG_DIR}/error.log
   Restart    sudo supervisorctl restart ${APP}
+EOF
+
+# Only prompt for TLS when there is no certificate yet. Printed unconditionally,
+# this line reads as an outstanding step on every subsequent update -- and an
+# operator who takes it at face value re-runs certbot against Let's Encrypt's
+# duplicate-certificate rate limit for no benefit.
+if [[ -n "$DEPLOYED_DOMAIN" && -s "/etc/letsencrypt/live/${DEPLOYED_DOMAIN}/fullchain.pem" ]]; then
+    echo ""
+    echo "  TLS        certificate installed for ${DEPLOYED_DOMAIN} (certbot renews it on a timer)"
+else
+    cat <<EOF
 
 Next, once the DNS A record for the domain resolves to this host:
   sudo certbot --nginx -d ${DEPLOYED_DOMAIN:-<domain>}
 EOF
+fi
