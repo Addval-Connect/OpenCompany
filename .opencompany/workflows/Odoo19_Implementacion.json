@@ -1,0 +1,1855 @@
+{
+ "id": "odoo_impl_odoo19",
+ "name": "Odoo 19 — Implementacion (COORD + A1-A5)",
+ "slug": "Odoo19_Implementacion_1",
+ "nodes": [
+  {
+   "id": "oi:task_agent:1",
+   "position": {
+    "x": 240,
+    "y": 120
+   },
+   "type": "task_agent",
+   "data": {
+    "label": "A1 — Brechas e Introspeccion"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:masterSkill:A1",
+   "position": {
+    "x": 40,
+    "y": 120
+   },
+   "type": "masterSkill",
+   "data": {
+    "label": "A1 Skills"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:context:A1",
+   "position": {
+    "x": 40,
+    "y": 230
+   },
+   "type": "context",
+   "data": {
+    "label": "Context"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:console:A1",
+   "position": {
+    "x": 700,
+    "y": 120
+   },
+   "type": "console",
+   "data": {
+    "label": "A1 Console"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:odooJsonRpc:A1",
+   "position": {
+    "x": 460,
+    "y": 120
+   },
+   "type": "odooJsonRpc",
+   "data": {
+    "label": "A1 Odoo"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileRead:A1",
+   "position": {
+    "x": 460,
+    "y": 190
+   },
+   "type": "fileRead",
+   "data": {
+    "label": "A1 fileRead"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileModify:A1",
+   "position": {
+    "x": 460,
+    "y": 260
+   },
+   "type": "fileModify",
+   "data": {
+    "label": "A1 fileModify"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fsSearch:A1",
+   "position": {
+    "x": 460,
+    "y": 330
+   },
+   "type": "fsSearch",
+   "data": {
+    "label": "A1 fsSearch"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:javascriptExecutor:A1",
+   "position": {
+    "x": 460,
+    "y": 400
+   },
+   "type": "javascriptExecutor",
+   "data": {
+    "label": "A1 javascriptExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:aiAgent:1",
+   "position": {
+    "x": 240,
+    "y": 460
+   },
+   "type": "aiAgent",
+   "data": {
+    "label": "A2 — Blueprint y Backlog"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:masterSkill:A2",
+   "position": {
+    "x": 40,
+    "y": 460
+   },
+   "type": "masterSkill",
+   "data": {
+    "label": "A2 Skills"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:context:A2",
+   "position": {
+    "x": 40,
+    "y": 570
+   },
+   "type": "context",
+   "data": {
+    "label": "Context"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:console:A2",
+   "position": {
+    "x": 700,
+    "y": 460
+   },
+   "type": "console",
+   "data": {
+    "label": "A2 Console"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileRead:A2",
+   "position": {
+    "x": 460,
+    "y": 460
+   },
+   "type": "fileRead",
+   "data": {
+    "label": "A2 fileRead"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileModify:A2",
+   "position": {
+    "x": 460,
+    "y": 530
+   },
+   "type": "fileModify",
+   "data": {
+    "label": "A2 fileModify"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fsSearch:A2",
+   "position": {
+    "x": 460,
+    "y": 600
+   },
+   "type": "fsSearch",
+   "data": {
+    "label": "A2 fsSearch"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:javascriptExecutor:A2",
+   "position": {
+    "x": 460,
+    "y": 670
+   },
+   "type": "javascriptExecutor",
+   "data": {
+    "label": "A2 javascriptExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:coding_agent:1",
+   "position": {
+    "x": 240,
+    "y": 800
+   },
+   "type": "coding_agent",
+   "data": {
+    "label": "A3 — Plantillas de Carga"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:masterSkill:A3",
+   "position": {
+    "x": 40,
+    "y": 800
+   },
+   "type": "masterSkill",
+   "data": {
+    "label": "A3 Skills"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:context:A3",
+   "position": {
+    "x": 40,
+    "y": 910
+   },
+   "type": "context",
+   "data": {
+    "label": "Context"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:console:A3",
+   "position": {
+    "x": 700,
+    "y": 800
+   },
+   "type": "console",
+   "data": {
+    "label": "A3 Console"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileRead:A3",
+   "position": {
+    "x": 460,
+    "y": 800
+   },
+   "type": "fileRead",
+   "data": {
+    "label": "A3 fileRead"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileModify:A3",
+   "position": {
+    "x": 460,
+    "y": 870
+   },
+   "type": "fileModify",
+   "data": {
+    "label": "A3 fileModify"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fsSearch:A3",
+   "position": {
+    "x": 460,
+    "y": 940
+   },
+   "type": "fsSearch",
+   "data": {
+    "label": "A3 fsSearch"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:javascriptExecutor:A3",
+   "position": {
+    "x": 460,
+    "y": 1010
+   },
+   "type": "javascriptExecutor",
+   "data": {
+    "label": "A3 javascriptExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:aiAgent:2",
+   "position": {
+    "x": 240,
+    "y": 1140
+   },
+   "type": "aiAgent",
+   "data": {
+    "label": "A4 — Valida Completadas"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:masterSkill:A4",
+   "position": {
+    "x": 40,
+    "y": 1140
+   },
+   "type": "masterSkill",
+   "data": {
+    "label": "A4 Skills"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:context:A4",
+   "position": {
+    "x": 40,
+    "y": 1250
+   },
+   "type": "context",
+   "data": {
+    "label": "Context"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:console:A4",
+   "position": {
+    "x": 700,
+    "y": 1140
+   },
+   "type": "console",
+   "data": {
+    "label": "A4 Console"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:odooJsonRpc:A4",
+   "position": {
+    "x": 460,
+    "y": 1140
+   },
+   "type": "odooJsonRpc",
+   "data": {
+    "label": "A4 Odoo"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileRead:A4",
+   "position": {
+    "x": 460,
+    "y": 1210
+   },
+   "type": "fileRead",
+   "data": {
+    "label": "A4 fileRead"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileModify:A4",
+   "position": {
+    "x": 460,
+    "y": 1280
+   },
+   "type": "fileModify",
+   "data": {
+    "label": "A4 fileModify"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fsSearch:A4",
+   "position": {
+    "x": 460,
+    "y": 1350
+   },
+   "type": "fsSearch",
+   "data": {
+    "label": "A4 fsSearch"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:javascriptExecutor:A4",
+   "position": {
+    "x": 460,
+    "y": 1420
+   },
+   "type": "javascriptExecutor",
+   "data": {
+    "label": "A4 javascriptExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:tool_agent:1",
+   "position": {
+    "x": 240,
+    "y": 1480
+   },
+   "type": "tool_agent",
+   "data": {
+    "label": "A5 — Carga y QA"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:masterSkill:A5",
+   "position": {
+    "x": 40,
+    "y": 1480
+   },
+   "type": "masterSkill",
+   "data": {
+    "label": "A5 Skills"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:context:A5",
+   "position": {
+    "x": 40,
+    "y": 1590
+   },
+   "type": "context",
+   "data": {
+    "label": "Context"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:console:A5",
+   "position": {
+    "x": 700,
+    "y": 1480
+   },
+   "type": "console",
+   "data": {
+    "label": "A5 Console"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:odooJsonRpc:A5",
+   "position": {
+    "x": 460,
+    "y": 1480
+   },
+   "type": "odooJsonRpc",
+   "data": {
+    "label": "A5 Odoo"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileRead:A5",
+   "position": {
+    "x": 460,
+    "y": 1550
+   },
+   "type": "fileRead",
+   "data": {
+    "label": "A5 fileRead"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileModify:A5",
+   "position": {
+    "x": 460,
+    "y": 1620
+   },
+   "type": "fileModify",
+   "data": {
+    "label": "A5 fileModify"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fsSearch:A5",
+   "position": {
+    "x": 460,
+    "y": 1690
+   },
+   "type": "fsSearch",
+   "data": {
+    "label": "A5 fsSearch"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:javascriptExecutor:A5",
+   "position": {
+    "x": 460,
+    "y": 1760
+   },
+   "type": "javascriptExecutor",
+   "data": {
+    "label": "A5 javascriptExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:ai_employee:1",
+   "position": {
+    "x": 1080,
+    "y": 700
+   },
+   "type": "ai_employee",
+   "data": {
+    "label": "COORD — Coordinador"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:chatTrigger:1",
+   "position": {
+    "x": 880,
+    "y": 420
+   },
+   "type": "chatTrigger",
+   "data": {
+    "label": "Proyecto / Chat"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:taskTrigger:1",
+   "position": {
+    "x": 880,
+    "y": 490
+   },
+   "type": "taskTrigger",
+   "data": {
+    "label": "Tarea Completada"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:masterSkill:COORD",
+   "position": {
+    "x": 880,
+    "y": 560
+   },
+   "type": "masterSkill",
+   "data": {
+    "label": "COORD Skills"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:taskManager:1",
+   "position": {
+    "x": 880,
+    "y": 630
+   },
+   "type": "taskManager",
+   "data": {
+    "label": "Task Manager"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:writeTodos:1",
+   "position": {
+    "x": 880,
+    "y": 700
+   },
+   "type": "writeTodos",
+   "data": {
+    "label": "COORD Write Todos"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:simpleMemory:1",
+   "position": {
+    "x": 880,
+    "y": 770
+   },
+   "type": "simpleMemory",
+   "data": {
+    "label": "COORD Memory"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:fileRead:1",
+   "position": {
+    "x": 880,
+    "y": 840
+   },
+   "type": "fileRead",
+   "data": {
+    "label": "COORD File Read"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:console:COORD",
+   "position": {
+    "x": 1280,
+    "y": 700
+   },
+   "type": "console",
+   "data": {
+    "label": "Console"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:montyExecutor:A5",
+   "position": {
+    "x": 460,
+    "y": 1870
+   },
+   "type": "montyExecutor",
+   "data": {
+    "label": "A5 montyExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:montyExecutor:A4",
+   "position": {
+    "x": 460,
+    "y": 1530
+   },
+   "type": "montyExecutor",
+   "data": {
+    "label": "A4 montyExecutor"
+   },
+   "width": 80,
+   "height": 86
+  },
+  {
+   "id": "oi:montyExecutor:A3",
+   "position": {
+    "x": 460,
+    "y": 1120
+   },
+   "type": "montyExecutor",
+   "data": {
+    "label": "A3 montyExecutor"
+   },
+   "width": 80,
+   "height": 86
+  }
+ ],
+ "edges": [
+  {
+   "id": "e-oi:masterSkill:A1-output-tool-oi:task_agent:1-input-skill",
+   "source": "oi:masterSkill:A1",
+   "sourceHandle": "output-tool",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-skill",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:context:A1-output-context-oi:task_agent:1-input-context",
+   "source": "oi:context:A1",
+   "sourceHandle": "output-context",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-context",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:task_agent:1-output-top-oi:ai_employee:1-input-teammates",
+   "source": "oi:task_agent:1",
+   "sourceHandle": "output-top",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-teammates",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:task_agent:1-output-main-oi:console:A1-input-main",
+   "source": "oi:task_agent:1",
+   "sourceHandle": "output-main",
+   "target": "oi:console:A1",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:odooJsonRpc:A1-output-tool-oi:task_agent:1-input-tools",
+   "source": "oi:odooJsonRpc:A1",
+   "sourceHandle": "output-tool",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileRead:A1-output-tool-oi:task_agent:1-input-tools",
+   "source": "oi:fileRead:A1",
+   "sourceHandle": "output-tool",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileModify:A1-output-tool-oi:task_agent:1-input-tools",
+   "source": "oi:fileModify:A1",
+   "sourceHandle": "output-tool",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fsSearch:A1-output-tool-oi:task_agent:1-input-tools",
+   "source": "oi:fsSearch:A1",
+   "sourceHandle": "output-tool",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:javascriptExecutor:A1-output-tool-oi:task_agent:1-input-tools",
+   "source": "oi:javascriptExecutor:A1",
+   "sourceHandle": "output-tool",
+   "target": "oi:task_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:masterSkill:A2-output-tool-oi:aiAgent:1-input-skill",
+   "source": "oi:masterSkill:A2",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:1",
+   "targetHandle": "input-skill",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:context:A2-output-context-oi:aiAgent:1-input-context",
+   "source": "oi:context:A2",
+   "sourceHandle": "output-context",
+   "target": "oi:aiAgent:1",
+   "targetHandle": "input-context",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:aiAgent:1-output-top-oi:ai_employee:1-input-teammates",
+   "source": "oi:aiAgent:1",
+   "sourceHandle": "output-top",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-teammates",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:aiAgent:1-output-main-oi:console:A2-input-main",
+   "source": "oi:aiAgent:1",
+   "sourceHandle": "output-main",
+   "target": "oi:console:A2",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileRead:A2-output-tool-oi:aiAgent:1-input-tools",
+   "source": "oi:fileRead:A2",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileModify:A2-output-tool-oi:aiAgent:1-input-tools",
+   "source": "oi:fileModify:A2",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fsSearch:A2-output-tool-oi:aiAgent:1-input-tools",
+   "source": "oi:fsSearch:A2",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:javascriptExecutor:A2-output-tool-oi:aiAgent:1-input-tools",
+   "source": "oi:javascriptExecutor:A2",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:masterSkill:A3-output-tool-oi:coding_agent:1-input-skill",
+   "source": "oi:masterSkill:A3",
+   "sourceHandle": "output-tool",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-skill",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:context:A3-output-context-oi:coding_agent:1-input-context",
+   "source": "oi:context:A3",
+   "sourceHandle": "output-context",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-context",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:coding_agent:1-output-top-oi:ai_employee:1-input-teammates",
+   "source": "oi:coding_agent:1",
+   "sourceHandle": "output-top",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-teammates",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:coding_agent:1-output-main-oi:console:A3-input-main",
+   "source": "oi:coding_agent:1",
+   "sourceHandle": "output-main",
+   "target": "oi:console:A3",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileRead:A3-output-tool-oi:coding_agent:1-input-tools",
+   "source": "oi:fileRead:A3",
+   "sourceHandle": "output-tool",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileModify:A3-output-tool-oi:coding_agent:1-input-tools",
+   "source": "oi:fileModify:A3",
+   "sourceHandle": "output-tool",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fsSearch:A3-output-tool-oi:coding_agent:1-input-tools",
+   "source": "oi:fsSearch:A3",
+   "sourceHandle": "output-tool",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:javascriptExecutor:A3-output-tool-oi:coding_agent:1-input-tools",
+   "source": "oi:javascriptExecutor:A3",
+   "sourceHandle": "output-tool",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:masterSkill:A4-output-tool-oi:aiAgent:2-input-skill",
+   "source": "oi:masterSkill:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-skill",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:context:A4-output-context-oi:aiAgent:2-input-context",
+   "source": "oi:context:A4",
+   "sourceHandle": "output-context",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-context",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:aiAgent:2-output-top-oi:ai_employee:1-input-teammates",
+   "source": "oi:aiAgent:2",
+   "sourceHandle": "output-top",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-teammates",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:aiAgent:2-output-main-oi:console:A4-input-main",
+   "source": "oi:aiAgent:2",
+   "sourceHandle": "output-main",
+   "target": "oi:console:A4",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:odooJsonRpc:A4-output-tool-oi:aiAgent:2-input-tools",
+   "source": "oi:odooJsonRpc:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileRead:A4-output-tool-oi:aiAgent:2-input-tools",
+   "source": "oi:fileRead:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileModify:A4-output-tool-oi:aiAgent:2-input-tools",
+   "source": "oi:fileModify:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fsSearch:A4-output-tool-oi:aiAgent:2-input-tools",
+   "source": "oi:fsSearch:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:javascriptExecutor:A4-output-tool-oi:aiAgent:2-input-tools",
+   "source": "oi:javascriptExecutor:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:masterSkill:A5-output-tool-oi:tool_agent:1-input-skill",
+   "source": "oi:masterSkill:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-skill",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:context:A5-output-context-oi:tool_agent:1-input-context",
+   "source": "oi:context:A5",
+   "sourceHandle": "output-context",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-context",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:tool_agent:1-output-top-oi:ai_employee:1-input-teammates",
+   "source": "oi:tool_agent:1",
+   "sourceHandle": "output-top",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-teammates",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:tool_agent:1-output-main-oi:console:A5-input-main",
+   "source": "oi:tool_agent:1",
+   "sourceHandle": "output-main",
+   "target": "oi:console:A5",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:odooJsonRpc:A5-output-tool-oi:tool_agent:1-input-tools",
+   "source": "oi:odooJsonRpc:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileRead:A5-output-tool-oi:tool_agent:1-input-tools",
+   "source": "oi:fileRead:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileModify:A5-output-tool-oi:tool_agent:1-input-tools",
+   "source": "oi:fileModify:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fsSearch:A5-output-tool-oi:tool_agent:1-input-tools",
+   "source": "oi:fsSearch:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:javascriptExecutor:A5-output-tool-oi:tool_agent:1-input-tools",
+   "source": "oi:javascriptExecutor:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:chatTrigger:1-output-main-oi:ai_employee:1-input-main",
+   "source": "oi:chatTrigger:1",
+   "sourceHandle": "output-main",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:taskTrigger:1-output-main-oi:ai_employee:1-input-task",
+   "source": "oi:taskTrigger:1",
+   "sourceHandle": "output-main",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-task",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:masterSkill:COORD-output-tool-oi:ai_employee:1-input-skill",
+   "source": "oi:masterSkill:COORD",
+   "sourceHandle": "output-tool",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-skill",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:taskManager:1-output-tool-oi:ai_employee:1-input-tools",
+   "source": "oi:taskManager:1",
+   "sourceHandle": "output-tool",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:writeTodos:1-output-tool-oi:ai_employee:1-input-tools",
+   "source": "oi:writeTodos:1",
+   "sourceHandle": "output-tool",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:simpleMemory:1-output-tool-oi:ai_employee:1-input-tools",
+   "source": "oi:simpleMemory:1",
+   "sourceHandle": "output-tool",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:fileRead:1-output-tool-oi:ai_employee:1-input-tools",
+   "source": "oi:fileRead:1",
+   "sourceHandle": "output-tool",
+   "target": "oi:ai_employee:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:ai_employee:1-output-main-oi:console:COORD-input-main",
+   "source": "oi:ai_employee:1",
+   "sourceHandle": "output-main",
+   "target": "oi:console:COORD",
+   "targetHandle": "input-main",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:montyExecutor:A5-output-tool-oi:tool_agent:1-input-tools",
+   "source": "oi:montyExecutor:A5",
+   "sourceHandle": "output-tool",
+   "target": "oi:tool_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:montyExecutor:A4-output-tool-oi:aiAgent:2-input-tools",
+   "source": "oi:montyExecutor:A4",
+   "sourceHandle": "output-tool",
+   "target": "oi:aiAgent:2",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  },
+  {
+   "id": "e-oi:montyExecutor:A3-output-tool-oi:coding_agent:1-input-tools",
+   "source": "oi:montyExecutor:A3",
+   "sourceHandle": "output-tool",
+   "target": "oi:coding_agent:1",
+   "targetHandle": "input-tools",
+   "animated": true,
+   "type": "smoothstep"
+  }
+ ],
+ "createdAt": "2026-08-10T00:00:00.000Z",
+ "lastModified": "2026-08-10T00:00:00.000Z",
+ "version": "0.0.95",
+ "nodeParameters": {
+  "oi:task_agent:1": {
+   "prompt": "",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "system_message": "Eres A1 (Brechas e Introspeccion) del sistema de implementacion Odoo 19. Tu trabajo completo esta en UNA sola skill: `analiza-brechas-e-introspecciona` (runbook de 4 pasos: leer 00-entrada/, introspeccionar la instancia real, clasificar cada HU en la matriz de brechas, y calificar la confianza). Cargala UNA vez con Skill y ejecuta sus pasos en orden; NO vuelvas al Coordinador entre pasos.\n\nAUTORIDAD: lo que produces en 02-instancia/introspeccion.json es la unica autoridad sobre que campos y modulos existen, para todos los agentes que vienen despues. Ninguna lista de campos escrita en una skill o referencia es autoridad — solo fields_get contra la instancia.\n\nODOO: solo lectura, por la tool odoo_jsonrpc (host/db/credenciales fijos en el nodo, nunca los eliges tu). Si el login falla NO pruebes otro host: es base de datos, usuario o api_key, y va como pendiente. Pide `fields` minimos, consulta en bloque, y cachea a 02-instancia/ con fileModify para no repetir consultas.\n\nREFERENCIAS: de `flujos-de-referencia` abre con read_resource SOLO los flujos del proyecto (mas l10n-cl.md si el pais es CL). No los leas todos: infla el contexto de cada iteracion sin aportar.\n\nEscribes en 01-analisis/ y 02-instancia/, en ninguna otra carpeta. No disenas el blueprint (eso es A2) y no escribes en Odoo (solo A5 escribe). Devuelve UN resultado y el Coordinador decide; no mantengas enum de estados. Lo que no sepas resolver va como pendiente estructurado, no como suposicion.",
+   "label": "A1 — Brechas e Introspeccion"
+  },
+  "oi:masterSkill:A1": {
+   "skill_folder": "odoo_impl",
+   "skills_config": {
+    "analiza-brechas-e-introspecciona": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "contrato-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "politica-de-escalamiento-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "convencion-ids-externos": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "odoo-rpc-en-opencompany": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "flujos-de-referencia": {
+     "enabled": true,
+     "instructions": ""
+    }
+   },
+   "label": "A1 Skills"
+  },
+  "oi:context:A1": {
+   "label": "Context"
+  },
+  "oi:console:A1": {
+   "log_mode": "field",
+   "field_path": "{{response}}",
+   "expression": "",
+   "format": "json",
+   "label": "A1 Console"
+  },
+  "oi:odooJsonRpc:A1": {
+   "host": "",
+   "db": "",
+   "username": "",
+   "api_key": "",
+   "timeout": 60,
+   "label": "A1 Odoo"
+  },
+  "oi:fileRead:A1": {
+   "label": "A1 fileRead"
+  },
+  "oi:fileModify:A1": {
+   "label": "A1 fileModify"
+  },
+  "oi:fsSearch:A1": {
+   "label": "A1 fsSearch"
+  },
+  "oi:javascriptExecutor:A1": {
+   "label": "A1 javascriptExecutor"
+  },
+  "oi:aiAgent:1": {
+   "prompt": "",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "system_message": "Eres A2 (Blueprint y Backlog) del sistema de implementacion Odoo 19. Tu trabajo completo esta en UNA sola skill: `disena-blueprint-y-backlog` (runbook de 5 pasos: leer y cuestionar los supuestos de A1, fijar el prefijo de xmlid, disenar los objetos con su fuente y dependencias, derivar el backlog, y verificar el diseno). Cargala UNA vez con Skill y ejecuta sus pasos en orden; NO vuelvas al Coordinador entre pasos.\n\nNO CONSULTAS ODOO. Tu autoridad sobre que existe es 02-instancia/introspeccion.json, que A1 ya genero. Si te falta un dato, es un pendiente — no lo inventes, ni siquiera 'porque en Odoo 19 ese campo existe'.\n\nLA DECISION QUE IMPORTA es `fuente` de cada objeto: `plantilla` (volumen que solo el cliente conoce; A3 genera CSV y el consultor lo llena), `configuracion` (pocos registros ya decididos; A5 los escribe por RPC) o `derivado` (Odoo los crea solo; SIN archivo). Un objeto derivado con plantilla hace que el consultor llene datos que Odoo va a sobrescribir; un objeto de 3 registros como plantilla quema un ciclo humano completo.\n\n`depende_de` completo y el `nn` del orden canonico en cada objeto: es lo que A5 usa para ordenar y lo que A4 usa para detectar dependencias fuera de orden.\n\nEscribes en 03-blueprint/ y 04-backlog/, en ninguna otra carpeta. Devuelve UN resultado; no mantengas enum de estados. Precondicion: si la introspeccion trae confianza baja, NO disenes — devuelve un pendiente.",
+   "label": "A2 — Blueprint y Backlog"
+  },
+  "oi:masterSkill:A2": {
+   "skill_folder": "odoo_impl",
+   "skills_config": {
+    "disena-blueprint-y-backlog": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "contrato-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "politica-de-escalamiento-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "convencion-ids-externos": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "orden-de-carga-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "flujos-de-referencia": {
+     "enabled": true,
+     "instructions": ""
+    }
+   },
+   "label": "A2 Skills"
+  },
+  "oi:context:A2": {
+   "label": "Context"
+  },
+  "oi:console:A2": {
+   "log_mode": "field",
+   "field_path": "{{response}}",
+   "expression": "",
+   "format": "json",
+   "label": "A2 Console"
+  },
+  "oi:fileRead:A2": {
+   "label": "A2 fileRead"
+  },
+  "oi:fileModify:A2": {
+   "label": "A2 fileModify"
+  },
+  "oi:fsSearch:A2": {
+   "label": "A2 fsSearch"
+  },
+  "oi:javascriptExecutor:A2": {
+   "label": "A2 javascriptExecutor"
+  },
+  "oi:coding_agent:1": {
+   "prompt": "",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "system_message": "Eres A3 (Plantillas de Carga) del sistema de implementacion Odoo 19. Tu trabajo completo esta en UNA sola skill: `genera-plantillas-de-carga` (runbook de 6 pasos: leer blueprint e introspeccion, elegir columnas, escribir el CSV, escribir el sidecar .meta.json, escribir el INSTRUCTIVO.md, y verificar). Cargala UNA vez con Skill y ejecuta sus pasos en orden; NO vuelvas al Coordinador entre pasos.\n\nTU ENTREGABLE SALE DE LA MAQUINA. Es el unico que una persona va a llenar: si una columna esta mal nombrada, mal explicada o no debia existir, el costo no es una iteracion de agente sino un ciclo humano completo.\n\nFORMATO: CSV con las cabeceras nativas del importador de Odoo (NO xlsx — openpyxl no esta disponible) mas un sidecar NN_<modelo>.meta.json que transporta obligatorios, catalogos y referencias. Columna `id` primera siempre; referencias por xmlid (`categ_id/id`), nunca por nombre ni por `<campo>/.id`. En `catalogos` van los valores tecnicos de cada selection (out_invoice), NUNCA las etiquetas traducidas.\n\nEl `id` de la fila de ejemplo debe derivarse de la clave natural de esa misma fila (RUT 76.123.456-7 -> partner_761234567). Un ejemplo con partner_001 ensena exactamente la practica que la convencion prohibe, y 300 filas van a repetirla.\n\nNO CONSULTAS ODOO. Tu autoridad es 02-instancia/introspeccion.json: si un campo no esta ahi, la columna no se genera. Solo generas archivo para objetos `fuente: plantilla`. Escribes en 05-plantillas/, en ninguna otra carpeta. Nunca entregues plantillas sin INSTRUCTIVO.md.",
+   "label": "A3 — Plantillas de Carga"
+  },
+  "oi:masterSkill:A3": {
+   "skill_folder": "odoo_impl",
+   "skills_config": {
+    "genera-plantillas-de-carga": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "contrato-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "politica-de-escalamiento-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "convencion-ids-externos": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "orden-de-carga-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "flujos-de-referencia": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "sandbox-de-codigo-en-opencompany": {
+     "enabled": true,
+     "instructions": ""
+    }
+   },
+   "label": "A3 Skills"
+  },
+  "oi:context:A3": {
+   "label": "Context"
+  },
+  "oi:console:A3": {
+   "log_mode": "field",
+   "field_path": "{{response}}",
+   "expression": "",
+   "format": "json",
+   "label": "A3 Console"
+  },
+  "oi:fileRead:A3": {
+   "label": "A3 fileRead"
+  },
+  "oi:fileModify:A3": {
+   "label": "A3 fileModify"
+  },
+  "oi:fsSearch:A3": {
+   "label": "A3 fsSearch"
+  },
+  "oi:javascriptExecutor:A3": {
+   "label": "A3 javascriptExecutor"
+  },
+  "oi:aiAgent:2": {
+   "prompt": "",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "system_message": "Eres A4 (Valida Completadas) del sistema de implementacion Odoo 19. Tu trabajo completo esta en UNA sola skill: `valida-archivos-completados` (runbook de 7 pasos: inventariar, validar estructura, validar filas, resolver referencias, reglas del flujo, escribir informes, y emitir veredicto por archivo). Cargala UNA vez con Skill y ejecuta sus pasos en orden; NO vuelvas al Coordinador entre pasos.\n\nERES LA ULTIMA BARRERA antes de escribir en Odoo. Todo error que pase de aca se convierte en un registro cargado, y deshacer una carga significa restaurar la base de datos.\n\nPRINCIPIO: detecta TODOS los errores en una pasada. NO cortes en el primero. El consultor va a corregir una vez; entregarle tres errores y recibir el archivo para encontrar otros doce gasta dos ciclos humanos.\n\nNO CORRIGES DATOS. Reportas codigo (E100..E500), archivo, fila, columna, valor y mensaje — y cuando el valor erroneo se parece a uno valido, SUGIERE el candidato: es la diferencia entre una correccion de un minuto y una de media hora. Calcula el digito verificador del RUT, no lo estimes.\n\nODOO: solo lectura, y solo para resolver referencias (ir.model.data) — en BLOQUE, nunca una consulta por celda. Construye el indice de xmlids de todos los archivos del lote en un solo recorrido y resuelve en memoria. Usa javascript_code para recorrer filas: es comparacion de strings, no razonamiento.\n\nEscribes en 07-validacion/, en ninguna otra carpeta — 06-completadas/ es del consultor. Devuelve la lista explicita `cargables`; es lo que A5 va a usar.",
+   "label": "A4 — Valida Completadas"
+  },
+  "oi:masterSkill:A4": {
+   "skill_folder": "odoo_impl",
+   "skills_config": {
+    "valida-archivos-completados": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "contrato-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "politica-de-escalamiento-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "convencion-ids-externos": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "orden-de-carga-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "odoo-rpc-en-opencompany": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "flujos-de-referencia": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "sandbox-de-codigo-en-opencompany": {
+     "enabled": true,
+     "instructions": ""
+    }
+   },
+   "label": "A4 Skills"
+  },
+  "oi:context:A4": {
+   "label": "Context"
+  },
+  "oi:console:A4": {
+   "log_mode": "field",
+   "field_path": "{{response}}",
+   "expression": "",
+   "format": "json",
+   "label": "A4 Console"
+  },
+  "oi:odooJsonRpc:A4": {
+   "host": "",
+   "db": "",
+   "username": "",
+   "api_key": "",
+   "timeout": 60,
+   "label": "A4 Odoo"
+  },
+  "oi:fileRead:A4": {
+   "label": "A4 fileRead"
+  },
+  "oi:fileModify:A4": {
+   "label": "A4 fileModify"
+  },
+  "oi:fsSearch:A4": {
+   "label": "A4 fsSearch"
+  },
+  "oi:javascriptExecutor:A4": {
+   "label": "A4 javascriptExecutor"
+  },
+  "oi:tool_agent:1": {
+   "prompt": "",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "system_message": "Eres A5 (Carga y QA) del sistema de implementacion Odoo 19 y el UNICO PUNTO DE ESCRITURA del sistema. Tu trabajo esta en `carga-a-odoo-y-verifica` (runbook de 6 pasos: aplicar configuracion, cargar archivos en orden, verificar con read-back, escribir el resumen, ejecutar el QA, y reportar el estado del ensayo). Cargala UNA vez con Skill y ejecuta sus pasos en orden; NO vuelvas al Coordinador entre pasos. Skill adicional SOLO si hay un rechazo que el runbook no cubre: `administrar-casos-de-borde-odoo`.\n\nENTORNO — verificalo, no lo asumas: si entorno_objetivo es production y la mision no trae confirmacion explicita de BASE DE DATOS y RAMA, no escribas; pendiente entorno_produccion. 'Adelante' no es una confirmacion de entorno. El QA crea documentos reales: NUNCA lo ejecutes en produccion.\n\nCARGA: solo los archivos de la lista `cargables` de A4, en orden alfabetico de nombre (el prefijo NN ES el orden de dependencias). Usa method='call' + method_name='load' con args=[fields, data] — NO create en bucle: load() es idempotente por el xmlid y create pierde el xmlid, dejando sin resolver cualquier <campo>/id posterior. Lotes de 200 a 500 filas.\n\nLEER LA RESPUESTA ES EL PASO QUE SE HACE MAL: load devuelve {ids, messages}, y ok:true con ids poblado NO significa exito. Un `messages` con type error significa que el lote NO escribio nada. Nunca declares exito sin haber leido messages. El read-back contra ir.model.data es obligatorio.\n\nUn timeout deja el estado DESCONOCIDO, no fallido: verifica los xmlids del lote antes de reintentar. Un reintento, no tres. No reintentes ciegamente un rechazo de negocio, no crees datos maestros que no estaban en el blueprint para desatascar una referencia, y no reportes carga parcial como completa.\n\nEscribes en 08-carga/ y 09-qa/, en ninguna otra carpeta.",
+   "label": "A5 — Carga y QA"
+  },
+  "oi:masterSkill:A5": {
+   "skill_folder": "odoo_impl",
+   "skills_config": {
+    "carga-a-odoo-y-verifica": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "administrar-casos-de-borde-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "contrato-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "politica-de-escalamiento-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "convencion-ids-externos": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "orden-de-carga-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "odoo-rpc-en-opencompany": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "flujos-de-referencia": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "sandbox-de-codigo-en-opencompany": {
+     "enabled": true,
+     "instructions": ""
+    }
+   },
+   "label": "A5 Skills"
+  },
+  "oi:context:A5": {
+   "label": "Context"
+  },
+  "oi:console:A5": {
+   "log_mode": "field",
+   "field_path": "{{response}}",
+   "expression": "",
+   "format": "json",
+   "label": "A5 Console"
+  },
+  "oi:odooJsonRpc:A5": {
+   "host": "",
+   "db": "",
+   "username": "",
+   "api_key": "",
+   "timeout": 60,
+   "label": "A5 Odoo"
+  },
+  "oi:fileRead:A5": {
+   "label": "A5 fileRead"
+  },
+  "oi:fileModify:A5": {
+   "label": "A5 fileModify"
+  },
+  "oi:fsSearch:A5": {
+   "label": "A5 fsSearch"
+  },
+  "oi:javascriptExecutor:A5": {
+   "label": "A5 javascriptExecutor"
+  },
+  "oi:ai_employee:1": {
+   "prompt": "",
+   "provider": "anthropic",
+   "model": "claude-sonnet-5",
+   "system_message": "Eres el COORDINADOR del sistema de implementacion Odoo 19. Llevas un proyecto desde epicas e historias de usuario hasta una instancia configurada, cargada y con QA verde, delegando cada etapa al agente que corresponde y ENCADENANDO las etapas hasta el cierre.\n\nTEAMMATES (identificalos por delegate_name; NO uses assignee_node_id: los ids de nodo se\nreasignan al importar el workflow y quedarian obsoletos):\n- A1 Brechas e Introspeccion = delegate_name \"delegate_to_task_agent\"  (lee 00-entrada/, introspecciona\n  la instancia, clasifica brechas; escribe 01-analisis/ y 02-instancia/)\n- A2 Blueprint y Backlog = delegate_name \"delegate_to_a2_blueprint_y_backlog\"  (disena objetos con\n  fuente y dependencias, deriva tareas; escribe 03-blueprint/ y 04-backlog/)\n- A3 Plantillas de Carga = delegate_name \"delegate_to_coding_agent\"  (CSV + sidecar .meta.json +\n  INSTRUCTIVO.md; escribe 05-plantillas/)\n- A4 Valida Completadas = delegate_name \"delegate_to_a4_valida_completadas\"  (valida lo que el\n  consultor devolvio; escribe 07-validacion/)\n- A5 Carga y QA = delegate_name \"delegate_to_tool_agent\"  (UNICO punto de escritura en Odoo; escribe\n  08-carga/ y 09-qa/)\nSi un delegate_name no resuelve, el error del Task Manager lista los disponibles: usa esa lista, no\nadivines.\n\nDELEGACION: delega SIEMPRE con task_manager(assign_task, delegate_name, title, mission, context, acceptance_criteria). NUNCA llames delegate_to_* directamente. EL TASK MANAGER ES LA MAQUINA DE ESTADOS: no inventes un campo etapa_actual, ni un enum, ni un archivo de estado. Para saber donde vas usa task_manager(list_tasks).\n\nENCADENAMIENTO AUTOMATICO: despues de que un agente devuelve su resultado y lo revisas, NO te detengas ni esperes al usuario: delega INMEDIATAMENTE la etapa siguiente, pasando en 'context' las RUTAS de los artefactos del paso anterior (nunca su contenido). La secuencia es A1 -> A2 -> A3 -> [consultor humano] -> A4 -> A5. Sin paralelismo entre etapas.\n\nPRECONDICIONES antes de cada delegacion (si no se cumplen, NO delegues: consulta primero):\n- A2 no disena sin introspeccion fechada contra la instancia actual, ni con confianza baja, ni con pendientes de modulo faltante abiertos.\n- A3 no genera plantillas con pendientes abiertos sobre los modelos a plantillar.\n- A4 no valida si 06-completadas/ esta vacio.\n- A5 no carga archivos con errores abiertos, ni escribe en produccion sin confirmacion explicita de base de datos y rama.\n\nLA UNICA PAUSA HUMANA DEL PIPELINE es despues de A3: informa al usuario que archivos hay en 05-plantillas/, que dice el INSTRUCTIVO.md, y que los devuelva a 06-completadas/. No delegues A4 hasta que haya archivos ahi. Ese handoff no es un error: es el diseno.\n\nPENDIENTES: los workers devuelven pendientes[]. Los acumulas y los consultas EN LOTE por chat, agrupados por motivo y con los bloqueantes primero — nunca de uno en uno. Al recibir respuestas llenas respuesta / respondido_por / respondido_en (un worker nunca escribe esos campos) y las pasas en el context de la delegacion siguiente. Si una respuesta invalida un artefacto ya producido, RE-DELEGA la etapa que lo produjo; no parchees el artefacto tu mismo.\n\nHERRAMIENTAS: NUNCA uses la herramienta Skill (load/read_resource/search_resource) para leer archivos del usuario o del workspace — SOLO lee recursos internos de un skill. Para inspeccionar un artefacto usa el nodo fileRead. writeTodos es tu tablero visible para el usuario, no estado durable.\n\nSALIDA AL USUARIO: al cerrar, resume con cerrar-y-notificar-implementacion — objetos cargados por xmlid (no por id numerico), filas en error con su codigo y quien corrige, casos de QA rojos, tareas de desarrollo abiertas por diseno, y si el ensayo desde cero en staging se ejecuto o no. Nunca reportes carga parcial como completa.",
+   "label": "COORD — Coordinador"
+  },
+  "oi:chatTrigger:1": {
+   "placeholder": "Describe el proyecto o responde pendientes...",
+   "reset_policy": "preserve",
+   "label": "Proyecto / Chat"
+  },
+  "oi:taskTrigger:1": {
+   "task_id": "",
+   "agent_name": "",
+   "status_filter": "all",
+   "parent_node_id": "",
+   "label": "Tarea Completada"
+  },
+  "oi:masterSkill:COORD": {
+   "skill_folder": "odoo_impl",
+   "skills_config": {
+    "orquestar-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "consultar-al-usuario-en-lote-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "cerrar-y-notificar-implementacion": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "contrato-implementacion-odoo": {
+     "enabled": true,
+     "instructions": ""
+    },
+    "politica-de-escalamiento-odoo": {
+     "enabled": true,
+     "instructions": ""
+    }
+   },
+   "label": "COORD Skills"
+  },
+  "oi:taskManager:1": {
+   "operation": "list_tasks",
+   "task_id": null,
+   "status_filter": null,
+   "label": "Task Manager"
+  },
+  "oi:writeTodos:1": {
+   "label": "COORD Write Todos"
+  },
+  "oi:simpleMemory:1": {
+   "label": "COORD Memory"
+  },
+  "oi:fileRead:1": {
+   "label": "COORD File Read"
+  },
+  "oi:console:COORD": {
+   "log_mode": "field",
+   "field_path": "{{coord.response}}",
+   "expression": "",
+   "format": "json",
+   "label": "Console"
+  },
+  "oi:montyExecutor:A5": {
+   "label": "A5 montyExecutor"
+  },
+  "oi:montyExecutor:A4": {
+   "label": "A4 montyExecutor"
+  },
+  "oi:montyExecutor:A3": {
+   "label": "A3 montyExecutor"
+  }
+ },
+ "requirements": {
+  "credentials": [
+   {
+    "provider_id": "anthropic"
+   }
+  ],
+  "nodes": [
+   {
+    "type": "task_agent",
+    "version": 1
+   },
+   {
+    "type": "masterSkill",
+    "version": 1
+   },
+   {
+    "type": "context",
+    "version": 2
+   },
+   {
+    "type": "console",
+    "version": 1
+   },
+   {
+    "type": "odooJsonRpc",
+    "version": 1
+   },
+   {
+    "type": "fileRead",
+    "version": 1
+   },
+   {
+    "type": "fileModify",
+    "version": 1
+   },
+   {
+    "type": "fsSearch",
+    "version": 1
+   },
+   {
+    "type": "javascriptExecutor",
+    "version": 1
+   },
+   {
+    "type": "aiAgent",
+    "version": 1
+   },
+   {
+    "type": "masterSkill",
+    "version": 1
+   },
+   {
+    "type": "context",
+    "version": 2
+   },
+   {
+    "type": "console",
+    "version": 1
+   },
+   {
+    "type": "fileRead",
+    "version": 1
+   },
+   {
+    "type": "fileModify",
+    "version": 1
+   },
+   {
+    "type": "fsSearch",
+    "version": 1
+   },
+   {
+    "type": "javascriptExecutor",
+    "version": 1
+   },
+   {
+    "type": "coding_agent",
+    "version": 1
+   },
+   {
+    "type": "masterSkill",
+    "version": 1
+   },
+   {
+    "type": "context",
+    "version": 2
+   },
+   {
+    "type": "console",
+    "version": 1
+   },
+   {
+    "type": "fileRead",
+    "version": 1
+   },
+   {
+    "type": "fileModify",
+    "version": 1
+   },
+   {
+    "type": "fsSearch",
+    "version": 1
+   },
+   {
+    "type": "javascriptExecutor",
+    "version": 1
+   },
+   {
+    "type": "aiAgent",
+    "version": 1
+   },
+   {
+    "type": "masterSkill",
+    "version": 1
+   },
+   {
+    "type": "context",
+    "version": 2
+   },
+   {
+    "type": "console",
+    "version": 1
+   },
+   {
+    "type": "odooJsonRpc",
+    "version": 1
+   },
+   {
+    "type": "fileRead",
+    "version": 1
+   },
+   {
+    "type": "fileModify",
+    "version": 1
+   },
+   {
+    "type": "fsSearch",
+    "version": 1
+   },
+   {
+    "type": "javascriptExecutor",
+    "version": 1
+   },
+   {
+    "type": "tool_agent",
+    "version": 1
+   },
+   {
+    "type": "masterSkill",
+    "version": 1
+   },
+   {
+    "type": "context",
+    "version": 2
+   },
+   {
+    "type": "console",
+    "version": 1
+   },
+   {
+    "type": "odooJsonRpc",
+    "version": 1
+   },
+   {
+    "type": "fileRead",
+    "version": 1
+   },
+   {
+    "type": "fileModify",
+    "version": 1
+   },
+   {
+    "type": "fsSearch",
+    "version": 1
+   },
+   {
+    "type": "javascriptExecutor",
+    "version": 1
+   },
+   {
+    "type": "ai_employee",
+    "version": 1
+   },
+   {
+    "type": "chatTrigger",
+    "version": 1
+   },
+   {
+    "type": "taskTrigger",
+    "version": 1
+   },
+   {
+    "type": "masterSkill",
+    "version": 1
+   },
+   {
+    "type": "taskManager",
+    "version": 1
+   },
+   {
+    "type": "writeTodos",
+    "version": 1
+   },
+   {
+    "type": "simpleMemory",
+    "version": 1
+   },
+   {
+    "type": "fileRead",
+    "version": 1
+   },
+   {
+    "type": "console",
+    "version": 1
+   },
+   {
+    "type": "montyExecutor",
+    "version": 1
+   }
+  ]
+ }
+}
