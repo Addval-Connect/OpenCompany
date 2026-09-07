@@ -27,6 +27,7 @@
     "currentTimeTool",
     "writeTodos",
     "canvas",
+    "odooJsonRpc",
 
     "httpRequest",
     "timer",
