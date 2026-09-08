@@ -5,6 +5,17 @@
 #   ./deploy/ec2/temporal.sh status              # what the host runs right now
 #   ./deploy/ec2/temporal.sh on                  # durable execution (Temporal)
 #   ./deploy/ec2/temporal.sh off                 # in-process sequential executor
+#   ./deploy/ec2/temporal.sh ui                  # tunnel the Web UI to localhost
+#
+# `ui` is a port-forward, not an opened port. The dev server binds its UI to
+# 127.0.0.1 and the security group admits only 80/443, and both should stay that
+# way: the Temporal Web UI has NO authentication and can terminate workflows, so
+# publishing it would be strictly worse than exposing the app itself.
+#
+# The local port defaults to the host's UI port + 10000 (5680 -> 15680) rather
+# than the same number, because a local dev stack already owns the host's port and
+# would answer instead -- with a real, plausible UI of the wrong cluster. Override
+# with OC_UI_LOCAL_PORT.
 #
 # Why a script instead of "edit .env": bootstrap.sh renders /opt/opencompany/.env
 # once and never rewrites it -- the file holds API_KEY_ENCRYPTION_KEY, and
@@ -18,9 +29,10 @@
 # The keys written by `on` are read out of env.production.template rather than
 # repeated here, so a live host and a fresh deploy cannot drift apart.
 #
-# Transport is ssh.sh (EC2 Instance Connect), so the same environment overrides
-# apply: OC_INSTANCE_ID (required), OC_HOST, OC_REGION, OC_SSH_KEY, OC_SSH_USER.
-# Requires a valid AWS session (`aws login`).
+# Transport is ssh.sh, so the same environment overrides apply: OC_INSTANCE_ID
+# (required), OC_HOST, OC_REGION, OC_SSH_KEY, OC_SSH_USER, OC_OPS_KEY. It prefers
+# an AWS session and falls back to the ops key, so `ui` in particular needs no
+# `aws login` once the host's address has been cached (or OC_HOST is set).
 #
 set -euo pipefail
 
@@ -145,11 +157,30 @@ done
 " || true
         report
         ;;
+    ui)
+        # Two connections, as in on|off and for the same reason: the UI port comes
+        # from the host's own .env -- never a copy kept here, which would disagree
+        # with the deployment after a port change -- and that read has to finish
+        # before a forward can name the port.
+        UI_PORT=$("$SSH" "
+${READ_PORTS}
+printf '%s' \"\$UI\"" | tr -d '\r\n')
+        [[ "$UI_PORT" =~ ^[0-9]+$ ]] || {
+            echo "could not read TEMPORAL_UI_PORT from ${ENV_FILE} (got: '${UI_PORT}')" >&2
+            echo "is Temporal on? try: $0 status" >&2
+            exit 1; }
+
+        LOCAL_PORT=${OC_UI_LOCAL_PORT:-$((UI_PORT + 10000))}
+
+        echo "==> Temporal Web UI: http://localhost:${LOCAL_PORT}" >&2
+        echo "    (host ${UI_PORT}, loopback-only; Ctrl-C closes the tunnel)" >&2
+        exec "$SSH" --tunnel "${LOCAL_PORT}:127.0.0.1:${UI_PORT}"
+        ;;
     -h|--help)
         awk 'NR>1 && !/^#/ {exit} NR>1 {sub(/^# ?/, ""); print}' "$0"
         ;;
     *)
-        echo "unknown action: ${ACTION} (expected: on | off | status)" >&2
+        echo "unknown action: ${ACTION} (expected: on | off | status | ui)" >&2
         exit 2
         ;;
 esac

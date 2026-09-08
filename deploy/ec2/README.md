@@ -28,9 +28,12 @@ neither knows about the other.
   [Adding users](#adding-users).
 - `ssh.sh` — run on your machine. Opens a shell on the host through the same
   Instance Connect flow, with shortcuts for the operations below
-  (`--logs`, `--errors`, `--status`, `--restart`, `--health`, `--app`).
+  (`--logs`, `--errors`, `--status`, `--restart`, `--health`, `--app`) and
+  `--tunnel <ssh -L spec>` for anything the host binds to loopback.
 - `temporal.sh` — run on your machine. `on` / `off` / `status` for durable
-  execution on a live host, see [Execution engine](#execution-engine).
+  execution on a live host, plus `ui` to tunnel the Temporal Web UI, see
+  [Execution engine](#execution-engine) and
+  [The Temporal Web UI](#the-temporal-web-ui).
 - `conf/opencompany.supervisor.conf`, `conf/opencompany.nginx.conf` — templates
   with `__OC_PORT__` / `__OC_DOMAIN__` / `__OC_AWS_ENV__` placeholders.
 - `env.production.template` — rendered once to `/opt/opencompany/.env`.
@@ -414,6 +417,63 @@ Verify with `/health`: `"temporal":{"enabled":true,"connected":true}`.
 `"execution_engine":{"enabled":false}` next to it is **not** a problem — that
 field reports `REDIS_ENABLED`, not Temporal.
 
+### The Temporal Web UI
+
+Same console as local development (`:5680` there), reached over an SSH
+port-forward rather than an opened port:
+
+```bash
+./deploy/ec2/temporal.sh ui        # then open http://localhost:15680
+```
+
+Ctrl-C closes it. Nothing to configure on the host — the UI port is read out of
+the deployed `.env` at call time, so a port change needs no edit here. No AWS
+session is needed either, provided an
+[ops key](#a-plain-ssh-key-for-ops) is installed and the host's address has been
+cached once.
+
+**It is a tunnel because it must never be published.** The Temporal Web UI ships
+**no authentication** and can terminate running workflows, so exposing it would
+be strictly worse than exposing the app itself, which at least has a login. Two
+things keep it private and both should stay that way: the dev server passes no
+`--ip` to `temporal server start-dev`, so it binds `127.0.0.1` only, and the
+security group admits nothing but 80/443. A tunnel needs neither relaxed.
+
+**The local port is deliberately not the same number.** It defaults to the host's
+UI port + 10000 (`5680` → `15680`) because a local dev stack usually already owns
+`5680`; the forward would fail, the browser would answer from the local server,
+and you would be reading a real, plausible Temporal UI of the **wrong cluster**.
+`ssh.sh --tunnel` passes `ExitOnForwardFailure=yes` so that collision is a hard
+error instead of a silent one, but the offset means it does not normally happen.
+Override with `OC_UI_LOCAL_PORT=18080` if 15680 is taken too.
+
+The forward is a thin wrapper over a generic primitive, usable for anything else
+the host keeps on loopback:
+
+```bash
+./deploy/ec2/ssh.sh --tunnel 15680:127.0.0.1:5680
+```
+
+Instance Connect's ephemeral key is checked only when the connection is
+*established*, so the ~60 s validity window does not cap how long you hold the
+tunnel open.
+
+Both are `ssh -L` underneath, so the raw equivalent works from anywhere the ops
+key does — worth knowing because it is the form a GUI client wants:
+
+```bash
+ssh -i ~/.ssh/opencompany-ops.pem -N -o ExitOnForwardFailure=yes \
+    -L 15680:127.0.0.1:5680 ubuntu@<host>
+```
+
+`-N` means *forward only, no shell*, so a working tunnel prints **nothing at
+all** and looks hung — the only sign it worked is that the browser answers. Add
+`-f` to send it to the background instead, and close it with
+`pkill -f 'L 15680:127.0.0.1:5680'` since there is then no Ctrl-C to give. Prefer
+the script anyway when the port or the address may have changed: the raw command
+pins both, and after a `TEMPORAL_UI_PORT` change it keeps forwarding a port
+nothing listens on.
+
 **Trap worth knowing:** the supervisor program runs `python -m uvicorn` directly,
 not `company serve`, so nothing exports `.env` into the process environment. Keys
 read through `Settings` (`TEMPORAL_ENABLED`, ports, auth, `DATA_DIR`, …) work
@@ -489,6 +549,7 @@ From your machine (`ssh.sh` pushes the ephemeral key first):
 ./deploy/ec2/ssh.sh --health
 ./deploy/ec2/ssh.sh                               # plain shell
 ./deploy/ec2/temporal.sh status                   # execution engine + memory
+./deploy/ec2/temporal.sh ui                       # Temporal Web UI on localhost
 ```
 
 The Bedrock region the service process actually has (it lives in the supervisor
@@ -526,6 +587,21 @@ Every script here reaches the host through EC2 Instance Connect, which needs a
 valid AWS session and the AWS CLI on the machine you are sitting at. That is the
 right default — nothing long-lived to leak — but it is the wrong tool from a
 laptop without credentials, a jump box, or a GUI client.
+
+Once such a key exists at `~/.ssh/opencompany-ops.pem` (override with
+`OC_OPS_KEY`), `ssh.sh` uses it **automatically whenever there is no AWS
+session** — so `--logs`, `--status`, `temporal.sh ui` and the rest keep working
+without `aws login`. It stays a fallback rather than a preference: a long-lived
+key in `authorized_keys` is the thing Instance Connect exists to avoid.
+
+The one thing the fallback cannot do is resolve the host's address, since that
+lookup is itself an AWS call. So every session-backed call caches the address at
+`~/.cache/opencompany/ec2-host-<instance-id>` and the fallback reads it back —
+run any command once with a session and the offline path works from then on, or
+set `OC_HOST=<ip>` and skip the cache entirely. The cache is keyed by instance id
+deliberately: one shared file that outlived its instance would aim privileged
+commands (`supervisorctl restart`, `.env` rewrites) at whatever host answered
+next.
 
 Two things to know before reaching for the instance's `.pem`: an instance launched
 this way **has no key pair** (`KeyName` is null), and AWS only accepts `KeyName` at
