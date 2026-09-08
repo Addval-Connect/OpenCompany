@@ -28,9 +28,12 @@ neither knows about the other.
   [Adding users](#adding-users).
 - `ssh.sh` — run on your machine. Opens a shell on the host through the same
   Instance Connect flow, with shortcuts for the operations below
-  (`--logs`, `--errors`, `--status`, `--restart`, `--health`, `--app`).
+  (`--logs`, `--errors`, `--status`, `--restart`, `--health`, `--app`) and
+  `--tunnel <ssh -L spec>` for anything the host binds to loopback.
 - `temporal.sh` — run on your machine. `on` / `off` / `status` for durable
-  execution on a live host, see [Execution engine](#execution-engine).
+  execution on a live host, plus `ui` to tunnel the Temporal Web UI, see
+  [Execution engine](#execution-engine) and
+  [The Temporal Web UI](#the-temporal-web-ui).
 - `conf/opencompany.supervisor.conf`, `conf/opencompany.nginx.conf` — templates
   with `__OC_PORT__` / `__OC_DOMAIN__` / `__OC_AWS_ENV__` placeholders.
 - `env.production.template` — rendered once to `/opt/opencompany/.env`.
@@ -414,6 +417,44 @@ Verify with `/health`: `"temporal":{"enabled":true,"connected":true}`.
 `"execution_engine":{"enabled":false}` next to it is **not** a problem — that
 field reports `REDIS_ENABLED`, not Temporal.
 
+### The Temporal Web UI
+
+Same console as local development (`:5680` there), reached over an SSH
+port-forward rather than an opened port:
+
+```bash
+./deploy/ec2/temporal.sh ui        # then open http://localhost:15680
+```
+
+Ctrl-C closes it. Nothing to configure on the host — the UI port is read out of
+the deployed `.env` at call time, so a port change needs no edit here.
+
+**It is a tunnel because it must never be published.** The Temporal Web UI ships
+**no authentication** and can terminate running workflows, so exposing it would
+be strictly worse than exposing the app itself, which at least has a login. Two
+things keep it private and both should stay that way: the dev server passes no
+`--ip` to `temporal server start-dev`, so it binds `127.0.0.1` only, and the
+security group admits nothing but 80/443. A tunnel needs neither relaxed.
+
+**The local port is deliberately not the same number.** It defaults to the host's
+UI port + 10000 (`5680` → `15680`) because a local dev stack usually already owns
+`5680`; the forward would fail, the browser would answer from the local server,
+and you would be reading a real, plausible Temporal UI of the **wrong cluster**.
+`ssh.sh --tunnel` passes `ExitOnForwardFailure=yes` so that collision is a hard
+error instead of a silent one, but the offset means it does not normally happen.
+Override with `OC_UI_LOCAL_PORT=18080` if 15680 is taken too.
+
+The forward is a thin wrapper over a generic primitive, usable for anything else
+the host keeps on loopback:
+
+```bash
+./deploy/ec2/ssh.sh --tunnel 15680:127.0.0.1:5680
+```
+
+Instance Connect's ephemeral key is checked only when the connection is
+*established*, so the ~60 s validity window does not cap how long you hold the
+tunnel open.
+
 **Trap worth knowing:** the supervisor program runs `python -m uvicorn` directly,
 not `company serve`, so nothing exports `.env` into the process environment. Keys
 read through `Settings` (`TEMPORAL_ENABLED`, ports, auth, `DATA_DIR`, …) work
@@ -489,6 +530,7 @@ From your machine (`ssh.sh` pushes the ephemeral key first):
 ./deploy/ec2/ssh.sh --health
 ./deploy/ec2/ssh.sh                               # plain shell
 ./deploy/ec2/temporal.sh status                   # execution engine + memory
+./deploy/ec2/temporal.sh ui                       # Temporal Web UI on localhost
 ```
 
 The Bedrock region the service process actually has (it lives in the supervisor

@@ -14,7 +14,13 @@
 #   ./deploy/ec2/ssh.sh --restart                # restart the app
 #   ./deploy/ec2/ssh.sh --health                 # /health from inside the host
 #   ./deploy/ec2/ssh.sh --app                    # shell as oc-app-user, in /opt
+#   ./deploy/ec2/ssh.sh --tunnel 15680:127.0.0.1:5680   # local port-forward
 #   ./deploy/ec2/ssh.sh 'sudo supervisorctl status opencompany'
+#
+# --tunnel takes an ssh -L spec and holds the forward open until Ctrl-C. It is how
+# you reach anything the host binds to loopback -- the Temporal Web UI above all,
+# which `temporal.sh ui` wraps. Nothing on this box is reachable from outside
+# except 80/443, by design and by security group.
 #
 # Any trailing arguments are run as a remote command instead of opening a
 # shell. Requires a valid AWS session (`aws login`). Environment overrides
@@ -51,6 +57,7 @@ APP_USER=oc-app-user
 # The app runs under supervisor (bootstrap.sh writes
 # /etc/supervisor/conf.d/opencompany.conf); only nginx is a systemd unit.
 REMOTE_CMD=""
+TUNNEL_SPEC=""
 
 # The port is read from the host's own .env at call time rather than written
 # here: .env.template is the single place port numbers live, and a copy in this
@@ -77,6 +84,11 @@ while [[ $# -gt 0 ]]; do
         # passwd on the host, like everywhere else: DATA_DIR sits under it, and
         # a wrong HOME here would silently open an empty database.
         --app)    REMOTE_CMD="cd ${APP_DIR} && sudo -u ${APP_USER} env HOME=\"\$(getent passwd ${APP_USER} | cut -d: -f6)\" bash -l"; shift ;;
+        # An ssh -L spec, forwarded instead of running a command. Held open until
+        # Ctrl-C; see the exec below for why ExitOnForwardFailure is not optional.
+        --tunnel)
+            [[ -n "${2:-}" ]] || { echo "--tunnel needs a spec, e.g. 15680:127.0.0.1:5680" >&2; exit 2; }
+            TUNNEL_SPEC="$2"; shift 2 ;;
         -h|--help)
             # Print the header comment block verbatim, stopping at the first
             # non-comment line so the usage text and this file cannot drift.
@@ -109,6 +121,23 @@ AWS=$(command -v aws || echo "$HOME/.local/bin/aws")
     --region "$REGION" >/dev/null
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=25 -i "$SSH_KEY")
+
+if [[ -n "$TUNNEL_SPEC" ]]; then
+    # -N: forward only, no remote command, no shell.
+    #
+    # ExitOnForwardFailure is load-bearing rather than defensive. Without it ssh
+    # prints one "cannot listen to port" line and then connects anyway, leaving a
+    # session that looks identical to a working one -- and the browser answers
+    # from whatever already owns that local port. Pointed at the Temporal UI that
+    # is the worst possible failure: a local dev server on the same port shows a
+    # perfectly plausible UI of the WRONG cluster.
+    #
+    # The ephemeral Instance Connect key above is only checked when the connection
+    # is established, so the forward can then stay up for as long as you keep it.
+    echo "==> Forwarding ${TUNNEL_SPEC} -- Ctrl-C to close" >&2
+    exec ssh -N -o ExitOnForwardFailure=yes -L "$TUNNEL_SPEC" \
+        "${SSH_OPTS[@]}" "${SSH_USER}@${HOST}"
+fi
 
 if [[ -n "$REMOTE_CMD" ]]; then
     # -t forces a TTY so `tail -f`, `systemctl status`'s pager-less output and
