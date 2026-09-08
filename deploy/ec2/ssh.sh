@@ -22,10 +22,16 @@
 # which `temporal.sh ui` wraps. Nothing on this box is reachable from outside
 # except 80/443, by design and by security group.
 #
-# Any trailing arguments are run as a remote command instead of opening a
-# shell. Requires a valid AWS session (`aws login`). Environment overrides
-# match the sibling scripts: OC_INSTANCE_ID (required), OC_HOST, OC_REGION,
-# OC_SSH_KEY, OC_SSH_USER.
+# Any trailing arguments are run as a remote command instead of opening a shell.
+#
+# Prefers a valid AWS session (`aws login`), and falls back to the long-lived ops
+# key at ~/.ssh/opencompany-ops.pem when there is none -- so routine operations
+# do not depend on having logged in. The fallback needs the host's address, which
+# it cannot ask AWS for, so it reads the one cached by the last session-backed
+# call; set OC_HOST to skip that entirely.
+#
+# Environment overrides match the sibling scripts: OC_INSTANCE_ID (required),
+# OC_HOST, OC_REGION, OC_SSH_KEY, OC_SSH_USER, OC_OPS_KEY.
 #
 set -euo pipefail
 
@@ -100,25 +106,59 @@ done
 
 AWS=$(command -v aws || echo "$HOME/.local/bin/aws")
 
-[[ -f "$SSH_KEY" ]] || {
-    echo "SSH key not found: ${SSH_KEY}" >&2
-    echo "Generate one with: ssh-keygen -t ed25519 -N '' -f ${SSH_KEY}" >&2
-    exit 1; }
+# Two transports, and whether an AWS session exists decides which. Instance
+# Connect stays the default because the key it pushes expires; the ops key is a
+# fallback, not a preference -- a long-lived key sitting in authorized_keys is
+# exactly what Instance Connect exists to avoid. See "A plain SSH key for ops"
+# in the README for how it gets installed and revoked.
+OPS_KEY=${OC_OPS_KEY:-$HOME/.ssh/opencompany-ops.pem}
 
-"$AWS" sts get-caller-identity >/dev/null || {
-    echo "AWS session invalid. Run: aws login" >&2; exit 1; }
+# The public address is resolved from the instance id, and that resolution is
+# itself an AWS call -- so the fallback path has nothing to resolve it with.
+# Every session-backed call therefore writes the answer here and the fallback
+# reads it back. Keyed by instance id on purpose: one shared cache that outlived
+# its instance would aim privileged commands (supervisorctl restart, .env
+# rewrites) at whatever host answered next.
+HOST_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/opencompany/ec2-host-${INSTANCE_ID}"
 
-[[ -n "$HOST" ]] || HOST=$("$AWS" ec2 describe-instances \
-    --instance-ids "$INSTANCE_ID" --region "$REGION" \
-    --query 'Reservations[].Instances[].PublicIpAddress' --output text)
-[[ -n "$HOST" && "$HOST" != "None" ]] || {
-    echo "instance ${INSTANCE_ID} has no public IP (stopped?)" >&2; exit 1; }
+if "$AWS" sts get-caller-identity >/dev/null 2>&1; then
+    [[ -f "$SSH_KEY" ]] || {
+        echo "SSH key not found: ${SSH_KEY}" >&2
+        echo "Generate one with: ssh-keygen -t ed25519 -N '' -f ${SSH_KEY}" >&2
+        exit 1; }
 
-"$AWS" ec2-instance-connect send-ssh-public-key \
-    --instance-id "$INSTANCE_ID" \
-    --instance-os-user "$SSH_USER" \
-    --ssh-public-key "$(ssh-keygen -y -f "$SSH_KEY")" \
-    --region "$REGION" >/dev/null
+    [[ -n "$HOST" ]] || HOST=$("$AWS" ec2 describe-instances \
+        --instance-ids "$INSTANCE_ID" --region "$REGION" \
+        --query 'Reservations[].Instances[].PublicIpAddress' --output text)
+    [[ -n "$HOST" && "$HOST" != "None" ]] || {
+        echo "instance ${INSTANCE_ID} has no public IP (stopped?)" >&2; exit 1; }
+
+    mkdir -p "$(dirname "$HOST_CACHE")"
+    printf '%s\n' "$HOST" > "$HOST_CACHE"
+
+    "$AWS" ec2-instance-connect send-ssh-public-key \
+        --instance-id "$INSTANCE_ID" \
+        --instance-os-user "$SSH_USER" \
+        --ssh-public-key "$(ssh-keygen -y -f "$SSH_KEY")" \
+        --region "$REGION" >/dev/null
+else
+    # No session: the ops key is the only way in, and the address has to come
+    # from somewhere that is not AWS.
+    [[ -f "$OPS_KEY" ]] || {
+        echo "No AWS session, and no ops key at ${OPS_KEY}." >&2
+        echo "  Either run: aws login" >&2
+        echo "  Or install an ops key: see deploy/ec2/README.md" >&2
+        exit 1; }
+    if [[ -z "$HOST" && -s "$HOST_CACHE" ]]; then
+        HOST=$(tr -d '\r\n' < "$HOST_CACHE")
+    fi
+    [[ -n "$HOST" ]] || {
+        echo "No AWS session, and no cached address for ${INSTANCE_ID}." >&2
+        echo "  Run this once with a session to cache it, or: export OC_HOST=<ip>" >&2
+        exit 1; }
+    SSH_KEY="$OPS_KEY"
+    echo "==> No AWS session -- using the ops key against ${HOST}" >&2
+fi
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=25 -i "$SSH_KEY")
 

@@ -427,7 +427,10 @@ port-forward rather than an opened port:
 ```
 
 Ctrl-C closes it. Nothing to configure on the host — the UI port is read out of
-the deployed `.env` at call time, so a port change needs no edit here.
+the deployed `.env` at call time, so a port change needs no edit here. No AWS
+session is needed either, provided an
+[ops key](#a-plain-ssh-key-for-ops) is installed and the host's address has been
+cached once.
 
 **It is a tunnel because it must never be published.** The Temporal Web UI ships
 **no authentication** and can terminate running workflows, so exposing it would
@@ -454,6 +457,22 @@ the host keeps on loopback:
 Instance Connect's ephemeral key is checked only when the connection is
 *established*, so the ~60 s validity window does not cap how long you hold the
 tunnel open.
+
+Both are `ssh -L` underneath, so the raw equivalent works from anywhere the ops
+key does — worth knowing because it is the form a GUI client wants:
+
+```bash
+ssh -i ~/.ssh/opencompany-ops.pem -N -o ExitOnForwardFailure=yes \
+    -L 15680:127.0.0.1:5680 ubuntu@<host>
+```
+
+`-N` means *forward only, no shell*, so a working tunnel prints **nothing at
+all** and looks hung — the only sign it worked is that the browser answers. Add
+`-f` to send it to the background instead, and close it with
+`pkill -f 'L 15680:127.0.0.1:5680'` since there is then no Ctrl-C to give. Prefer
+the script anyway when the port or the address may have changed: the raw command
+pins both, and after a `TEMPORAL_UI_PORT` change it keeps forwarding a port
+nothing listens on.
 
 **Trap worth knowing:** the supervisor program runs `python -m uvicorn` directly,
 not `company serve`, so nothing exports `.env` into the process environment. Keys
@@ -568,6 +587,21 @@ Every script here reaches the host through EC2 Instance Connect, which needs a
 valid AWS session and the AWS CLI on the machine you are sitting at. That is the
 right default — nothing long-lived to leak — but it is the wrong tool from a
 laptop without credentials, a jump box, or a GUI client.
+
+Once such a key exists at `~/.ssh/opencompany-ops.pem` (override with
+`OC_OPS_KEY`), `ssh.sh` uses it **automatically whenever there is no AWS
+session** — so `--logs`, `--status`, `temporal.sh ui` and the rest keep working
+without `aws login`. It stays a fallback rather than a preference: a long-lived
+key in `authorized_keys` is the thing Instance Connect exists to avoid.
+
+The one thing the fallback cannot do is resolve the host's address, since that
+lookup is itself an AWS call. So every session-backed call caches the address at
+`~/.cache/opencompany/ec2-host-<instance-id>` and the fallback reads it back —
+run any command once with a session and the offline path works from then on, or
+set `OC_HOST=<ip>` and skip the cache entirely. The cache is keyed by instance id
+deliberately: one shared file that outlived its instance would aim privileged
+commands (`supervisorctl restart`, `.env` rewrites) at whatever host answered
+next.
 
 Two things to know before reaching for the instance's `.pem`: an instance launched
 this way **has no key pair** (`KeyName` is null), and AWS only accepts `KeyName` at

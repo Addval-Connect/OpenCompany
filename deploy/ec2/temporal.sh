@@ -29,9 +29,10 @@
 # The keys written by `on` are read out of env.production.template rather than
 # repeated here, so a live host and a fresh deploy cannot drift apart.
 #
-# Transport is ssh.sh (EC2 Instance Connect), so the same environment overrides
-# apply: OC_INSTANCE_ID (required), OC_HOST, OC_REGION, OC_SSH_KEY, OC_SSH_USER.
-# Requires a valid AWS session (`aws login`).
+# Transport is ssh.sh, so the same environment overrides apply: OC_INSTANCE_ID
+# (required), OC_HOST, OC_REGION, OC_SSH_KEY, OC_SSH_USER, OC_OPS_KEY. It prefers
+# an AWS session and falls back to the ops key, so `ui` in particular needs no
+# `aws login` once the host's address has been cached (or OC_HOST is set).
 #
 set -euo pipefail
 
