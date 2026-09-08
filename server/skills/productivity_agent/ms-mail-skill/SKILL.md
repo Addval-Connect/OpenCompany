@@ -1,10 +1,10 @@
 ---
 name: ms-mail-skill
-description: Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph — for your own mailbox or a shared mailbox. Compose messages, list recent mail, search by text, reply/reply-all, and list or download file attachments (e.g. PDFs) for parsing.
+description: Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph — for your own mailbox or a shared mailbox. Compose messages (optionally with file attachments from the workspace), list recent mail, search by text, reply/reply-all, and list or download file attachments (e.g. PDFs) for parsing.
 allowed-tools: "ms_mail"
 metadata:
   author: opencompany
-  version: "1.2"
+  version: "1.3"
   category: productivity
 
 ---
@@ -31,7 +31,7 @@ Consolidated Outlook Mail tool with an `operation` parameter.
 Every `read`/`search` result includes a `has_attachments` boolean per message —
 check it before calling `list_attachments` / `download_attachments`.
 
-### send - Send an email
+### send - Send an email (optionally with attachments)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -42,6 +42,10 @@ check it before calling `list_attachments` / `download_attachments`.
 | cc | string | No | CC recipients (comma-separated) |
 | bcc | string | No | BCC recipients (comma-separated) |
 | body_type | string | No | `"text"` or `"html"` (default: text) |
+| attachments | array of strings | No | Workspace file paths to attach. Each entry is an absolute path (e.g. from `download_attachments` or the gallery node) or a workspace-relative path. Per-file limit: 4 MB (Microsoft Graph inline attachment cap). |
+
+The response includes `attachments_sent` (integer) when files were attached,
+so you can confirm how many were included without re-reading the message.
 
 **Example - Send plain text email:**
 ```json
@@ -62,6 +66,28 @@ check it before calling `list_attachments` / `download_attachments`.
   "subject": "Weekly Report",
   "body": "<h1>Weekly Report</h1><p>Highlights...</p>",
   "body_type": "html"
+}
+```
+
+**Example - Send with file attachments:**
+```json
+{
+  "operation": "send",
+  "to": "finance@contoso.com",
+  "subject": "Q3 Report",
+  "body": "Please find the Q3 report attached.",
+  "attachments": ["/home/user/.opencompany/workspaces/My_Workflow_1/attachments/q3_report.pdf"]
+}
+```
+
+**Example - Attach a file downloaded from a previous email (chain attachments):**
+```json
+{
+  "operation": "send",
+  "to": "team@contoso.com",
+  "subject": "Fwd: Invoice",
+  "body": "Forwarding the invoice we received.",
+  "attachments": ["{{msMail.attachments[0].path}}"]
 }
 ```
 
@@ -206,9 +232,14 @@ pair it with the **Document Parser** node on the canvas:
 
 1. **Triage recent mail**: `read` with no ID to list recent messages, then `read` a specific `message_id` for full content.
 2. **Find a thread**: `search` by keyword, take the `message_id`, then `reply`.
-3. **Send an update**: `send` to one or more recipients, optionally as HTML.
-4. **Process an attachment**: on a message with `has_attachments: true`, call
-   `download_attachments`, then run the Document Parser over `download_dir` to get the text.
+3. **Send a plain email**: `send` to one or more recipients, optionally as HTML.
+4. **Send with attachments**: `send` with an `attachments` array of workspace file paths.
+   Files from a previous `download_attachments` call, the gallery node, or any other
+   workspace-writing node can be forwarded directly by using their `path` field.
+5. **Process an inbound attachment**: on a message with `has_attachments: true`, call
+   `download_attachments`, then run the Document Parser over `download_dir` to extract text.
+6. **Forward an attachment**: `download_attachments` to get the file path, then `send`
+   with `"attachments": ["{{msMail.attachments[0].path}}"]`.
 
 ## Shared mailboxes
 

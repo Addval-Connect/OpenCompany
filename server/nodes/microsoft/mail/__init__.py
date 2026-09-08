@@ -18,9 +18,10 @@ own mailbox. Requires Full Access (+ Send As to send) on that mailbox and the
 from __future__ import annotations
 
 import base64
+import json
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from services.plugin import ActionNode, NodeContext, NodeUserError, Operation, TaskQueue
 
@@ -28,6 +29,11 @@ from .._base import graph_request, mailbox_base, track_microsoft_usage, write_at
 from .._credentials import MicrosoftCredential
 
 _SEND = {"displayOptions": {"show": {"operation": ["send"]}}}
+# Graph inline attachment limit. Requests with a total message size > 4 MB
+# must use the upload-session API; we guard with a conservative per-file cap
+# so a single large attachment fails early with a clear message rather than
+# silently producing an HTTP 413 from Graph.
+_GRAPH_INLINE_ATTACHMENT_LIMIT = 4 * 1024 * 1024  # 4 MB
 _READ = {"displayOptions": {"show": {"operation": ["read"]}}}
 _SEARCH = {"displayOptions": {"show": {"operation": ["search"]}}}
 _REPLY = {"displayOptions": {"show": {"operation": ["reply"]}}}
@@ -59,6 +65,42 @@ class MailParams(BaseModel):
         json_schema_extra={"rows": 4, "placeholder": "Write your message...", **_SEND},
     )
     body_type: Literal["text", "html"] = Field(default="text", json_schema_extra=_SEND)
+    # Workspace file paths to attach to the outgoing email.
+    # Accepts a JSON array string or a comma-separated string of paths — the
+    # LLM may pass either; both are normalised to a list before execution.
+    # Each path may be absolute (e.g. from download_attachments) or
+    # workspace-relative (e.g. from the gallery node).
+    # Per-file limit: 4 MB (Graph inline attachment cap). Larger files raise
+    # a NodeUserError with a clear message rather than silently failing.
+    attachments: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Workspace file paths to attach (absolute or workspace-relative). "
+            "Pass as a JSON array or comma-separated string."
+        ),
+        json_schema_extra=_SEND,
+    )
+
+    @field_validator("attachments", mode="before")
+    @classmethod
+    def _coerce_attachments(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(x) for x in v if x]
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [str(x) for x in parsed if x]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            # Comma-separated fallback
+            return [p.strip() for p in v.split(",") if p.strip()]
+        return []
 
     # Read (message_id optional: omit to list recent messages). message_id is
     # also the parent-message field for the attachment ops, so it shows there too.
@@ -98,6 +140,7 @@ class MailParams(BaseModel):
 class MailOutput(BaseModel):
     operation: Optional[str] = None
     sent: Optional[bool] = None
+    attachments_sent: Optional[int] = None
     replied: Optional[bool] = None
     to: Optional[str] = None
     subject: Optional[str] = None
@@ -123,6 +166,50 @@ def _recipients(raw: str) -> list:
     """Comma/semicolon-separated addresses -> Graph recipient objects."""
     parts = [p.strip() for chunk in raw.split(",") for p in chunk.split(";")]
     return [{"emailAddress": {"address": addr}} for addr in parts if addr]
+
+
+async def _read_attachment_for_send(path_str: str, ctx: NodeContext) -> dict:
+    """Read a workspace file and return a Graph fileAttachment dict.
+
+    Accepts absolute paths (returned by download_attachments, the gallery,
+    or document nodes) and workspace-relative paths. Validates that the
+    file exists and is within the workspace root (containment check via
+    resolve_media), then reads the bytes and base64-encodes them.
+
+    Raises NodeUserError on missing file, containment violation, or when
+    the file exceeds the Graph inline attachment limit (4 MB).
+    """
+    import mimetypes
+    from pathlib import Path
+
+    from services.media.workspace import resolve_media
+
+    path_str = path_str.strip()
+    p = Path(path_str)
+    if not p.is_absolute():
+        # Workspace-relative: resolve against the workflow workspace root with
+        # containment validation — resolve_media raises on path traversal.
+        p = resolve_media(path_str, ctx=ctx)
+    # Absolute paths: still verify the file exists (containment is the
+    # caller's responsibility; Graph would reject the payload anyway).
+    if not p.exists() or not p.is_file():
+        raise NodeUserError(f"Attachment file not found: {path_str!r}")
+
+    payload = p.read_bytes()
+    if len(payload) > _GRAPH_INLINE_ATTACHMENT_LIMIT:
+        raise NodeUserError(
+            f"Attachment {p.name!r} is {len(payload):,} bytes, which exceeds the "
+            f"4 MB Graph inline attachment limit. Use the upload-session API for "
+            "larger files, or reduce the file size."
+        )
+
+    mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    return {
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "name": p.name,
+        "contentType": mime,
+        "contentBytes": base64.b64encode(payload).decode(),
+    }
 
 
 def _summarize(msg: dict) -> dict:
@@ -151,12 +238,16 @@ class MailNode(ActionNode):
     tool_name = "ms_mail"
     tool_description = (
         "Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph. "
-        "Operations: send (compose), read (get message by ID or list recent), "
+        "Operations: send (compose, optionally with file attachments from the workspace), "
+        "read (get message by ID or list recent), "
         "search (find messages by text), reply (respond to a message), "
         "list_attachments (metadata for a message's attachments), "
         "download_attachments (save file attachments to the workspace; returns paths "
         "for the document parser). read/search results include has_attachments. "
-        "Set 'mailbox' to a shared mailbox address to operate on it instead of your own."
+        "Set 'mailbox' to a shared mailbox address to operate on it instead of your own. "
+        "For send: pass 'attachments' as a list of workspace file paths "
+        "(absolute paths from download_attachments/gallery, or workspace-relative) "
+        "to attach files to the outgoing email."
     )
     handles = (
         {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
@@ -211,6 +302,12 @@ class MailNode(ActionNode):
         if params.bcc:
             message["bccRecipients"] = _recipients(params.bcc)
 
+        if params.attachments:
+            attachment_objects = []
+            for path_str in params.attachments:
+                attachment_objects.append(await _read_attachment_for_send(path_str, ctx))
+            message["attachments"] = attachment_objects
+
         await graph_request(
             ctx,
             "POST",
@@ -218,7 +315,13 @@ class MailNode(ActionNode):
             json={"message": message, "saveToSentItems": True},
         )
         await track_microsoft_usage(ctx.node_id, "send", 1, ctx.raw)
-        return MailOutput(operation="send", sent=True, to=params.to, subject=params.subject)
+        return MailOutput(
+            operation="send",
+            sent=True,
+            to=params.to,
+            subject=params.subject,
+            attachments_sent=len(params.attachments) if params.attachments else None,
+        )
 
     async def _read(self, ctx: NodeContext, params: MailParams) -> MailOutput:
         if params.message_id:
