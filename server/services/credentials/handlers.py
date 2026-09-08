@@ -133,6 +133,12 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
     store = get_idempotency_store("credentials")
     provider = data["provider"].lower()
 
+    # Credential owner is the authenticated WS principal, not the client
+    # payload.  Auth disabled → "owner" (OWNER_PRINCIPAL_ID = DEFAULT_CREDENTIAL_CUSTOMER_ID).
+    credential_customer_id = str(
+        getattr(getattr(websocket, "state", None), "user_id", None) or "owner"
+    )
+
     async def _do_save() -> Dict[str, Any]:
         auth_service = container.auth_service()
         broadcaster = get_status_broadcaster()
@@ -141,6 +147,7 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
             api_key=data["api_key"].strip(),
             models=data.get("models", []),
             session_id=data.get("session_id", "default"),
+            credential_customer_id=credential_customer_id,
         )
         await broadcaster.broadcast_credential_event(
             "credential.api_key.saved",

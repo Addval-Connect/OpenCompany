@@ -181,6 +181,8 @@ async def broadcast_whatsapp_status(
 async def broadcast_whatsapp_message(
     direction: Literal["sent", "received"],
     params: Mapping[str, Any],
+    *,
+    namespace: Optional[str] = None,
 ) -> None:
     """Emit a message event (sent or received).
 
@@ -216,6 +218,7 @@ async def broadcast_whatsapp_message(
         await emit(
             whatsapp_message_event("received", payload),
             wire_routing_key=_MESSAGE_RECEIVED_WIRE_KEY,
+            namespace=namespace,
         )
     else:
         # Outbound observation only — direct legacy raw broadcast.

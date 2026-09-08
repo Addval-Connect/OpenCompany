@@ -79,6 +79,31 @@ class AuthService:
         """Create hash for API key identification."""
         return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
+    @staticmethod
+    def _credential_prefix(customer_id: str) -> str:
+        """Tenant prefix for credential storage keys.
+
+        Empty for the default credential customer so every existing key
+        stays byte-identical — no data migration needed.  Non-default
+        customers get a deterministic prefix that scopes their keys to
+        their account even though they share the same ``credentials.db``
+        file and the same Fernet key (isolation is by access predicate).
+
+        The prefix format ``"t:{customer_id}:"`` is chosen to:
+        - Be prefix-queryable in SQLite (LIKE filter on the indexed
+          ``session_id`` column).
+        - Be clearly distinguishable from legacy ``"default"`` / Discord
+          ``"discord:<app_id>"`` session_ids — none of those start with
+          ``"t:"``.
+        - Remain server-derived (computed here, never taken from client
+          payloads) so a compromised WS client cannot scope-escape.
+        """
+        from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
+
+        if customer_id == DEFAULT_CREDENTIAL_CUSTOMER_ID:
+            return ""
+        return f"t:{customer_id}:"
+
     def _bump_catalogue_version(self) -> None:
         """Notify the credential registry that a credential has changed.
 
@@ -109,6 +134,7 @@ class AuthService:
         models: List[str],
         session_id: str = "default",
         model_params: Optional[Dict[str, Dict[str, Any]]] = None,
+        credential_customer_id: str = "owner",
     ) -> bool:
         """Store API key with models in encrypted credentials database.
 
@@ -116,27 +142,30 @@ class AuthService:
             provider: API provider name (e.g., 'openai', 'anthropic')
             api_key: The API key to store (will be encrypted)
             models: List of available models for this key
-            session_id: Session identifier for multi-user support
+            session_id: Session identifier for multi-account support
+                (e.g. 'default', 'discord:<app_id>').  NOT the tenant axis.
             model_params: Optional per-model parameters (context_length etc.)
-                — used by local providers (Ollama, LM Studio) where the
-                context window depends on what the user has loaded.
-                Forwarded straight to the credentials DB so
-                ``model_registry`` can read real values at runtime.
+            credential_customer_id: The account that owns this credential.
+                Defaults to the server constant DEFAULT_CREDENTIAL_CUSTOMER_ID
+                so existing single-tenant call sites are unaffected.
+                Multi-tenant callers pass ``str(User.id)`` / the WS principal.
 
         Returns:
             True if stored successfully, False otherwise
         """
         try:
-            cache_key = f"{session_id}_{provider}"
+            prefix = self._credential_prefix(credential_customer_id)
+            storage_session_id = f"{prefix}{session_id}"
+            cache_key = f"{storage_session_id}_{provider}"
 
-            logger.info(f"Storing API key for provider: {provider}, session: {session_id}")
+            logger.info(f"Storing API key for provider: {provider}, session: {storage_session_id}")
 
             # 1. DB write first (canonical source).
             await self.credentials_db.save_api_key(
                 provider=provider,
                 api_key=api_key,
                 models=models,
-                session_id=session_id,
+                session_id=storage_session_id,
                 model_params=model_params,
             )
 
@@ -177,20 +206,26 @@ class AuthService:
             logger.error("Failed to get model_params", provider=provider, error=str(e))
             return {}
 
-    async def get_api_key(self, provider: str, session_id: str = "default") -> Optional[str]:
+    async def get_api_key(
+        self,
+        provider: str,
+        session_id: str = "default",
+        credential_customer_id: str = "owner",
+    ) -> Optional[str]:
         """Get decrypted API key.
 
         Checks memory cache first, then falls back to encrypted database.
 
         Args:
             provider: API provider name
-            session_id: Session identifier
-
-        Returns:
-            Decrypted API key or None if not found/expired
+            session_id: Session identifier (multi-account axis)
+            credential_customer_id: Owning account — used to compute the
+                tenant prefix so only that account's key is returned.
         """
         try:
-            cache_key = f"{session_id}_{provider}"
+            prefix = self._credential_prefix(credential_customer_id)
+            storage_session_id = f"{prefix}{session_id}"
+            cache_key = f"{storage_session_id}_{provider}"
 
             # Check memory cache first (fastest, most secure).
             entry = self._api_key_cache.get(cache_key)
@@ -200,9 +235,9 @@ class AuthService:
             # Fallback to encrypted database. The lazy fetch also pulls
             # the models list so we populate the cache entry fully — no
             # second roundtrip on the next get_stored_models() call.
-            api_key = await self.credentials_db.get_api_key(provider, session_id)
+            api_key = await self.credentials_db.get_api_key(provider, storage_session_id)
             if api_key:
-                models = await self.credentials_db.get_api_key_models(provider, session_id) or []
+                models = await self.credentials_db.get_api_key_models(provider, storage_session_id) or []
                 self._api_key_cache[cache_key] = ApiKeyCacheEntry(
                     key=api_key,
                     models=models,
@@ -215,26 +250,40 @@ class AuthService:
             logger.error("Failed to get API key", provider=provider, error=str(e))
             return None
 
-    async def list_key_scopes(self, provider: str) -> List[str]:
+    async def list_key_scopes(
+        self, provider: str, *, credential_customer_id: str = "owner"
+    ) -> List[str]:
         """List every session_id holding a key for one provider.
 
         Reads the database directly rather than the cache: the cache is
         populated lazily per lookup, so it only knows the scopes that
         happen to have been read already.
 
+        The tenant prefix is stripped from results so callers always receive
+        the raw session_id (e.g. ``"discord:<app_id>"``) regardless of whether
+        the credential is stored under a tenant prefix.
+
         Args:
             provider: API provider name
+            credential_customer_id: Owning account — limits results to that
+                account's keys only.
 
         Returns:
-            Sorted list of session identifiers, empty on failure
+            Sorted list of session identifiers (prefix-stripped), empty on failure
         """
         try:
-            return await self.credentials_db.list_key_scopes(provider)
+            prefix = self._credential_prefix(credential_customer_id)
+            raw_scopes = await self.credentials_db.list_key_scopes(provider, prefix=prefix)
+            if prefix:
+                return [s[len(prefix):] for s in raw_scopes if s.startswith(prefix)]
+            return raw_scopes
         except Exception as e:
             logger.error("Failed to list key scopes", provider=provider, error=str(e))
             return []
 
-    async def get_stored_models(self, provider: str, session_id: str = "default") -> List[str]:
+    async def get_stored_models(
+        self, provider: str, session_id: str = "default", credential_customer_id: str = "owner"
+    ) -> List[str]:
         """Get stored models for provider.
 
         Args:
@@ -245,7 +294,9 @@ class AuthService:
             List of model names or empty list
         """
         try:
-            cache_key = f"{session_id}_{provider}"
+            prefix = self._credential_prefix(credential_customer_id)
+            storage_session_id = f"{prefix}{session_id}"
+            cache_key = f"{storage_session_id}_{provider}"
 
             # Check memory cache first
             entry = self._api_key_cache.get(cache_key)
@@ -255,9 +306,9 @@ class AuthService:
             # Fallback to encrypted database. Pull the key alongside so
             # the cache entry is populated fully — symmetric with
             # get_api_key()'s lazy-populate path.
-            models = await self.credentials_db.get_api_key_models(provider, session_id)
+            models = await self.credentials_db.get_api_key_models(provider, storage_session_id)
             if models:
-                api_key = await self.credentials_db.get_api_key(provider, session_id)
+                api_key = await self.credentials_db.get_api_key(provider, storage_session_id)
                 if api_key:
                     self._api_key_cache[cache_key] = ApiKeyCacheEntry(
                         key=api_key,
@@ -271,21 +322,17 @@ class AuthService:
             logger.error("Failed to get stored models", provider=provider, error=str(e))
             return []
 
-    async def remove_api_key(self, provider: str, session_id: str = "default") -> bool:
-        """Remove API key from storage and cache.
-
-        Args:
-            provider: API provider name
-            session_id: Session identifier
-
-        Returns:
-            True if removed successfully
-        """
+    async def remove_api_key(
+        self, provider: str, session_id: str = "default", credential_customer_id: str = "owner"
+    ) -> bool:
+        """Remove API key from storage and cache."""
         try:
-            cache_key = f"{session_id}_{provider}"
+            prefix = self._credential_prefix(credential_customer_id)
+            storage_session_id = f"{prefix}{session_id}"
+            cache_key = f"{storage_session_id}_{provider}"
 
             # 1. DB delete first (canonical source).
-            await self.credentials_db.delete_api_key(provider, session_id)
+            await self.credentials_db.delete_api_key(provider, storage_session_id)
 
             # 2. Cache evict only after DB succeeds. One pop, not two.
             self._api_key_cache.pop(cache_key, None)

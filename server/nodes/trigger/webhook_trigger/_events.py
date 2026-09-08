@@ -14,7 +14,7 @@ so the deployment manager skips ``setup_event_trigger`` and the legacy
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from services.events.envelope import WorkflowEvent
 
@@ -38,13 +38,24 @@ def webhook_received(webhook_data: Mapping[str, Any]) -> WorkflowEvent:
     )
 
 
-async def broadcast_webhook_received(webhook_data: Mapping[str, Any]) -> None:
-    """Broadcast an incoming webhook via the canary CloudEvents path."""
+async def broadcast_webhook_received(
+    webhook_data: Mapping[str, Any],
+    *,
+    namespace: Optional[str] = None,
+) -> None:
+    """Broadcast an incoming webhook via the canary CloudEvents path.
+
+    ``namespace`` is the Temporal namespace for the consuming workflows.
+    Webhook triggers are currently global (no per-tenant URL path), so
+    ``None`` defaults to the server namespace.  A future path-based routing
+    layer will derive the namespace from the URL prefix.
+    """
     from services.events.dispatch import emit
 
     await emit(
         webhook_received(dict(webhook_data)),
         wire_routing_key=_WIRE_ROUTING_KEY,
+        namespace=namespace,
     )
 
 

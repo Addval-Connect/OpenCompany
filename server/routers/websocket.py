@@ -156,17 +156,13 @@ async def handle_get_all_node_parameters(data: Dict[str, Any], websocket: WebSoc
         workflow_id = str(data.get("workflow_id") or "")
         if not workflow_id:
             raise ValueError("workflow_id is required for export")
-        workflow = await database.get_workflow(workflow_id)
+        from services.authz.ws_surface import execution_principal as _ep
+
+        authenticated_owner = _ep({}, websocket)
+        workflow = await database.get_workflow(workflow_id, owner_user_id=authenticated_owner)
         if workflow is None:
             raise ValueError("Workflow not found")
         graph = workflow.data if isinstance(workflow.data, dict) else {}
-        authenticated_owner = str(
-            getattr(getattr(websocket, "state", None), "user_id", None)
-            or "owner"
-        )
-        stored_owner = str(graph.get("owner_id") or "")
-        if stored_owner and stored_owner != authenticated_owner:
-            raise ValueError("Workflow access denied")
         workflow_node_ids = {
             str(node.get("id"))
             for node in graph.get("nodes", [])

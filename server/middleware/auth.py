@@ -54,8 +54,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Check if auth is disabled (VITE_AUTH_ENABLED=false)
         if settings.vite_auth_enabled and settings.vite_auth_enabled.lower() == "false":
-            # Auth disabled - set anonymous user and allow request
-            request.state.user_id = 0
+            # Auth disabled - set the canonical owner principal so every
+            # downstream call that reads request.state.user_id (ws_surface
+            # execution_principal, the tenant namespace resolver, DB ownership
+            # predicates) sees the same string that OWNER_PRINCIPAL_ID resolves
+            # to, rather than the integer 0 which str() turns into "0".
+            from constants import OWNER_PRINCIPAL_ID
+
+            request.state.user_id = OWNER_PRINCIPAL_ID
             request.state.user_email = "anonymous"
             request.state.is_owner = True
             return await call_next(request)

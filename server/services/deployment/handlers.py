@@ -556,6 +556,35 @@ async def _start_controller(control, *, use_existing: bool = False) -> Optional[
     return getattr(handle, "result_run_id", None) or getattr(handle, "first_execution_run_id", None)
 
 
+def _client_for_namespace(namespace: str):
+    """Return the Temporal client wrapper for ``namespace``.
+
+    When ``MULTI_TENANT_NAMESPACES=false`` (the default) the container
+    default is returned unconditionally — zero overhead for single-tenant
+    deployments.
+
+    When the flag is on, the per-namespace client registry is consulted.
+    The registry holds one connected :class:`TemporalClientWrapper` per
+    tenant namespace, populated by the lifecycle bootstrapper at startup.
+    ``get_or_fallback`` logs a warning and returns the default if the
+    namespace isn't registered yet (fail-open, consistent with the
+    two-phase provisioning model).
+    """
+    from core.container import container
+
+    settings = container.settings()
+    if not getattr(settings, "multi_tenant_namespaces", False):
+        return container.temporal_client()
+
+    default_ns = getattr(settings, "temporal_namespace", "default")
+    if not namespace or namespace == default_ns:
+        return container.temporal_client()
+
+    from services.temporal.client_registry import get_or_fallback
+
+    return get_or_fallback(namespace)
+
+
 def _controller_handle(control):
     """Handle addressed by workflow id only — never pinned to a run id.
 
@@ -567,9 +596,8 @@ def _controller_handle(control):
     (``workflow-control-<wf>-g<N>``), so unpinned addressing cannot
     reach a different generation's controller.
     """
-    from core.container import container
-
-    wrapper = container.temporal_client()
+    namespace = getattr(control, "temporal_namespace", "default") or "default"
+    wrapper = _client_for_namespace(namespace)
     if wrapper is None or wrapper.client is None or not control.controller_workflow_id:
         return None
     return wrapper.client.get_workflow_handle(control.controller_workflow_id)
@@ -1269,28 +1297,48 @@ async def reconcile_active_controls_on_boot() -> int:
         clean_shutdown = True
     recovery_pause = not clean_shutdown and _crash_recovery_policy() == "pause"
     controls = await database.list_active_workflow_controls()
+
+    # Group controls by temporal_namespace so multi-tenant reconciliation uses
+    # the right client for each group.  With MULTI_TENANT_NAMESPACES=false
+    # (the default) every row lands in the same group and the behaviour is
+    # identical to pre-Fase-2.  _client_for_namespace is the Fase-2 stub;
+    # Fase 3 replaces it with the actual per-namespace registry.
+    from collections import defaultdict
+
+    by_namespace: dict = defaultdict(list)
+    for c in controls:
+        ns = getattr(c, "temporal_namespace", None) or "default"
+        by_namespace[ns].append(c)
+
     processed = 0
-    for control in controls:
-        try:
-            control, controller_status = await _reconcile_control(service, control)
-            if control.status == "starting":
-                control = await _converge_interrupted_start(
-                    service, control, controller_status
-                )
-            if control.status in {"running", "paused"}:
-                await _rearm_generation(control)
-            if recovery_pause and control.status == "running":
-                control = await _pause_for_recovery(
-                    service, control, reason="unclean_shutdown"
-                )
-            processed += 1
-        except Exception as exc:  # noqa: BLE001 — per-row isolation
-            logger.warning(
-                "Boot reconcile failed for workflow control",
-                workflow_id=control.workflow_id,
-                status=control.status,
-                error=str(exc),
+    for namespace, ns_controls in sorted(by_namespace.items()):
+        if len(by_namespace) > 1:
+            logger.info(
+                "Boot reconcile: processing controls for namespace",
+                namespace=namespace,
+                count=len(ns_controls),
             )
+        for control in ns_controls:
+            try:
+                control, controller_status = await _reconcile_control(service, control)
+                if control.status == "starting":
+                    control = await _converge_interrupted_start(
+                        service, control, controller_status
+                    )
+                if control.status in {"running", "paused"}:
+                    await _rearm_generation(control)
+                if recovery_pause and control.status == "running":
+                    control = await _pause_for_recovery(
+                        service, control, reason="unclean_shutdown"
+                    )
+                processed += 1
+            except Exception as exc:  # noqa: BLE001 — per-row isolation
+                logger.warning(
+                    "Boot reconcile failed for workflow control",
+                    workflow_id=control.workflow_id,
+                    status=control.status,
+                    error=str(exc),
+                )
     return processed
 
 
@@ -1577,10 +1625,17 @@ async def handle_get_workflow_control_status(data: Dict[str, Any], websocket: We
 @ws_handler("workflow_id")
 async def handle_start_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
     """Create generation one and retain deploy_workflow wire compatibility."""
+    from constants import OWNER_PRINCIPAL_ID
+    from services.tenancy import resolve_tenant_namespace
+
     workflow_id = data["workflow_id"]
     owner_id = str(
         getattr(getattr(websocket, "state", None), "user_id", None)
-        or "owner"
+        or OWNER_PRINCIPAL_ID
+    )
+    from core.container import container as _c
+    tenant_namespace = await resolve_tenant_namespace(
+        owner_id, database=_c.database(), settings=_c.settings()
     )
     key = data.get("idempotency_key") or f"start:{workflow_id}:{uuid.uuid4().hex}"
     service = _control_service()
@@ -1665,6 +1720,7 @@ async def handle_start_workflow(data: Dict[str, Any], websocket: WebSocket) -> D
         idempotency_key=key,
         graph_version=normalization.graph_version,
         owner_id=owner_id,
+        temporal_namespace=tenant_namespace,
     )
     if not created:
         control, controller_status = await _reconcile_control(service, control)

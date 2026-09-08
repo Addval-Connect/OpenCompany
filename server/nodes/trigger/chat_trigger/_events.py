@@ -52,13 +52,21 @@ async def dispatch_chat_message_received(
     event_data: Mapping[str, Any],
     *,
     workflow_id: Optional[str] = None,
+    namespace: Optional[str] = None,
 ) -> None:
-    """Dispatch an incoming chat message via the canary CloudEvents path."""
+    """Dispatch an incoming chat message via the canary CloudEvents path.
+
+    Chat is workflow-scoped (``workflow_id`` is always set) so the Visibility
+    query is already narrow to one workflow's consumers.  ``namespace`` is
+    provided structurally for completeness; the scoped workflow must live in
+    its owner's namespace for the signal to reach it.
+    """
     from services.events.dispatch import emit
 
     await emit(
         chat_message_received(dict(event_data), workflow_id=workflow_id),
         wire_routing_key=_WIRE_ROUTING_KEY,
+        namespace=namespace,
     )
 
 
