@@ -50,7 +50,7 @@ Terraform. What the scripts assume:
 | Size | **t4g.medium (2 vCPU / 4 GB, Graviton)** — see [Sizing](#sizing) for the measurements behind that, and for when to pick x86 instead |
 | Disk | **30 GB gp3.** 20 GB boots and runs, but the venv is ~570 MB, the `temporal` CLI is 171 MB extracted, supervisor logs cap at 200 MB, and `workspaces/` grows with use |
 | Security group | inbound **80** and **443** from anywhere; **22** from your address or via Instance Connect's [service prefix list](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-connect-setup.html) |
-| SSH | no key pair needed at launch — EC2 Instance Connect pushes an ephemeral key per command |
+| SSH | no key pair needed at launch — EC2 Instance Connect pushes an ephemeral key per command. See [A plain SSH key for ops](#a-plain-ssh-key-for-ops) if you also want `ssh -i` to work without an AWS session |
 | IAM | no instance profile needed — every provider credential, Bedrock's included, is a key stored in the app |
 
 Launch it in the region where **Bedrock model access is enabled for the account**,
@@ -519,6 +519,62 @@ sudo tail -f /var/log/opencompany/app.log
 sudo tail -f /var/log/opencompany/error.log
 curl -fsS http://127.0.0.1:<port>/health          # on the host
 ```
+
+### A plain SSH key for ops
+
+Every script here reaches the host through EC2 Instance Connect, which needs a
+valid AWS session and the AWS CLI on the machine you are sitting at. That is the
+right default — nothing long-lived to leak — but it is the wrong tool from a
+laptop without credentials, a jump box, or a GUI client.
+
+Two things to know before reaching for the instance's `.pem`: an instance launched
+this way **has no key pair** (`KeyName` is null), and AWS only accepts `KeyName` at
+launch, so **a key pair cannot be attached to a running instance**. There is no
+`.pem` to download, and creating one means replacing the instance. Note also that
+`/home/ubuntu/.ssh/authorized_keys` starts **empty** — Instance Connect serves its
+ephemeral keys through sshd's `AuthorizedKeysCommand`, not that file — so anything
+you add there is the host's only persistent credential.
+
+Generate a key and install it yourself instead. RSA in traditional PEM rather than
+ed25519, because that is what every GUI client will load:
+
+```bash
+ssh-keygen -t rsa -b 4096 -m PEM -N '' -C "opencompany-ops" \
+    -f ~/.ssh/opencompany-ops.pem
+chmod 400 ~/.ssh/opencompany-ops.pem
+mv ~/.ssh/opencompany-ops.pem.pub ~/.ssh/opencompany-ops.pub
+
+# Installed over Instance Connect, which is still how you bootstrap trust.
+# grep -qF first: appending unconditionally duplicates the line on every re-run.
+PUBKEY=$(cat ~/.ssh/opencompany-ops.pub)
+./deploy/ec2/ssh.sh "
+  sudo grep -qF '$PUBKEY' /home/ubuntu/.ssh/authorized_keys \
+    || echo '$PUBKEY' | sudo tee -a /home/ubuntu/.ssh/authorized_keys >/dev/null
+  sudo chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+  sudo chmod 600 /home/ubuntu/.ssh/authorized_keys"
+
+ssh -i ~/.ssh/opencompany-ops.pem -o IdentitiesOnly=yes ubuntu@<host>
+```
+
+`-N ''` leaves it passphrase-less, which is what an AWS-issued `.pem` is too. Add
+one with `ssh-keygen -p -f ~/.ssh/opencompany-ops.pem` — safe for interactive ops,
+but do **not** point `OC_SSH_KEY` at a passphrase-protected key: the scripts derive
+its public half unattended with `ssh-keygen -y -P ''`, which cannot prompt.
+
+Keep it distinct from the deploy key (`OC_SSH_KEY`, ed25519 by default) so either
+can be revoked without breaking the other. It grants **passwordless sudo** as
+`ubuntu`, and the only thing standing in front of it is the security group's port
+22 rule — so keep that scoped to an address you control, never `0.0.0.0/0`. Revoke
+by deleting the line:
+
+```bash
+./deploy/ec2/ssh.sh "sudo sed -i '/opencompany-ops/d' /home/ubuntu/.ssh/authorized_keys"
+```
+
+Keep the key outside the repo anyway (`~/.ssh/` above). `.gitignore` does cover
+`**/*.pem` and `**/*.key`, but that protection is keyed on the *extension* — the
+same key saved as `opencompany-ops` or `ops-key.txt` is not ignored, and is one
+`git add -A` from being published.
 
 ### One log line that looks like a failure and is not
 
