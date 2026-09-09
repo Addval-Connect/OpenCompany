@@ -44,6 +44,8 @@ class _FakeDatabase:
         slug: str,
         data: Dict[str, Any],
         description: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+        **kwargs,
     ) -> bool:
         self._rows[workflow_id] = SimpleNamespace(
             id=workflow_id,

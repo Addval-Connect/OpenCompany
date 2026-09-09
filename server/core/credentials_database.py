@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, JSON
+from sqlalchemy import Column, JSON, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import Field, SQLModel, select
@@ -45,7 +45,9 @@ class EncryptedAPIKey(SQLModel, table=True):
 
     id: str = Field(primary_key=True, max_length=255)  # {session_id}_{provider}
     provider: str = Field(max_length=50, index=True)
-    session_id: str = Field(default="default", max_length=255)
+    # Indexed so the per-tenant LIKE prefix filter (session_id LIKE "t:42:%")
+    # that list_key_scopes uses stays fast even as credentials grow.
+    session_id: str = Field(default="default", max_length=255, index=True)
     key_encrypted: str = Field(max_length=2000)  # Fernet token
     key_hash: str = Field(max_length=64, index=True)  # SHA256[:16] for lookup
     models: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
@@ -131,6 +133,18 @@ class CredentialsDatabase:
         """
         async with self.engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
+            # Additive migration: index session_id for the per-tenant prefix
+            # filter (LIKE 't:42:%') introduced by Fase 6.  create_all cannot
+            # add indexes to existing tables, so we add it explicitly.
+            try:
+                await conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_encrypted_api_keys_session_id "
+                        "ON encrypted_api_keys(session_id)"
+                    )
+                )
+            except Exception:  # noqa: BLE001 — best-effort; table may not exist yet
+                pass
 
         # Get or create salt
         salt_hex = await self._get_metadata("encryption_salt")
@@ -335,24 +349,39 @@ class CredentialsDatabase:
             result = await session.execute(select(EncryptedAPIKey.provider).where(EncryptedAPIKey.session_id == session_id))
             return [row[0] for row in result.all()]
 
-    async def list_key_scopes(self, provider: str) -> List[str]:
-        """
-        List every session_id that has a key stored for one provider.
+    async def list_key_scopes(self, provider: str, prefix: str = "") -> List[str]:
+        """List every session_id that has a key stored for one provider.
 
         The inverse of :meth:`list_api_keys`, which walks the other axis of
         the ``{session_id}_{provider}`` key. Used by plugins that hold
         several accounts for the same provider and need to enumerate them.
 
+        When ``prefix`` is non-empty (a tenant namespace prefix of the form
+        ``"t:{customer_id}:"``) only session_ids belonging to that tenant
+        are returned. When ``prefix`` is empty, only the default-tenant
+        session_ids (those NOT starting with ``"t:"``) are returned so that
+        tenant-prefixed keys never bleed into single-tenant enumeration.
+
         Args:
             provider: Provider name
+            prefix: Tenant prefix computed by ``AuthService._credential_prefix``.
+                    Empty string for the default customer.
 
         Returns:
-            Sorted list of session identifiers
+            Sorted list of session identifiers (prefix NOT stripped; caller
+            is responsible for stripping if needed — ``AuthService.list_key_scopes``
+            does this).
         """
         async with self.get_session() as session:
-            result = await session.execute(
-                select(EncryptedAPIKey.session_id).where(EncryptedAPIKey.provider == provider).distinct()
+            stmt = select(EncryptedAPIKey.session_id).where(
+                EncryptedAPIKey.provider == provider
             )
+            if prefix:
+                stmt = stmt.where(EncryptedAPIKey.session_id.like(f"{prefix}%"))
+            else:
+                # Exclude tenant-prefixed entries from the default-customer view.
+                stmt = stmt.where(~EncryptedAPIKey.session_id.like("t:%"))
+            result = await session.execute(stmt.distinct())
             return sorted(row[0] for row in result.all())
 
     async def get_api_key_models(self, provider: str, session_id: str = "default") -> List[str]:

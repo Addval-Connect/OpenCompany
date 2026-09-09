@@ -47,6 +47,7 @@ def serialize_control(control: Optional[WorkflowControlExecution]) -> Dict[str, 
         "data_scope_id": control.data_scope_id or control.execution_id,
         "controller_workflow_id": control.controller_workflow_id,
         "controller_run_id": control.controller_run_id,
+        "temporal_namespace": getattr(control, "temporal_namespace", "default"),
         "state": state,
         "revision": control.revision,
         "can_start": state == "ready",
@@ -70,7 +71,7 @@ class WorkflowControlService:
     async def begin_generation(
         self, *, workflow_id: str, nodes: list[dict], edges: list[dict], session_id: str,
         idempotency_key: str, reset: bool = False, graph_version: int = 0,
-        owner_id: str = "owner",
+        owner_id: str = "owner", temporal_namespace: str = "default",
     ) -> tuple[WorkflowControlExecution, bool]:
         from services.workflow_sanitizer import sanitize_runtime_payload
 
@@ -109,6 +110,7 @@ class WorkflowControlService:
             # from an archived generation cannot pass CAS against a newer one
             # that happens to be at the same lifecycle step.
             revision=(latest.revision + 1) if latest else 0,
+            temporal_namespace=temporal_namespace,
         )
         try:
             return await self.database.create_workflow_control(control), True

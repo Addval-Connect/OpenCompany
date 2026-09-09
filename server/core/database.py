@@ -44,6 +44,7 @@ from models.database import (
     ProxyRoutingRule,
     WorkflowControlExecution,
     WorkflowContextArchiveOutbox,
+    TenantNamespace,
 )
 from models.agent_context import (  # noqa: F401 - registers SQLModel tables
     AgentConversation,
@@ -122,6 +123,8 @@ class Database:
             await self._migrate_agent_teams()
             await self._migrate_workflow_controls()
             await self._migrate_generation_scoped_runtime_data()
+            await self._migrate_tenant_namespaces()
+            await self._migrate_workflow_owner()
 
             logger.info("Database initialized successfully")
 
@@ -401,6 +404,10 @@ class Database:
                     "resource_manifest": "JSON DEFAULT '{}'",
                     "terminal_reason": "VARCHAR(2000)",
                     "completed_at": "DATETIME",
+                    # Which Temporal namespace this generation's controller
+                    # executes in.  Backfilled to the server's default
+                    # namespace so existing rows stay routable.
+                    "temporal_namespace": f"VARCHAR(255) NOT NULL DEFAULT '{self.settings.temporal_namespace}'",
                 }
                 for column, definition in additions.items():
                     if column not in columns:
@@ -408,6 +415,7 @@ class Database:
                 await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_control_generation ON workflow_control_executions(workflow_id, generation)"))
                 await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_control_idempotency ON workflow_control_executions(workflow_id, idempotency_key)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_workflow_control_data_scope_id ON workflow_control_executions(data_scope_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_workflow_control_temporal_namespace ON workflow_control_executions(temporal_namespace)"))
                 # Preview releases already have durable generations but no
                 # explicit runtime-data namespace. Their execution identity is
                 # the only safe deterministic scope key.
@@ -452,6 +460,92 @@ class Database:
                     ))
         except Exception as exc:
             logger.warning(f"Generation runtime-data migration check failed: {exc}")
+
+    async def _migrate_tenant_namespaces(self):
+        """Create the tenant-namespace mapping and seed the owner row.
+
+        ``create_all`` already builds the table on a fresh DB; this handles
+        upgrades (additive columns) and the one row that must exist for the
+        mapping to be a total function: the owner principal pointing at
+        ``TEMPORAL_NAMESPACE``. Seeding it means an operator can read the
+        current namespace out of the same table they write tenant rows into,
+        instead of half the answer living in the env file.
+
+        ``INSERT OR IGNORE`` — never overwrite. An operator who has moved the
+        owner to a different namespace must not have it reverted on every boot.
+        """
+        try:
+            from constants import OWNER_PRINCIPAL_ID
+
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA table_info(tenant_namespaces)"))
+                columns = {row[1] for row in result.fetchall()}
+                if not columns:
+                    # create_all did not run (unexpected) — nothing to migrate.
+                    return
+                additions = {
+                    "status": "VARCHAR(32) DEFAULT 'provisioning'",
+                    "created_at": "DATETIME",
+                    "updated_at": "DATETIME",
+                }
+                for column, definition in additions.items():
+                    if column not in columns:
+                        await conn.execute(text(f"ALTER TABLE tenant_namespaces ADD COLUMN {column} {definition}"))
+                await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tenant_namespaces_namespace ON tenant_namespaces(namespace)"))
+                await conn.execute(
+                    text(
+                        "INSERT OR IGNORE INTO tenant_namespaces "
+                        "(user_id, namespace, status, created_at, updated_at) "
+                        "VALUES (:user_id, :namespace, 'ready', :now, :now)"
+                    ),
+                    {
+                        "user_id": OWNER_PRINCIPAL_ID,
+                        "namespace": self.settings.temporal_namespace,
+                        "now": datetime.now(timezone.utc),
+                    },
+                )
+        except Exception as exc:
+            logger.warning(f"Tenant-namespace migration check failed: {exc}")
+
+    async def _migrate_workflow_owner(self):
+        """Add and backfill the per-workflow ownership column.
+
+        The column backs two distinct access-control goals:
+
+        * ``get_all_workflows(owner_user_id=...)`` returns only the caller's
+          workflows — the primary isolation gate.
+        * ``get_workflow`` / ``delete_workflow`` / ``rename_workflow`` accept
+          an optional owner predicate so a handler can never act on a workflow
+          that was fetched without the ownership check.
+
+        The SQL DEFAULT and the backfill UPDATE both land on ``OWNER_PRINCIPAL_ID``
+        ("owner"), which is what the auth middleware now writes to
+        ``request.state.user_id`` for unauthenticated (VITE_AUTH_ENABLED=false)
+        sessions, so the ownership checks in the four WS handlers continue to
+        match on a single-tenant deployment without any data migration of the
+        workflow graph JSON.
+        """
+        try:
+            from constants import OWNER_PRINCIPAL_ID
+
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA table_info(workflows)"))
+                cols = {row[1] for row in result.fetchall()}
+                if "owner_user_id" not in cols:
+                    await conn.execute(text(
+                        f"ALTER TABLE workflows ADD COLUMN owner_user_id VARCHAR(255)"
+                        f" NOT NULL DEFAULT '{OWNER_PRINCIPAL_ID}'"
+                    ))
+                    # Backfill any NULL that slipped through (should be none given
+                    # the SQL DEFAULT, but belt-and-suspenders).
+                    await conn.execute(text(
+                        f"UPDATE workflows SET owner_user_id = :pid WHERE owner_user_id IS NULL OR owner_user_id = ''"
+                    ), {"pid": OWNER_PRINCIPAL_ID})
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_workflows_owner_user_id ON workflows(owner_user_id)"
+                ))
+        except Exception as exc:
+            logger.warning(f"Workflow-owner migration check failed: {exc}")
 
     async def run_runtime_mutation(
         self,
@@ -693,6 +787,7 @@ class Database:
         data: Dict[str, Any],
         description: Optional[str] = None,
         context_id_aliases: Optional[Dict[str, str]] = None,
+        owner_user_id: Optional[str] = None,
     ) -> bool:
         """Save or update workflow.
 
@@ -717,8 +812,20 @@ class Database:
                     existing.slug = slug
                     existing.description = description
                     existing.data = data
+                    # Owner is set on creation and never changed on update —
+                    # a rename must not be usable to re-attribute a workflow.
+                    # Passing owner_user_id on an update is a no-op.
                 else:
-                    existing = Workflow(id=workflow_id, name=name, slug=slug, description=description, data=data)
+                    from constants import OWNER_PRINCIPAL_ID
+                    effective_owner = owner_user_id or OWNER_PRINCIPAL_ID
+                    existing = Workflow(
+                        id=workflow_id,
+                        name=name,
+                        slug=slug,
+                        description=description,
+                        data=data,
+                        owner_user_id=effective_owner,
+                    )
                     session.add(existing)
 
                 aliases = context_id_aliases or {}
@@ -746,11 +853,21 @@ class Database:
             logger.error("Failed to save workflow", workflow_id=workflow_id, error=str(e))
             return False
 
-    async def get_workflow(self, workflow_id: str) -> Optional[Workflow]:
-        """Get workflow by ID."""
+    async def get_workflow(
+        self, workflow_id: str, owner_user_id: Optional[str] = None
+    ) -> Optional[Workflow]:
+        """Get workflow by ID.
+
+        When ``owner_user_id`` is provided, the workflow is returned only if
+        its ``owner_user_id`` column matches — callers that know the principal
+        (WS handlers, HTTP routes) should always pass it so an ID-guessing
+        attack returns the same "not found" as a real miss.
+        """
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
+                if owner_user_id is not None:
+                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalar_one_or_none()
 
@@ -758,11 +875,20 @@ class Database:
             logger.error("Failed to get workflow", workflow_id=workflow_id, error=str(e))
             return None
 
-    async def get_all_workflows(self) -> List[Workflow]:
-        """Get all workflows."""
+    async def get_all_workflows(self, owner_user_id: Optional[str] = None) -> List[Workflow]:
+        """Get workflows, optionally filtered to one owner.
+
+        Pass ``owner_user_id`` to return only that principal's workflows.
+        Callers that know the principal (WS ``get_all_workflows`` handler,
+        REST database router) must always pass it; internal system calls that
+        genuinely need the full list (boot-time reconciliation, example loader)
+        omit it.
+        """
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).order_by(Workflow.updated_at.desc())
+                if owner_user_id is not None:
+                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalars().all()
 
@@ -787,7 +913,13 @@ class Database:
             logger.error("Failed to list workflow slugs", error=str(e))
             return []
 
-    async def rename_workflow(self, workflow_id: str, new_name: str, new_slug: str) -> bool:
+    async def rename_workflow(
+        self,
+        workflow_id: str,
+        new_name: str,
+        new_slug: str,
+        owner_user_id: Optional[str] = None,
+    ) -> bool:
         """Atomically update display name + slug. The storage PK never moves.
 
         Cross-table FK references and retained Temporal history may still key
@@ -795,10 +927,15 @@ class Database:
         needed. The unique constraint on ``slug`` is the collision
         guard; the caller must pre-allocate a free slug via
         :func:`services.workflow_naming.next_available_slug`.
+
+        When ``owner_user_id`` is supplied, the rename is silently rejected
+        (returns ``False``) if the workflow belongs to a different principal.
         """
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
+                if owner_user_id is not None:
+                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 existing = result.scalar_one_or_none()
                 if not existing:
@@ -811,11 +948,18 @@ class Database:
             logger.error("Failed to rename workflow", workflow_id=workflow_id, error=str(e))
             return False
 
-    async def delete_workflow(self, workflow_id: str) -> bool:
-        """Delete a workflow and atomically enqueue its Context archives."""
+    async def delete_workflow(self, workflow_id: str, owner_user_id: Optional[str] = None) -> bool:
+        """Delete a workflow and atomically enqueue its Context archives.
+
+        When ``owner_user_id`` is supplied, the delete is silently a no-op
+        (returns ``True``) if the workflow belongs to a different principal —
+        same behaviour as "not found" to avoid leaking workflow existence.
+        """
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
+                if owner_user_id is not None:
+                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 workflow = result.scalar_one_or_none()
 
@@ -4170,3 +4314,102 @@ class Database:
         except Exception as e:
             logger.error(f"Failed to delete proxy routing rule: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Tenant namespaces (Temporal namespace per login account)
+    #
+    # These deliberately break the swallow-and-return-None idiom used
+    # above: an unreadable mapping must NOT degrade to "no row", because
+    # the caller reads that as "use the default namespace" and would run
+    # a tenant's workflows in the shared one. A read error is louder than
+    # a leak. Writes are operator-CLI only, so they raise too — a silent
+    # false would print "assigned" for a row that never landed.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tenant_row_to_dict(row: TenantNamespace) -> Dict[str, Any]:
+        return {
+            "user_id": row.user_id,
+            "namespace": row.namespace,
+            "status": row.status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    async def get_tenant_namespace(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Return the namespace mapping for ``user_id``, or None if unmapped.
+
+        Raises on a database failure — see the section note above.
+        """
+        async with self.get_session() as session:
+            row = await session.get(TenantNamespace, user_id)
+            return self._tenant_row_to_dict(row) if row is not None else None
+
+    async def list_tenant_namespaces(self) -> List[Dict[str, Any]]:
+        """Every mapping, oldest first. Used by the operator CLI and by
+        namespace bootstrap (which must know every namespace to start a
+        worker in each one)."""
+        async with self.get_session() as session:
+            result = await session.execute(select(TenantNamespace).order_by(TenantNamespace.created_at))
+            return [self._tenant_row_to_dict(row) for row in result.scalars().all()]
+
+    async def upsert_tenant_namespace(
+        self,
+        user_id: str,
+        namespace: str,
+        status: str = "ready",
+    ) -> Dict[str, Any]:
+        """Assign ``namespace`` to ``user_id``, creating or updating the row.
+
+        Raises ``ValueError`` when the namespace already belongs to a
+        different account — the UNIQUE constraint exists because two
+        accounts sharing a namespace defeats the whole feature, and the
+        operator needs to be told rather than see a stack trace.
+        """
+        async with self.get_session() as session:
+            clash = await session.execute(select(TenantNamespace).where(TenantNamespace.namespace == namespace))
+            existing = clash.scalar_one_or_none()
+            if existing is not None and existing.user_id != user_id:
+                raise ValueError(f"namespace {namespace!r} is already assigned to user_id {existing.user_id!r}")
+
+            row = await session.get(TenantNamespace, user_id)
+            now = datetime.now(timezone.utc)
+            if row is None:
+                row = TenantNamespace(
+                    user_id=user_id,
+                    namespace=namespace,
+                    status=status,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+            else:
+                row.namespace = namespace
+                row.status = status
+                row.updated_at = now
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ValueError(f"namespace {namespace!r} is already assigned") from exc
+            await session.refresh(row)
+            logger.info(f"Tenant namespace mapping saved: user_id={user_id} namespace={namespace} status={status}")
+            return self._tenant_row_to_dict(row)
+
+    async def set_tenant_namespace_status(self, user_id: str, status: str) -> Optional[Dict[str, Any]]:
+        """Flip a mapping's status. Returns None when the account is unmapped.
+
+        Disabling keeps the row so the namespace stays reserved (and its
+        history stays attributable) while traffic degrades to the default
+        namespace.
+        """
+        async with self.get_session() as session:
+            row = await session.get(TenantNamespace, user_id)
+            if row is None:
+                return None
+            row.status = status
+            row.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+            await session.refresh(row)
+            logger.info(f"Tenant namespace status set: user_id={user_id} status={status}")
+            return self._tenant_row_to_dict(row)

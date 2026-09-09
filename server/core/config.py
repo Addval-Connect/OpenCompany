@@ -125,6 +125,17 @@ class Settings(BaseSettings):
     temporal_enabled: bool = Field(env="TEMPORAL_ENABLED")
     temporal_server_address: str = Field(env="TEMPORAL_SERVER_ADDRESS")
     temporal_namespace: str = Field(env="TEMPORAL_NAMESPACE")
+    # One Temporal namespace per login account (opt-in). With False —
+    # the default, and the only value the pre-feature code paths ever
+    # saw — every account executes in ``temporal_namespace`` and
+    # ``services.tenancy.resolve_tenant_namespace`` never reads the
+    # database. Namespaces are provisioned manually
+    # (``scripts/manage_users.py namespace``); an account without a
+    # mapping keeps using the default namespace.
+    multi_tenant_namespaces: bool = Field(
+        default=False,
+        env="MULTI_TENANT_NAMESPACES",
+    )
     temporal_task_queue: str = Field(env="TEMPORAL_TASK_QUEUE")
     # F4.A: per-type activity dispatch. When True, MachinaWorkflow.run() schedules
     # `node.{type}.v{version}` per plugin (with task_queue=cls.task_queue) instead
@@ -183,6 +194,18 @@ class Settings(BaseSettings):
     temporal_worker_pool_enabled: bool = Field(
         default=True,
         env="TEMPORAL_WORKER_POOL_ENABLED",
+    )
+    # Per-tenant worker pool.  When MULTI_TENANT_NAMESPACES=true AND
+    # TEMPORAL_WORKER_POOL_ENABLED=true, startup refuses unless this is
+    # also true: without per-tenant workers the MachinaWorkflow inside a
+    # tenant namespace schedules plugin activities on queues that only
+    # the default-namespace pool polls, so those activities hang forever
+    # without error.  Set to true to start one TemporalWorkerManager +
+    # optional TemporalWorkerPool per ready tenant namespace.  Defaults
+    # false so single-tenant deployments never pay the extra workers.
+    temporal_tenant_worker_pool: bool = Field(
+        default=False,
+        env="TEMPORAL_TENANT_WORKER_POOL",
     )
     # Wave 17.4: deployment topology hint. Drives worker identity
     # strings (visible in Temporal Web UI -> Workers) and per-mode

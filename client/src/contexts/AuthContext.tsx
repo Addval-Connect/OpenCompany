@@ -34,6 +34,7 @@ import React, { createContext, useContext, useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_CONFIG } from '../config/api';
 import { AUTH_RETRY } from '../lib/connectionConfig';
+import { WORKFLOWS_QUERY_KEY } from '../hooks/useWorkflowsQuery';
 
 export interface User {
   id: number;
@@ -232,6 +233,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // fields (auth_mode, can_register). `invalidateQueries` still refetches
   // despite `staleTime: Infinity` — it marks stale AND refetches actives.
   const applyAuthenticatedUser = useCallback((nextUser: User) => {
+    // Drop per-user cached data so the incoming user never sees the previous
+    // user's workflows, context, or memory items.
+    queryClient.removeQueries({ queryKey: WORKFLOWS_QUERY_KEY });
+    queryClient.removeQueries({ queryKey: ['agentContext'] });
+    queryClient.removeQueries({ queryKey: ['memoryItems'] });
     queryClient.setQueryData<AuthStatus>(AUTH_STATUS_QUERY_KEY, (prev) => ({
       auth_enabled: true,
       auth_mode: prev?.auth_mode ?? 'single',
@@ -272,6 +278,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // effect) must see `authenticated: false` on this render regardless of
     // whether the server confirmed.
     onSettled: async () => {
+      // Drop all per-user cached data so the next user who logs in starts clean.
+      queryClient.removeQueries({ queryKey: WORKFLOWS_QUERY_KEY });
+      queryClient.removeQueries({ queryKey: ['agentContext'] });
+      queryClient.removeQueries({ queryKey: ['memoryItems'] });
       queryClient.setQueryData<AuthStatus>(AUTH_STATUS_QUERY_KEY, (prev) => ({
         ...(prev ?? { auth_enabled: true, auth_mode: 'single' as const, can_register: false }),
         authenticated: false,
