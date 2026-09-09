@@ -6,7 +6,7 @@ Documented root causes and fixes for errors encountered in OpenCompany developme
 
 ## 1. SQLAlchemy Import Hang (Windows)
 
-**Symptom**: Backend hangs at startup with no output after `Importing DI container + all services...`. The process is alive but never binds `$PYTHON_BACKEND_PORT`. `import sqlalchemy` blocks indefinitely.
+**Symptom**: Backend hangs at startup with no output after `Importing DI container + all services...`. The process is alive but never binds port 5678. `import sqlalchemy` blocks indefinitely.
 
 **Root cause**: Git worktrees nested inside the project root (e.g., `.claude/worktrees/`) cause Windows Defender real-time scanning to fan out across all worktree directories when Python loads `.pyd` (native DLL) files. SQLAlchemy has 5 Cython `.pyd` files (`collections`, `immutabledict`, `processors`, `resultproxy`, `util`) loaded sequentially during import. Defender's scan queue backs up across the worktree copies, blocking `LoadLibrary()` for minutes per file.
 
@@ -62,7 +62,7 @@ Restart-Service SysMain
 
 **Fix** (if admin is unavailable): **Reboot**. This is what clears the stuck kernel cache reliably.
 
-**Prevention** (`cli/commands/start.py`, `_sqlalchemy_preflight`): a preflight probe times `import sqlalchemy` in the server venv with a 15-second timeout. If the import times out or crashes it fails fast with actionable remediation steps instead of letting uvicorn hang silently; an import that succeeds but takes over 5 seconds only prints a warning.
+**Prevention** (`cli/commands/start.py`, `_sqlalchemy_preflight`): a preflight probe times `import sqlalchemy` in the server venv. If it exceeds 8 seconds, it fails fast with actionable remediation steps instead of letting uvicorn hang silently.
 
 ---
 
@@ -214,7 +214,7 @@ Also changed `receive_timeout=540` to `receive_timeout=None` on `ws_connect()` -
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| `start_to_close_timeout` | 24 h | Maximum total time for an activity (`_NODE_ACTIVITY_START_TO_CLOSE`, `services/temporal/workflow.py`) |
+| `start_to_close_timeout` | 10 min | Maximum total time for an activity (workflow.py) |
 | `heartbeat_timeout` | 2 min | Maximum gap between heartbeats before Temporal cancels (workflow.py) |
 | `asyncio.wait_for` timeout | 30s | Periodic heartbeat interval in the WS read loop (activities.py) |
 | `ws_connect heartbeat` | 30s | WebSocket protocol-level ping/pong keepalive (activities.py) |
@@ -226,7 +226,7 @@ Also changed `receive_timeout=540` to `receive_timeout=None` on `ws_connect()` -
 
 **Symptom**: Backend logs show:
 ```
-WhatsApp RPC timeout - Go service not responding at ws://localhost:${WHATSAPP_RPC_PORT}/ws/rpc
+WhatsApp RPC timeout - Go service not responding at ws://localhost:5683/ws/rpc
 ```
 
 WhatsApp service health check (`/health`) returns 200 OK, but the WebSocket RPC connection fails.
@@ -250,7 +250,7 @@ self.ws = await asyncio.wait_for(
 
 **Symptom**: After `bun run dev`, browser console shows repeated errors:
 ```
-GET http://localhost:${PYTHON_BACKEND_PORT}/api/auth/status net::ERR_CONNECTION_REFUSED
+GET http://localhost:5678/api/auth/status net::ERR_CONNECTION_REFUSED
 Failed to check auth status (attempt 4/6): TypeError: Failed to fetch
 ```
 
@@ -309,7 +309,7 @@ Or start a fresh terminal that doesn't inherit from the Claude Code harness.
 
 **Symptom**: `scripts/install.js` reports `Python: Python 3.13.7` as valid, but `pyproject.toml` requires `>=3.11,<3.13`.
 
-**Root cause**: The version check at `install.js:76` uses `minor >= 12` with no upper bound:
+**Root cause**: The version check at `install.js:59` uses `minor >= 12` with no upper bound:
 ```js
 if (major >= 3 && minor >= 12) { return { cmd, version }; }
 ```
@@ -337,7 +337,7 @@ with no "Signed in" page — yet the backend log shows the login succeeded and c
 
 **Fix** (landed at tag v0.0.88): `services/events/cli.py::run_cli_command()` gained an optional `stdin` parameter (default `None` = inherit, unchanged for every existing caller). `nodes/agent/claude_code_agent/_oauth.py::_run_auth` passes `stdin=asyncio.subprocess.PIPE` **for the `login` subcommand only** so the CLI's stdin read blocks instead of EOFing, keeping the callback server alive until the flow completes naturally. `status` / `logout` stay on inherit-stdin (one-shot, no stdin read).
 
-Note the binary install path also moved this release: the claude CLI now lives in the shared OpenCompany packages tree at `<DATA_DIR>/packages/node_modules/.bin/claude` (was `<DATA_DIR>/claude/npm/...`; the Windows shim was `claude.cmd` under npm at the time and is bun's `claude.exe` + `claude.bunx` since the tree moved to `bun add`). The fresh install triggered by that move is what pulled the 2.1.162 native binary that surfaced this bug — the path change was the trigger, the `stdin=PIPE` is the actual fix.
+Note the binary install path also moved this release: the claude CLI now lives in the shared OpenCompany npm tree at `<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]` (was `<DATA_DIR>/claude/npm/...`). The fresh `npm install` triggered by that move is what pulled the 2.1.162 native binary that surfaced this bug — the path change was the trigger, the `stdin=PIPE` is the actual fix.
 
 ---
 
@@ -394,197 +394,3 @@ python -c "import ntpath; print(ntpath.join(r'D:\ws\AI_Employee_1', '2:processMa
 **Root cause**: the `/ws/status` endpoint's cleanup cancelled every in-flight handler task the instant the socket closed. A handler cancelled while inside a database call receives `CancelledError` at the aiosqlite await; the session teardown then returns the connection to the pool, whose reset-on-return rollback is itself interrupted by the pending cancellation. SQLAlchemy's `_finalize_fairy` logs the traceback at ERROR, invalidates the connection, and re-raises, so nothing was actually broken (the pool rebuilt the connection) but every reconnect produced a traceback per cancelled handler. The `Send failed` warning came from a broadcast racing the close frame.
 
 **Fix**: `core/session_teardown.py` runs rollback + close under `asyncio.shield` in both `Database.get_session` and `CredentialsDatabase.get_session`, so a cancelled caller cannot interrupt the pool reset; `_drain_handler_tasks` in `routers/websocket.py` gives in-flight handlers a one-second grace to finish before cancelling stragglers; `StatusBroadcaster.broadcast` skips sockets that are no longer `CONNECTED` on either side and prunes them quietly. Locked by `tests/test_ws_disconnect_cancellation.py`.
-
----
-
-## 14. `claude_code_agent` never completes a plain run: `timeout after 600s`, empty response, or `CLAUDE_CONFIG_DIR is misconfigured` (GitHub #132 / #133 / #134)
-
-**Symptom**: A Claude Code Agent with nothing wired (no Memory / Context) either fails after 5 s with "No session JSONL appeared ... the CLAUDE_CONFIG_DIR is misconfigured", or burns the full `timeout_seconds` and reports an empty response, even though the CLI is installed and logged in. Memory-bound runs silently start a fresh conversation every batch. On a headless server every Login click leaves another `claude auth login` process parked for ten minutes (#129).
-
-**Root cause**, three independent defects: (1) plain runs went through `AICliSession`, which spawned the CLI on a PTY and tailed the on-disk session JSONL, but never wrote the prompt to the process at all, and a PTY stdin makes the CLI reject `--input-format stream-json`; (2) `AICliSession` watched `<CLAUDE_CONFIG_DIR>/projects/<key>/` with a key regex that preserved dots, while the CLI replaces every non-`[a-zA-Z0-9-]` character with `-`, so `.opencompany` paths pointed at a directory the CLI never wrote to; (3) `ClaudeSessionPool._consume_stdout` returned silently on stdout EOF, so a child that died mid-turn never woke `send_turn`. Separately, memory continuity relied on `--continue`, which per the CLI reference skips sessions created non-interactively (`-p` / stream-json), i.e. every session the pool creates.
-
-**Fix**: every Claude run routes through `ClaudeSessionPool` (plain pipes, stream-json, the same invocation the Agent SDK uses); unbound runs get an ephemeral session per task keyed by `<node_id>:<turn_execution_id>:<index>` and terminated after the batch. The project-key regex drops the dot. Stdout EOF sets `result_event` and `send_turn` reports `claude exited (code N) before emitting a result event`. A cold spawn mints `--session-id <uuid4>`, memory-bound runs pass `--resume <last_session_id>` instead of `--continue`. The login handler is single-flight with a strong task reference. The CLI version is pinned through `package_version` in `config/ai_cli_providers.json`. Locked by `tests/services/cli_agent/test_claude_pool_turn.py`, `test_claude_login_handlers.py`, and the updated `test_service.py` / `test_providers.py`.
-
----
-
-## 15. `npm install -g` Fails With `externally-managed-environment` (Ubuntu 24.04+)
-
-**Historical note (bun channel)**: the install channel is now `bun add -g @zeenie-ai/opencompany`, which runs no lifecycle scripts; the same provisioning (`scripts/install.js`) runs on the first `company` command instead, or eagerly from `install.sh` / `install.ps1`, so this failure would surface there rather than in an npm postinstall. The fix below still applies unchanged, and the installer scripts install uv themselves before provisioning.
-
-**Symptom**: `npm install -g @zeenie-ai/opencompany` (the install channel at the time) aborted inside the postinstall with:
-```
-Installing uv via pip...
-error: externally-managed-environment
-```
-Seen on Ubuntu 24.04 (EC2 `ubuntu-noble` AMI). `python3 -m ensurepip` also fails there with `No module named ensurepip` because Debian ships pip as a separate package.
-
-**Root cause**: `scripts/install.js` installed uv with `python3 -m pip install uv` and had no other path. PEP 668 marks the distro Python as externally managed, so the system pip refuses every install outside a venv.
-
-**Fix** (shipped after 0.1.1): `installUv` tries pip first and, on failure, runs uv's official standalone installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`, `irm https://astral.sh/uv/install.ps1 | iex` on Windows) and prepends `~/.local/bin` to `PATH` for the rest of the install. On a 0.1.1 install, run that installer yourself first; the provisioning step then finds `uv` and continues.
-
----
-
-## 16. `company start` Says `python: not found` After a `sudo npm install -g`
-
-**Symptom**: The global install completes, but `company start` as the login user prints:
-```
-> @zeenie-ai/opencompany@0.1.1 start
-> python -m cli start
-sh: 1: python: not found
-```
-Seen on Ubuntu 26.04 (system Python 3.14).
-
-**Historical note (bun channel)**: this failure mode belonged to the npm channel. `bun add -g` installs as the login user (shim `~/.bun/bin/company`; the package itself sits wherever bun keeps its global packages, which `company provision` never needs to know) — there is no global prefix to make writable and no reason to reach for `sudo`, so the venvs, the uv-managed Python and `~/.opencompany` belong to the login user by construction. `install.sh` / `install.ps1` run `bun add -g` as the invoking user and, when npm happens to be present, evict a legacy npm install of the scoped package or `machinaos` (the shims would otherwise shadow the bun one). A leftover root install from the npm era is still removed with `sudo npm uninstall -g @zeenie-ai/opencompany && sudo rm -rf /root/.opencompany`.
-
-**Root cause** (npm era): `server/pyproject.toml` pins `requires-python = ">=3.11,<3.13"`. When the system Python falls outside that range, `uv sync` downloads a managed CPython 3.12 into the invoking user's `~/.local/share/uv/python/` and both `server/.venv` and `.cli-venv` symlink into it. With `sudo npm install -g` that user was root, and `/root` is mode 700, so the venv interpreters were unusable by anyone else. `bin/cli.js` then fell back to the script-runner path, which needs a bare `python` on `PATH`; Ubuntu has only `python3`.
-
-**Fix** (npm era): do the global install without `sudo`, using a user-writable npm prefix (Ubuntu 26.04 has no `python3.12` apt package to fall back on):
-```bash
-npm config set prefix ~/.npm-global      # npm era only; bun add -g is user-owned under ~/.bun
-echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> ~/.bashrc && source ~/.bashrc
-npm install -g @zeenie-ai/opencompany
-company start
-```
-uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the login user, and data lands in `~/.opencompany`. Verified on an EC2 t3a.small running Ubuntu 26.04, and end to end on a fresh Ubuntu 24.04 t3.micro through `install.sh`. The bun channel keeps the same rule — install as the login user, never `sudo` — and gets the user-owned layout for free.
-
----
-
-## 17. Backend OOM-Killed in a Loop on Small VMs (512 MB)
-
-**Symptom**: `company start` comes up and `/health` answers, then within a minute the machine stops responding; `dmesg` shows `Out of memory: Killed process ... (python)` repeatedly. Seen on an EC2 t2.nano (451 MB usable, no swap).
-
-**Root cause**: The idle footprint is roughly 200 MB for the uvicorn backend plus 150 MB for the Temporal dev server it spawns, on top of the OS baseline (about 220 MB on a stock Ubuntu cloud image). The supervisor restarts the killed backend, so the box thrashes until it is rebooted.
-
-**Fix**: Use at least 1 GB of RAM. Measured on a t2.micro (951 MB): backend 197 MB RSS, Temporal 156 MB, about 300 MB still available after two minutes, zero OOM kills.
-
----
-
-## 18. Claude Code Agent ignores its wired Context node: `context=no` in the log, a fresh session per chat message, zero rows in `agent_conversations`
-
-**Symptom**: A deployed workflow has a Context node wired to `input-context` on a `claude_code_agent` (or `rlm_agent`). Every chat message starts a brand-new claude session, the Context panel never shows a conversation, and the node log prints `[Claude Code] Collected: ... context=no` even though the edge exists. `agent_conversations` stays empty across generations.
-
-**Root cause**: `MachinaWorkflow` stamps `generation`, `graphVersion`, `context_execution_id` and `context_session_id` on each node's activity context, but the per-type activity wrapper in `services/plugin/base.py::as_activity` rebuilds the node context by calling `workflow_service.execute_node` with a fixed argument list and forwards only an allowlist of extra keys. The conversation-scope keys were not on it. The Context descriptor builder (`nodes/context/_descriptor.py`) returns `None` when `generation` is 0, and the edge walker treats `None` as "this edge contributes nothing", so the Context edge was silently dropped before the bridge ever ran. Native agents were unaffected because they run as an `AgentWorkflow` child that reads `generation` from its own payload; the nodes that always take the activity path were the ones affected. The in-process adapter `WorkflowService._execute_node_adapter` dropped the same keys.
-
-**Fix**: both handoffs now forward `generation`, `graphVersion`, `root_execution_id`, `context_execution_id`, `context_session_id` and `data_scope_id` as extras. Locked by `tests/temporal/test_context_scope_forwarding.py`. With the descriptor intact the pool key is `(workflow_id, agent_node_id, generation)`, so chat messages within a deployment reuse one warm claude process and each turn is recorded in the Context store.
-
----
-
-## 19. JS/TS Executor Fails on a Fresh npm Install: `Cannot find package 'express'`
-
-**Historical note (moot on the bun channel)**: the sidecar is now built with `bun build src/index.ts --target=bun --outfile=dist/index.js`, a self-contained bundle with `express` inlined, and runs as `bun dist/index.js` (`nodes/code/_runtime.py` via `core/js_runtime.py`). There is no runtime dependency left to resolve, so the root `express` dependency this fix added has been removed again. Kept for the record.
-
-**Symptom** (npm era): On a machine set up with `npm install -g @zeenie-ai/opencompany`, the first JavaScript or TypeScript executor node run failed with `Node.js executor did not become ready`, and the sidecar log showed `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from .../server/nodejs/dist/index.js`.
-
-**Root cause** (npm era): The sidecar bundle was built with esbuild's `--packages=external`, so Express stayed a runtime dependency, but it was declared only in `server/nodejs/package.json`. The package excludes every `node_modules`, and `nodes/code/_runtime.py` only checks that `dist/index.js` exists, so nothing ever installed Express on an npm-installed copy. Source checkouts never saw it because `bun install` provisions the workspace.
-
-**Fix** (npm era): `express` was declared in the root `package.json` `dependencies`, so npm installed it beside the package and Node resolved it from `server/nodejs/dist` by walking up to the package root. Superseded by the `--target=bun` bundle above.
-
-## 20. Graceful backend shutdown hangs, then the supervisor tree-kills it (Temporal / node / edgymeow orphaned)
-
-**Symptom**: `company stop`, Ctrl+C, or the desktop app's quit takes the full grace window and ends in a tree-kill. With the lifespan markers (`Lifespan shutdown: ...` in stdout) the log stops after `proxy stopped`, or never prints `Lifespan shutdown begin` at all.
-
-**Root causes** (two, found while building the desktop shell; the CLI's 5 s grace + tree-kill had masked both):
-
-1. `nodes/browser/_service.py::shutdown_browser_service` called `get_browser_service()`, which lazily runs the `agent-browser@latest` install on first call (`npm install` at the time; `bun add` via `core/js_runtime.add_package` today) — so a process that never used the browser ran a network install *at teardown*, synchronously on the event loop, and every graceful exit wedged there.
-2. uvicorn's `timeout_graceful_shutdown` defaults to `None`: it waits forever for open connections and in-flight handler tasks before sending the lifespan shutdown. A browser WebSocket that disappears with a TCP reset (the tab or window closing) can leave its handler task lingering, and the lifespan teardown — the part that reaps the child daemons — is never reached.
-
-**Fix**: the browser hook reads its module singleton and closes only a service that was actually created; every plugin shutdown hook now runs under `HOOK_TIMEOUT_SECONDS` (10 s, `services/plugin/shutdown_hooks.py`) and names the offender at WARNING; `company serve` / `company start` and the desktop shell pass `--timeout-graceful-shutdown 5` (`cli/_common.py::UVICORN_GRACEFUL_SHUTDOWN_SECONDS`). Note that the hook timeout cannot interrupt a hook that blocks the loop synchronously — keep hooks async.
-
-## 21. Electron boots as plain Node: `Cannot read properties of undefined (reading 'isPackaged')` / Playwright `Process failed to launch!`
-
-**Symptom**: Launching the desktop shell (or its Playwright smoke) from a terminal inside VS Code, Claude Code or another Electron-hosted editor crashes immediately with `electron.app` undefined; Playwright only reports `Process failed to launch!`.
-
-**Root cause**: Editor-hosted terminals export `ELECTRON_RUN_AS_NODE=1`. Electron honours it and starts as a bare Node runtime, so `require("electron")` returns the binary path string instead of the API.
-
-**Fix**: `unset ELECTRON_RUN_AS_NODE` before launching Electron by hand; `desktop/tests/e2e/smoke.spec.ts` strips it from the environment it passes to `electron.launch`, and `desktop/src/main/env.ts` strips it from the backend's environment too.
-
-## 22. Desktop runtime extraction fails on Windows: `tar: This does not look like a tar archive` / `Cannot connect to D: resolve failed`
-
-**Symptom**: `bun run stage` / `bun run fetch-runtimes` fails while extracting the uv zip or a Node archive.
-
-**Root cause**: The `tar` first on PATH in a Git Bash shell is Git for Windows' GNU tar, which cannot read `.zip` and parses `D:\...` as `host:path`. The system bsdtar at `%SystemRoot%\System32\tar.exe` handles zip, tar.gz and tar.xz.
-
-**Fix**: `desktop/scripts/_lib.ts::tarBinary()` prefers the System32 tar on Windows and always passes the archive as a path relative to the extraction directory so no argument carries a drive colon.
-
-## 23. `bun add -g` fails with `InvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'`, or `company` lands in `~/node_modules`
-
-**Symptom**: `bun add -g @zeenie-ai/opencompany` aborts with `InvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'`; or it succeeds but `bun pm ls -g` reports the root as your home directory and the package sits in `~/node_modules/@zeenie-ai/opencompany`; or `company` is not found in the same shell after the install.
-
-**Root cause**: bun resolves the "project" for a global install by walking up from its global directory (`$BUN_INSTALL/install/global`, default `~/.bun/install/global`) until it meets a `package.json`. On a fresh bun that directory is empty, so the walk continues into `$HOME`. A stray `package.json` or `package-lock.json` there (typically an old `npm init` / `npm install` run in the home directory; the lockfile is an empty `{"name": "<user>", "lockfileVersion": 3, "packages": {}}`) becomes the global project: the package is installed into `~/node_modules`, and when only the npm lockfile is present bun tries to migrate it and fails. Seen on Windows with bun 1.4.0, where the leftover pair had sat in the profile since 2025. The not-found variant is separate: bun's global bin dir (`bun pm bin -g`, `~/.bun/bin`) is not on the PATH of a shell opened before the bun installer ran.
-
-**Fix**: delete the stray `package.json`, `package-lock.json`, `bun.lock` and `node_modules` from your home directory (after checking they are not a real project), then give bun's global directory its own manifest and re-run the install:
-
-```bash
-mkdir -p ~/.bun/install/global
-[ -f ~/.bun/install/global/package.json ] || echo '{ "private": true }' > ~/.bun/install/global/package.json
-bun add -g @zeenie-ai/opencompany
-```
-
-`install.sh`, `install.ps1` and the cloud-init templates seed that manifest before `bun add -g`, so the installer path never hits this. For the PATH variant open a new shell, or `export PATH="$HOME/.bun/bin:$PATH"` (`$env:USERPROFILE\.bun\bin` on Windows). Nothing in OpenCompany depends on where the global package lives: `company provision` runs from the shim's own package root, `uninstall.sh` uses `bun remove -g` rather than listing, and the installers address the shim through `bun pm bin -g`.
-
-## 24. GitHub Packages publish fails with `missing authentication` although the job wrote a token for `npm.pkg.github.com`
-
-**Symptom**: The `Publish to GitHub Packages` job of `release.yml` packs the tarball and then aborts with `error: missing authentication (run bunx npm login)`, while `Publish to npm` in the same run succeeds. First seen on v0.2.0, the first release published by bun.
-
-**Root cause**: Two bun 1.4 behaviours. `bun publish` ignores `publishConfig.registry` in package.json, so the `bun -e` rewrite the job used to do was inert and the publish went to the default registry, npmjs, where that job holds no token. And bun keeps an `.npmrc` `//host/:_authToken` line only when `host` is the registry that same file points at (the default `registry=` or a scoped `@scope:registry=`) at parse time; `--registry` on the command line comes too late, so a token for `npm.pkg.github.com` on its own is dropped whichever of `~/.npmrc` or the project `.npmrc` carries it. Verified with `bun publish --dry-run`: with only `publishConfig.registry` it prints `Registry: https://registry.npmjs.org/`; with `--registry https://npm.pkg.github.com/` and the token in either file it still reports `missing authentication`; with `registry=https://npm.pkg.github.com/` or `@zeenie-ai:registry=https://npm.pkg.github.com/` next to the token it prints `Registry: https://npm.pkg.github.com/` and succeeds.
-
-**Fix**: The job writes the scope route and the token into one `~/.npmrc` (`@zeenie-ai:registry=https://npm.pkg.github.com/` plus `//npm.pkg.github.com/:_authToken=<GITHUB_TOKEN>`) and runs a plain `bun publish`; the package.json rewrite is gone. To publish a mirror that failed this way, dispatch the Release workflow with `tag` set to the release and `registries` set to `github-packages`; the job checks out that tag. Locked by `test_github_packages_release_routes_the_scope_through_npmrc` in `cli/tests/test_release_pipeline_config.py`.
-
-## 25. OPEN: `company start` / `company serve` from a `bun add -g` install stops with `Project not built. Run "company build" first.`
-
-**Status**: open in 0.2.0 and 0.2.1 (found 2026-09-12 by running the README steps in a clean Ubuntu 24.04 container; the fix is small but has not shipped). Affects every registry install, including the installer scripts and the GCP / AWS VM templates, which end in `company serve`. The desktop app is unaffected.
-
-**Symptom**: `bun add -g @zeenie-ai/opencompany` (or `install.sh` / `install.ps1`) provisions the Python side fine, then the first `company start` prints `Error: Project not built. Run "company build" first.` and exits.
-
-**Root cause**: `cli/buildenv.py::validate_build` requires a `node_modules/` directory next to the package for every verb. That is an npm-era layout assumption: `npm install -g` nested a package's dependencies under the package, while bun keeps a global package's dependencies in its own global tree, so the directory never exists. Nothing at runtime needs it: `company start` is uvicorn plus the built SPA, and the JS executor sidecar is a self-contained bundle. Only `company dev` (Vite) genuinely needs `node_modules`.
-
-**Workaround**: run `company build` once from the installed package (it runs `bun install` there, which creates the directory), then `company start`. **Fix, when shipped**: require `node_modules` only for `dev`; keep the server venv and the built client as the check for `start` / `serve`.
-
-## 26. OPEN: JS / TS executor nodes fail on a registry install because the sidecar bundle is not in the tarball
-
-**Status**: open in 0.2.0 and 0.2.1. `tar -tzf` of the published tarball lists `client/dist/` but no `server/nodejs/dist/`; the npm-era 0.1.1 tarball had it.
-
-**Symptom**: `javascriptExecutor` / `typescriptExecutor` return the "JavaScript executor is unavailable" envelope on a `bun add -g` install; the backend log shows the sidecar spawn refusing because `server/nodejs/dist/index.js` does not exist.
-
-**Root cause**: `bun pm pack` honours a nested `.gitignore` even for paths under an explicit root `files` entry. `server/nodejs/.gitignore` lists `dist/`, so the bundle `company build` had just produced is dropped at pack time (npm's packer kept it). Verified with `bun pm pack --dry-run`: adding `server/nodejs/dist/` to `files` alone changes nothing; removing the nested rule includes the file (the root `.gitignore`'s `dist` rule still keeps it untracked).
-
-**Workaround**: `company build` from the installed package rebuilds the bundle. **Fix, when shipped**: drop `dist/` from `server/nodejs/.gitignore`, add `server/nodejs/dist/` to the root `files` list, and change `test_sidecar_dist_is_gitignored` to assert the root rule instead.
-
-## 27. OPEN: `install.sh` on a bare box fails at `error: unzip is required to install bun`
-
-**Status**: open in 0.2.1. Seen on a bare Ubuntu 24.04 container; Ubuntu cloud images usually ship `unzip`, minimal images and Debian netinst do not.
-
-**Root cause**: bun's own installer refuses to run without `unzip`, and `install.sh` hands off to it without checking. The script also calls `sudo` unconditionally for apt, which does not exist in containers that run as root.
-
-**Workaround**: `apt-get install -y unzip` (or the distro equivalent) before the one-liner. **Fix, when shipped**: install `unzip` via the detected package manager before calling bun's installer, and run package-manager commands directly when already root.
-
-## 28. Every chat message fails with `ConversationTooLarge` after an agent made a few large tool calls
-
-**Symptom**: A deployed chat workflow whose AI Agent has a Context node answers a few turns, and each `agent.execute_llm_step` logs a Temporal `PayloadSizeWarning: [TMPRL1103] ... Size: 528134 bytes, Limit: 524288 bytes` as the input grows (1.4 MB by the sixth tool call). The next chat message fails in `agent.prepare_payload`, and so does every message after it:
-
-```
-ApplicationError: ConversationTooLarge: Stored conversation for agent '1:aiAgent:1' is 1429978 bytes (limit 1000000). Clear the conversation from the Context panel or lower the compaction threshold, then run again.
-```
-
-Seen 2026-09-05 with a `tikhubAction` tool whose results were about 400,000 characters each.
-
-**Root cause**: four gaps lined up.
-- Nothing bounded a tool result before it entered the transcript. Both agent loops appended the serialized result whole, and every later turn re-sent it.
-- Compaction never fired. `AgentWorkflow` compared the running SUM of every step's token usage with 80% of the model's window (838,860 tokens for a 1,048,576-token Gemini model), while the limits actually being hit were in bytes: Temporal's payload sizes and the 1 MB seed cap.
-- The LLM step saves `[...sent, assistant]` after each turn with no size check, so the 1.4 MB transcript was stored.
-- The seed guard in `agent.prepare_payload` is a hard, non-retryable failure by design, because an agent that silently runs without its memory is worse. So one oversized row broke every later firing.
-
-**Fix**:
-- Each external tool result is cut to `TOOL_RESULT_MAX_CHARS` characters (default 100,000; per user under Settings > Tool Result Limit; `0` disables) before it enters the model's conversation, with a note telling the model to call the tool again with narrower parameters. Delegated agents' answers, skill loads and Task Manager results are never cut, and the tool's own result is untouched (`services/tool_output.py`, used by both loops).
-- `AgentWorkflow` runs whose prepare-payload result records `context_pressure_version` 1 keep the transcript under a byte budget of three quarters of Temporal's payload warning (`services/temporal/agent_context_pressure.py`):
-  - past the budget, results from earlier turns become a short placeholder, oldest first and external tools first;
-  - the compaction gate measures the next request instead of a running sum;
-  - a summary covers only the earlier turns and keeps the latest one verbatim;
-  - a latest turn that alone overflows is cut to fit.
-
-  Runs recorded before the key existed replay the original rules unchanged.
-- `ConversationTooLarge` stays a hard failure. Its message now points at the Context panel and the Tool Result Limit, and a save over half the cap logs a WARNING.
-
-Locked by `server/tests/services/test_tool_output.py`, `server/tests/temporal/test_agent_context_pressure.py`, `server/tests/temporal/test_agent_workflow_pressure.py` and `server/tests/temporal/test_prepare_payload_pressure.py`. Design record: [ARCHIVE/AGENT_COMPACTION_FIX_PLAN.md](./ARCHIVE/AGENT_COMPACTION_FIX_PLAN.md).
-
-**Recovery for a row saved before the fix**: clear the conversation once from the Context panel (or Reset the deployment). New transcripts stay well under the cap.

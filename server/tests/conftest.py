@@ -145,6 +145,19 @@ sys.modules["core.encryption"] = _encryption_mod
 _encryption_spec.loader.exec_module(_encryption_mod)
 setattr(_core_pkg, "encryption", _encryption_mod)
 
+# core.session_teardown is stdlib-only (the shielded rollback + close both
+# databases run under a cancelled caller); the real core/database.py and
+# core/credentials_database.py import it at module load, and tests that
+# file-load those modules need it resolvable under the stubbed package.
+_session_teardown_spec = _importlib_util.spec_from_file_location(
+    "core.session_teardown",
+    SERVER_DIR / "core" / "session_teardown.py",
+)
+_session_teardown_mod = _importlib_util.module_from_spec(_session_teardown_spec)
+sys.modules["core.session_teardown"] = _session_teardown_mod
+_session_teardown_spec.loader.exec_module(_session_teardown_mod)
+setattr(_core_pkg, "session_teardown", _session_teardown_mod)
+
 # core.paths — central path resolution. Stub the public surface with
 # tmpdir-rooted Paths so plugin module imports don't trip over the
 # real ``Path.home()`` lookup during test collection. Tests that

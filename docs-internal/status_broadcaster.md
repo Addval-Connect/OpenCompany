@@ -219,7 +219,8 @@ Android service nodes (`batteryMonitor`, `wifiAutomation`, etc.) check `androidS
 
 - Responds to `ping` with `{"type": "pong"}`.
 - On `get_status`, returns the full current status snapshot.
-- On disconnect, removes the WebSocket from `StatusBroadcaster._connections`.
+- On disconnect, waits up to one second for the socket's in-flight handler tasks to finish (`_drain_handler_tasks`), cancels any still running, then removes the WebSocket from `StatusBroadcaster._connections`. The grace exists because a client that reconnects ~100 ms after connecting would otherwise cancel the init-burst handlers inside a database call; session teardown is additionally shielded from cancellation in `core/session_teardown.py` (see errors.md entry 13).
+- `broadcast()` skips and prunes sockets that are no longer `CONNECTED` on either side, so a broadcast racing a close frame does not log a warning per message.
 
 ## Error Handling
 
