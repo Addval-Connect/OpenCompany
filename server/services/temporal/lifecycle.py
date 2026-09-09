@@ -330,6 +330,11 @@ async def _bootstrap_tenant_clients(settings: Settings, log: Callable[[str], Non
     if not ready_rows:
         return
 
+    logger.info(
+        "Bootstrapping tenant namespace Temporal clients",
+        count=len(ready_rows),
+        namespaces=[r["namespace"] for r in ready_rows],
+    )
     log(f"[Temporal] Bootstrapping {len(ready_rows)} tenant namespace client(s)")
     for row in ready_rows:
         ns = row["namespace"]
@@ -341,8 +346,10 @@ async def _bootstrap_tenant_clients(settings: Settings, log: Callable[[str], Non
             )
             if wrapper is None:
                 log(f"[Temporal] Tenant namespace {ns!r} client failed to connect (will retry on access)")
+                logger.warning("Tenant namespace client failed to connect", namespace=ns)
             else:
                 log(f"[Temporal] Tenant namespace {ns!r} client ready")
+                logger.info("Tenant namespace client ready", namespace=ns)
         except Exception as exc:  # noqa: BLE001 — per-namespace isolation
             logger.warning("Tenant namespace Temporal bootstrap failed", namespace=ns, error=str(exc))
 

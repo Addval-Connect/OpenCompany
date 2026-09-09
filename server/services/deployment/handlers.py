@@ -86,11 +86,27 @@ async def handle_deploy_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
         Deployment start confirmation (deployment runs in background)
     """
     global _deployment_tasks
+    from constants import OWNER_PRINCIPAL_ID
     from core.container import container
     from services.status_broadcaster import get_status_broadcaster
+    from services.tenancy import resolve_tenant_namespace
 
     workflow_service = container.workflow_service()
     broadcaster = get_status_broadcaster()
+
+    # Resolve the caller's Temporal namespace so canary listeners and
+    # MachinaWorkflows start in the correct namespace for this tenant.
+    _caller = str(
+        (
+            getattr(getattr(websocket, "state", None), "user_id", None)
+            if websocket is not None
+            else data.get("user_id")
+        )
+        or OWNER_PRINCIPAL_ID
+    )
+    _deploy_namespace = await resolve_tenant_namespace(
+        _caller, database=container.database(), settings=container.settings()
+    )
 
     workflow_id = data.get("workflow_id")
     nodes = data.get("nodes", [])
@@ -244,18 +260,8 @@ async def handle_deploy_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
                 workflow_id=workflow_id,
                 graph_version=graph_version,
                 generation=int(data.get("generation") or 0),
-                user_id=str(
-                    (
-                        getattr(
-                            getattr(websocket, "state", None),
-                            "user_id",
-                            None,
-                        )
-                        if websocket is not None
-                        else data.get("user_id")
-                    )
-                    or "owner"
-                ),
+                user_id=_caller,
+                temporal_namespace=_deploy_namespace,
             )
 
             if not result.get("success"):
@@ -526,7 +532,10 @@ async def _start_controller(control, *, use_existing: bool = False) -> Optional[
         WorkflowIDConflictPolicy,
     )
 
-    wrapper = container.temporal_client()
+    # Use the namespace recorded on the control row so tenant workflows
+    # start in their own namespace, not always in the default.
+    ns = getattr(control, "temporal_namespace", None) or "default"
+    wrapper = _client_for_namespace(ns)
     if wrapper is None or wrapper.client is None:
         if container.settings().temporal_enabled:
             raise RuntimeError("temporal_control_unavailable")
@@ -839,7 +848,8 @@ async def _signal_generation_workflows(
     """
     from core.container import container
 
-    wrapper = container.temporal_client()
+    ns = getattr(control, "temporal_namespace", None) or "default"
+    wrapper = _client_for_namespace(ns)
     if wrapper is None or wrapper.client is None:
         if strict and container.settings().temporal_enabled:
             raise TemporalControlUnavailable("temporal_control_unavailable")
@@ -889,7 +899,8 @@ async def _terminate_generation_workflows(control, *, strict: bool = False) -> i
     """Immediately terminate every visible execution in one application tree."""
     from core.container import container
 
-    wrapper = container.temporal_client()
+    ns = getattr(control, "temporal_namespace", None) or "default"
+    wrapper = _client_for_namespace(ns)
     if wrapper is None or wrapper.client is None:
         if strict and container.settings().temporal_enabled:
             raise TemporalControlUnavailable("temporal_control_unavailable")
