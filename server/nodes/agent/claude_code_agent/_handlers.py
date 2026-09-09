@@ -60,6 +60,18 @@ logger = get_logger(__name__)
 
 _CATALOGUE_KEY = "claude_code"
 
+# The in-flight login task. Single-flight: a second click while a login
+# is running must not spawn a second ``claude auth login`` (each one parks
+# for up to LOGIN_TIMEOUT_SECONDS waiting on the browser callback, and on
+# a headless box they simply pile up — GitHub issue #129). Holding the
+# reference here also keeps the task alive; a bare ``create_task`` result
+# is eligible for garbage collection mid-flight.
+_login_task: asyncio.Task[None] | None = None
+
+
+def _login_in_progress() -> bool:
+    return _login_task is not None and not _login_task.done()
+
 
 async def _finalize_claude_login() -> None:
     """Run ``claude auth login`` to completion, then store user info +
@@ -130,9 +142,18 @@ async def handle_claude_code_login(
             "message": "Already authenticated; refreshed status.",
         }
 
-    asyncio.create_task(_finalize_claude_login(), name="claude_code_login")
+    global _login_task
+    if _login_in_progress():
+        return {
+            "success": True,
+            "pending": True,
+            "message": "A Claude sign-in is already in progress; finish it in the browser window the CLI opened.",
+        }
+
+    _login_task = asyncio.create_task(_finalize_claude_login(), name="claude_code_login")
     return {
         "success": True,
+        "pending": True,
         "message": "Claude is opening your browser to authenticate.",
     }
 

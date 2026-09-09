@@ -97,7 +97,18 @@ def claude_binary_path() -> str:
     if bin_path.exists():
         return str(bin_path)
 
-    logger.info("Installing Claude Code CLI into shared tree %s", OPENCOMPANY_NPM_ROOT)
+    # Pinned spec from ``config/ai_cli_providers.json`` (``package_name`` +
+    # ``package_version``), the vercel / cloudflare idiom: an unpinned
+    # install makes cold installs non-reproducible and lets a CLI release
+    # change the stream-json contract underneath a working deployment.
+    from services.cli_agent.config import get_provider_config
+
+    cfg = get_provider_config("claude")
+    npm_spec = cfg.package_name if cfg else "@anthropic-ai/claude-code"
+    if cfg and cfg.package_version:
+        npm_spec = f"{npm_spec}@{cfg.package_version}"
+
+    logger.info("Installing %s into shared tree %s", npm_spec, OPENCOMPANY_NPM_ROOT)
     OPENCOMPANY_NPM_ROOT.mkdir(parents=True, exist_ok=True)
 
     npm_cmd = shutil.which("npm")
@@ -105,13 +116,13 @@ def claude_binary_path() -> str:
         raise FileNotFoundError("npm not found on PATH")
 
     result = subprocess.run(
-        [npm_cmd, "install", "@anthropic-ai/claude-code", "--prefix", str(OPENCOMPANY_NPM_ROOT)],
+        [npm_cmd, "install", npm_spec, "--prefix", str(OPENCOMPANY_NPM_ROOT), "--no-audit", "--no-fund"],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        logger.error(f"npm install failed: {result.stderr}")
-        raise RuntimeError(f"Failed to install claude-code: {result.stderr}")
+        logger.error(f"npm install {npm_spec} failed: {result.stderr}")
+        raise RuntimeError(f"Failed to install {npm_spec}: {result.stderr}")
 
     if not bin_path.exists():
         raise FileNotFoundError(f"Claude CLI not found at {bin_path} after install")
