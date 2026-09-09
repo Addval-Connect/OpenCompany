@@ -51,15 +51,16 @@ Lifecycle policy:
 
 Continuity across process restarts:
 
-  - First spawn for a memory-bound run: argv emits ``--continue``
-    (claude resolves the latest conversation under cwd's
-    ``project_key`` automatically; works whether or not a prior
-    JSONL exists).
-  - Each successful turn captures ``result.session_id`` onto
-    ``session.current_session_uuid``. If the subprocess is later
-    reaped and a new ``acquire`` happens, the next spawn emits
-    ``--resume <session.current_session_uuid>`` so the SAME JSONL
-    keeps growing across process restarts.
+  - Cold spawn with no continuity flag: ``_spawn`` mints a ``uuid4``
+    and emits ``--session-id <UUID>``, so ``current_session_uuid`` is
+    known before the first event arrives.
+  - Memory-bound runs pass ``--resume <last_session_id>`` (persisted
+    on the memory node by ``AICliService._persist_memory``). Never
+    ``--continue``: the CLI resolves it only against interactive
+    sessions, so it never found the sessions this pool creates.
+  - If the subprocess is later reaped and a new ``acquire`` happens,
+    the next spawn emits ``--resume <session.current_session_uuid>``
+    so the SAME JSONL keeps growing across process restarts.
   - :meth:`clear` is an explicit context-reset primitive: kill the
     subprocess, drop the captured UUID, let the next ``acquire``
     spawn fresh with no continuity flag (claude assigns a new UUID).
@@ -627,6 +628,22 @@ class ClaudeSessionPool:
                         success=False,
                         error=session.context_capture_error,
                     )
+                if not any(self._provider.is_final_event(e) for e in session.events_this_turn):
+                    # Woken by stdout EOF, not by a ``result`` event: the
+                    # subprocess died mid-turn. Report the exit code so the
+                    # failure is diagnosable; whatever assistant text was
+                    # buffered is still reconstructed by the provider.
+                    try:
+                        await asyncio.wait_for(session.process.wait(), timeout=_SHUTDOWN_GRACE)
+                    except asyncio.TimeoutError:
+                        pass
+                    return self._build_result_from_events(
+                        session=session,
+                        events=session.events_this_turn,
+                        prompt=prompt,
+                        success=False,
+                        error=(f"claude exited (code {session.process.returncode}) " "before emitting a result event"),
+                    )
             except asyncio.TimeoutError:
                 logger.warning(
                     "[ClaudeSessionPool] turn timeout memory_node=%s " "prompt_len=%d",
@@ -716,6 +733,14 @@ class ClaudeSessionPool:
                 log_label=f"pool {memory_node_id}",
             )
 
+        # Cold spawn with no continuity flag: mint the session UUID here
+        # and pass it as ``--session-id`` so ``current_session_uuid`` is
+        # known before any event arrives. Crash-recovery respawns then
+        # always have a UUID to ``--resume`` (``acquire`` splices it), and
+        # memory persistence never depends on capturing it from stdout.
+        if not spec.resume_session_id and not spec.continue_session and not spec.session_id:
+            spec.session_id = str(uuid.uuid4())
+
         # ``include_prompt`` is ignored by the new ``interactive_argv``
         # (stream-json input mode reads the prompt from stdin), but we
         # pass ``False`` to make the intent explicit for any future
@@ -747,6 +772,7 @@ class ClaudeSessionPool:
             process=process,
             cwd=cwd,
             context_event_sink=context_event_sink,
+            current_session_uuid=spec.resume_session_id or spec.session_id or "",
         )
 
         # stdout reader — the single runtime contract in stream-json
@@ -761,6 +787,11 @@ class ClaudeSessionPool:
                 while True:
                     raw = await process.stdout.readline()
                     if not raw:
+                        # stdout EOF means claude exited. Wake ``send_turn``
+                        # now instead of letting it burn the full turn
+                        # timeout waiting for a ``result`` that can never
+                        # arrive (GitHub issue #133).
+                        session.result_event.set()
                         return
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line:

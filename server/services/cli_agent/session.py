@@ -1,5 +1,11 @@
 """One CLI session per task — interactive PTY + on-disk JSONL events.
 
+**Not used for Claude.** ``AICliService.run_batch`` routes every Claude
+task through ``ClaudeSessionPool`` (plain pipes + stream-json): a PTY
+stdin makes the CLI reject ``--input-format stream-json``, and this
+class never wrote the prompt to the child (GitHub #133 / #134). It
+remains the generic PTY + JSONL path for other providers.
+
 Each session is bound to:
   - one provider (Claude or Codex)
   - one task spec (`ClaudeTaskSpec` / `CodexTaskSpec`)
@@ -57,10 +63,11 @@ from services.cli_agent.types import BaseAICliTaskSpec
 logger = get_logger(__name__)
 
 # Claude derives its project_key from cwd by replacing every char that
-# isn't [a-zA-Z0-9.-] with `-`. Verified byte-for-byte against the
-# on-disk `<DATA_DIR>/claude/projects/` listing in the memory-bridge
-# research.
-_PROJECT_KEY_RE = re.compile(r"[^a-zA-Z0-9.-]")
+# isn't [a-zA-Z0-9-] with `-` (dots included: `.opencompany` becomes
+# `-opencompany`). Verified against the on-disk `~/.claude/projects/`
+# listing; keeping `.` in the class watched a directory the CLI never
+# wrote to (GitHub issue #132).
+_PROJECT_KEY_RE = re.compile(r"[^a-zA-Z0-9-]")
 
 # How long to wait for claude to materialise its session JSONL after
 # spawn on a first-run (no `--resume`). Five seconds is generous —
@@ -432,10 +439,8 @@ class AICliSession(BaseProcessSupervisor):
         our cwd. ``<OPENCOMPANY_CLAUDE_DIR>/projects/<project_key>/``.
 
         Claude derives ``project_key`` by replacing every non-
-        ``[a-zA-Z0-9.-]`` char in ``str(cwd)`` with ``-``. Verified
-        byte-for-byte against the on-disk
-        ``<DATA_DIR>/claude/projects/`` listing in the memory-bridge
-        research.
+        ``[a-zA-Z0-9-]`` char in ``str(cwd)`` with ``-`` (see
+        ``_PROJECT_KEY_RE``).
         """
         from nodes.agent.claude_code_agent._oauth import OPENCOMPANY_CLAUDE_DIR
 

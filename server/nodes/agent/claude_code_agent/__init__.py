@@ -300,33 +300,32 @@ class ClaudeCodeAgentNode(ActionNode):
         # under `<CLAUDE_CONFIG_DIR>/projects/<cwd-encoded>/<UUID>.jsonl`.
         # Context V2 resolution, explicit UUID resume, raw-event journalling,
         # and binding persistence live in AICliService.
-        # The project_key is derived from cwd (`[^a-zA-Z0-9.-] -> -`),
+        # The project_key is derived from cwd (`[^a-zA-Z0-9-] -> -`),
         # so memory continuity needs only a STABLE cwd across runs.
         # That's handled by AICliService passing memory_bound=True so
         # AICliSession spawns under repo_root instead of an ephemeral
         # worktree — see `services/cli_agent/session.py:cwd()`.
         #
-        # Continuity flag: when memory is wired, we set
-        # ``continue_session=True`` on the task spec. The argv-builder
-        # emits ``--continue`` and claude auto-loads the most recent
-        # conversation under the cwd (per code.claude.com/docs/en/
-        # cli-reference). No UUID round-trip through the memory node's
-        # params required — claude tracks its own sessions on disk and
-        # the auto-find-latest is the cleaner primitive than the
-        # pre-cutover UUID5-pre-mint + `--session-id <UUID5>` dance.
-        #
-        # First run: ``--continue`` with no prior session under the cwd
-        # is a benign no-op; claude starts fresh. Subsequent runs find
-        # and continue the prior JSONL.
+        # Continuity: when memory is wired, resume the UUID the previous
+        # successful run persisted on the memory node (``last_session_id``,
+        # written by ``AICliService._persist_memory``) via ``--resume``.
+        # ``--continue`` is NOT usable here: per the CLI reference it
+        # skips sessions created non-interactively (``-p`` / stream-json
+        # input), which is exactly what the session pool spawns, so it
+        # never found the prior conversation. First run: no stored UUID,
+        # no flag — the pool mints a ``--session-id`` and the run's
+        # result persists it for next time. A stale UUID is cleared by
+        # ``_persist_memory`` when claude reports it as not found.
         from services.cli_agent.context_bridge import is_context
 
         context_v2 = context_data if is_context(context_data) else None
         memory_data = context_data if context_data and not context_v2 else None
-        continue_session = bool(memory_data)
+        resume_session_id = (memory_data or {}).get("last_session_id") or None
         if memory_data:
             logger.info(
-                "[Claude Code memory] memory_node=%s -> --continue " "(claude auto-finds latest session under cwd)",
+                "[Claude Code memory] memory_node=%s -> %s",
                 memory_data.get("node_id"),
+                f"--resume {resume_session_id}" if resume_session_id else "fresh session (no last_session_id yet)",
             )
 
         tasks = list(params.tasks)
@@ -352,7 +351,7 @@ class ClaudeCodeAgentNode(ActionNode):
                 "prompt": prompt,
                 "model": params.model,
                 "system_prompt": params.system_prompt,
-                "continue_session": continue_session,
+                "resume_session_id": resume_session_id,
             }
             if params.effort is not None:
                 spec_kwargs["effort"] = params.effort
@@ -371,10 +370,11 @@ class ClaudeCodeAgentNode(ActionNode):
                     changed["effort"] = params.effort
                 if t.fallback_model is None and params.fallback_model is not None:
                     changed["fallback_model"] = params.fallback_model
-                # Only auto-enable --continue when memory is wired AND
-                # the task didn't explicitly opt in/out or pick a UUID.
-                if continue_session and not t.continue_session and not t.resume_session_id:
-                    changed["continue_session"] = True
+                # Only auto-resume the memory session when memory is
+                # wired AND the task didn't explicitly opt in/out or
+                # pick its own UUID.
+                if resume_session_id and not t.continue_session and not t.resume_session_id:
+                    changed["resume_session_id"] = resume_session_id
                 if changed:
                     tasks[i] = t.model_copy(update=changed)
 

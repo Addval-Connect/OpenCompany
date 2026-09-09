@@ -332,40 +332,61 @@ class AICliService:
                         except (KeyError, ValueError):
                             pass
 
-        # Pool branch: when memory is connected to a claude task, route
-        # through ``ClaudeSessionPool`` so successive turns reuse the
-        # warm PTY via ``/clear`` (saves ~1-2 s per turn). The
-        # ``claude_code_agent`` plugin already enforces ``len(tasks)==1``
-        # when memory is wired, so this branch is single-task. The pool
-        # owns the PTY lifetime; the bearer token stays embedded in the
-        # spawned claude's argv across batches (CLI handles its own MCP
-        # auth — we don't issue/unregister per turn).
-        use_pool = (
-            provider_name == "claude"
-            and len(task_list) == 1
-            and (bool(connected_memory) or context_bridge is not None)
+        # Pool branch: every claude task runs through ``ClaudeSessionPool``
+        # — a plain subprocess on stdio pipes speaking stream-json, the
+        # same invocation the Agent SDK uses. ``AICliSession`` (PTY +
+        # on-disk JSONL) never delivered the prompt on this provider and
+        # a PTY stdin makes the CLI reject stream-json input (GitHub
+        # issues #133 / #134), so it is no longer used for claude.
+        #
+        #   - Memory- or Context-bound: one warm session keyed by the
+        #     conversation, released after the turn so later turns reuse
+        #     it. The plugin enforces ``len(tasks)==1`` here. The pool
+        #     owns the bearer token across batches (see the ``finally``).
+        #   - Unbound: one ephemeral session per task keyed by task id,
+        #     terminated once the whole batch is done so the shared
+        #     token is unregistered exactly once (``unregister_batch``
+        #     is idempotent).
+        use_pool = provider_name == "claude"
+        bound_key = (
+            context_bridge.pool_key
+            if context_bridge is not None
+            else connected_memory["node_id"] if connected_memory else None
         )
+
+        async def run_pooled(task: BaseAICliTaskSpec, session_key: Any) -> SessionResult:
+            async with sem:
+                return await self._run_pooled_turn(
+                    task=task,
+                    session_key=session_key,
+                    cwd=resolved_repo_root,
+                    workspace_dir=Path(workspace_dir).resolve(),
+                    defaults=defaults,
+                    mcp_port=port,
+                    mcp_bearer_token=token,
+                    connected_tools=connected_tools or [],
+                    connected_skill_names=list(connected_skill_names or []),
+                    workflow_id=workflow_id,
+                )
+
         results: List[SessionResult]
         try:
-            if use_pool:
-                results = [
-                    await self._run_pooled_turn(
-                        task=task_list[0],
-                        session_key=(
-                            context_bridge.pool_key
-                            if context_bridge is not None
-                            else connected_memory["node_id"]
-                        ),
-                        cwd=resolved_repo_root,
-                        workspace_dir=Path(workspace_dir).resolve(),
-                        defaults=defaults,
-                        mcp_port=port,
-                        mcp_bearer_token=token,
-                        connected_tools=connected_tools or [],
-                        connected_skill_names=list(connected_skill_names or []),
-                        workflow_id=workflow_id,
+            if use_pool and bound_key is not None:
+                results = [await run_pooled(task_list[0], bound_key)]
+            elif use_pool:
+                ephemeral_keys = [f"{node_id}:{turn_execution_id}:{i}" for i in range(len(task_list))]
+                try:
+                    results = await asyncio.gather(
+                        *(run_pooled(t, k) for t, k in zip(task_list, ephemeral_keys)),
+                        return_exceptions=False,
                     )
-                ]
+                finally:
+                    from services.cli_agent.factory import get_session_pool
+
+                    pool = get_session_pool("claude")
+                    if pool is not None:
+                        for k in ephemeral_keys:
+                            await pool.terminate(k)
             else:
                 results = await asyncio.gather(
                     *(run_one(t) for t in task_list),
