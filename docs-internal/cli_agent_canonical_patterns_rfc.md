@@ -6,7 +6,7 @@
 | Date | 2026-05-07 |
 | Scope | `services/cli_agent` framework — Claude Code, Codex, Gemini-CLI agents spawned by OpenCompany |
 | Companion code | [`server/services/cli_agent/`](../server/services/cli_agent/), [`server/nodes/agent/claude_code_agent/`](../server/nodes/agent/claude_code_agent/) |
-| Companion docs | [cli_agent_framework.md](./cli_agent_framework.md), [claude_code_agent_architecture.md](./claude_code_agent_architecture.md) |
+| Companion docs | [cli_agent_framework.md](./cli_agent_framework.md), [claude_code_agent_architecture.md](./ARCHIVE/claude_code_agent_architecture.md) |
 
 ## Abstract
 
@@ -425,7 +425,7 @@ reverted: the CLI resolves `--continue` only against interactive
 sessions, so it never found the pool's non-interactive ones.) The entry
 point is
 [`claude_code_agent/__init__.py::execute_op`](../server/nodes/agent/claude_code_agent/__init__.py)
-(sets `continue_session = bool(memory_data)`) and the warm-subprocess
+(sets `resume_session_id` from `memory_data["last_session_id"]`) and the warm-subprocess
 pool at [`claude_code_agent/_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py).
 Current canonical description:
 [cli_agent_framework.md → Memory bridge](./cli_agent_framework.md#memory-bridge--simplememory--claude_code_agent).
@@ -501,7 +501,7 @@ documented project-instruction surface.
 | **I-3** `list_changed` notification | **DONE (`b40011e`).** [`workflow_tools._schedule_list_changed_notify`](../server/services/cli_agent/workflow_tools.py) fires after each `add_tool` / `remove_tool` since FastMCP doesn't emit it automatically. | Optional: unit test asserting `session.send_tool_list_changed` is called. |
 | **I-4** Tool-search deferral | **DONE.** `"alwaysLoad": true` set on the `opencompany` server entry in [`claude_code_agent/_provider.py::interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py). | None. |
 | **I-5** Visible-tool filtering | **Gap.** All 7 built-in OpenCompany MCP tools (including `getCredential`, `broadcastLog`) are visible to the model. | Mark internal-only tools `_meta["anthropic/alwaysLoad"]: false` or filter via FastMCP middleware. **Defer** — not breaking today. |
-| **I-6** Native session continuity | **DONE.** [`session.py`](../server/services/cli_agent/session.py) keeps a stable cwd for memory-bound spawns; the warm-subprocess pool at [`claude_code_agent/_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py) preserves the session across turns. [`claude_code_agent/__init__.py`](../server/nodes/agent/claude_code_agent/__init__.py) sets `continue_session = bool(memory_data)` → argv emits `--continue` (first cold spawn) with `--resume <UUID>` reserved for crash recovery. [`service.py:_persist_memory`](../server/services/cli_agent/service.py) appends turns to `memory_content`, saves `last_session_id` (display-only), broadcasts `node_parameters_updated`, and auto-clears stale UUIDs via `_clear_stale_session_id`. See §4.8. | Markdown `memory_content` remains the UI mirror, not the resume channel. |
+| **I-6** Native session continuity | **DONE.** [`session.py`](../server/services/cli_agent/session.py) keeps a stable cwd for memory-bound spawns; the warm-subprocess pool at [`claude_code_agent/_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py) preserves the session across turns. [`claude_code_agent/__init__.py`](../server/nodes/agent/claude_code_agent/__init__.py) sets `resume_session_id = memory_data["last_session_id"]`; argv emits a host-minted `--session-id <uuid4>` on first cold spawn (`_pool.py`) and `--resume <UUID>` on later cold spawns and crash recovery. `--continue` is never emitted; the `continue_session` arm in `_provider.py` is unreachable from the plugin. [`service.py:_persist_memory`](../server/services/cli_agent/service.py) appends turns to `memory_content`, saves `last_session_id` (display-only), broadcasts `node_parameters_updated`, and auto-clears stale UUIDs via `_clear_stale_session_id`. See §4.8. | Markdown `memory_content` remains the UI mirror, not the resume channel. |
 | **System-prompt directive** (Cursor / `CLAUDE.md` pattern) | **DONE (`b40011e`).** Second `--append-system-prompt` listing connected `mcp__opencompany__*` tools. | None. |
 | `--allowedTools` strict MCP-only allowlist | **DONE (superseded R3).** Built-in escape hatches (`Read`/`Edit`/`Bash`/`Glob`/`Grep`/`Write`/`WebSearch`/`WebFetch`) are NOT in the default allowlist; `Skill` is added conditionally (only when a skill is wired). `default_allowed_tools: ""` in [`ai_cli_providers.json`](../server/config/ai_cli_providers.json); allowlist assembled in [`_provider.py::interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py). Gated by `--permission-mode dontAsk`. | None. |
 | Composio-style server-side credentials | **Aligned.** `getCredential` allowlist + `auth_service.get_api_key`. | None. |

@@ -236,7 +236,7 @@ Adding a new OpenAI-compatible provider requires a config entry:
   "models_endpoint": "https://api.deepseek.com/models",
   "base_url": "https://api.deepseek.com",
   "max_output_tokens": { "_default": 8192 },
-  "context_length": { "_default": 128000 },
+  "context_length": { "_default": 131072 },
   "temperature_range": [0.0, 2.0]
 }
 ```

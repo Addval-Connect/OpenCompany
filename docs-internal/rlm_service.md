@@ -1,6 +1,6 @@
 # RLM Service -- Recursive Language Model Agent Integration
 
-> **Related docs:** [agent_context_flow.md](./agent_context_flow.md) for conversation continuity — RLM is a specialized provider, so a connected Context node reaches it through `SpecializedAgentContextBridge` (`services/cli_agent/context_bridge.py`); [tool_building_pipeline.md](./tool_building_pipeline.md) for how connected tool nodes are bound to the REPL via `ToolBridgeAdapter`. [memory_lifecycle.md](./memory_lifecycle.md) describes only the retired markdown memory path.
+> **Related docs:** [agent_context_flow.md](./agent_context_flow.md) for conversation continuity — RLM is a specialized provider, so a connected Context node reaches it through `SpecializedAgentContextBridge` (`services/cli_agent/context_bridge.py`); [tool_building_pipeline.md](./tool_building_pipeline.md) for how connected tool nodes are bound to the REPL via `ToolBridgeAdapter`. [memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) describes only the retired markdown memory path.
 
 ## Overview
 
@@ -266,6 +266,7 @@ return await ai_service.rlm_service.execute(node_id, parameters, ...)
 The LM writes Python code inside `\`\`\`repl` fenced blocks. These are extracted via regex and executed with `exec()` in a sandboxed namespace.
 
 ### Available Functions in REPL
+(provided by the upstream `rlm` package's REPL, not defined under `server/`)
 - `llm_query(prompt)` -- Plain LM call (uses depth+1 backend)
 - `rlm_query(prompt)` -- Recursive child RLM with its own REPL
 - `FINAL(answer)` -- Signal completion with answer string
@@ -323,7 +324,7 @@ Wave 11 / Wave 12 D5 refactors removed the surfaces they named.
 `tests/test_tool_registry.py`); the delegation identity comes from
 `BaseNode.__init_subclass__`, which stamps `tool_name =
 f"delegate_to_{cls.type}"` on every agent plugin (`services/plugin/base.py:257`).
-`rlm_agent` is listed in both `_AGENT_DELEGATION_TYPES` (`services/ai.py:2510`,
+`rlm_agent` is listed in both `_AGENT_DELEGATION_TYPES` (`services/ai.py:2509`,
 the `DelegateToAgentSchema` gate) and `AI_AGENT_TYPES` (`server/constants.py:32`,
 the `execute_tool` dispatch gate). It stays on the legacy fire-and-forget path
 — excluded from `AGENT_WORKFLOW_TYPES` because its REPL state is externalised.

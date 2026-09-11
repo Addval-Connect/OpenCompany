@@ -377,7 +377,7 @@ the reference implementation). Four self-registration calls in
 
 ## Memory bridge — `simpleMemory` → `claude_code_agent`
 
-> See [memory_lifecycle.md](./memory_lifecycle.md) for the shared markdown surface (every agent uses the same `parse_memory_markdown` / `append_to_memory_markdown` / `trim_markdown_window` helpers to maintain `simpleMemory.memory_content`). This section documents what's UNIQUE to `claude_code_agent`: the markdown is the UI mirror, not the resume channel.
+> See [memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) for the shared markdown surface (every agent uses the same `parse_memory_markdown` / `append_to_memory_markdown` / `trim_markdown_window` helpers to maintain `simpleMemory.memory_content`). This section documents what's UNIQUE to `claude_code_agent`: the markdown is the UI mirror, not the resume channel.
 
 Connecting a `simpleMemory` node to a `claude_code_agent` makes the
 spawned `claude` subprocess resume its prior session natively across runs.
@@ -418,16 +418,18 @@ Argv emission lives in
 [`nodes/agent/claude_code_agent/_provider.py:interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py).
 The `ClaudeTaskSpec` carries `continue_session: bool` and
 `resume_session_id: Optional[str]`. `claude_code_agent.execute_op` sets
-`continue_session = bool(memory_data)` for the cold-spawn case; the
+`resume_session_id` from the memory node's `last_session_id` and leaves
+`continue_session` at its `False` default (`claude_code_agent/__init__.py`); the
 pool's crash-recovery path injects `resume_session_id =
 session.current_session_uuid` into the spec before respawning.
-`--session-id <UUID5>` (the pre-cutover UUID-round-trip primitive) is
-intentionally NOT emitted in interactive mode — claude rejects it.
+The pre-cutover UUID5 derivation is gone; the `--session-id` emitted today is
+a fresh `uuid4` minted by `ClaudeSessionPool._spawn` on cold start (claude
+rejects a UUID already in use).
 
 ### Plumbing
 
 ```
-ClaudeCodeAgentNode.execute_op                      (__init__.py:291-330)
+ClaudeCodeAgentNode.execute_op                      (__init__.py:263-330)
   ├─ collect_agent_connections() → context_data (first tuple element)
   │    ├─ Context node wired: a Context descriptor (kind == "context") → context_descriptor,
   │    │   handed to AICliService as connected_context and bridged through
@@ -435,14 +437,15 @@ ClaudeCodeAgentNode.execute_op                      (__init__.py:291-330)
   │    └─ legacy input-memory graphs: the recorded Memory descriptor → memory_data
   │        {node_id, session_id, memory_content, window_size,
   │         long_term_enabled, last_session_id (display-only)}
-  ├─ continue_session = bool(memory_data)
+  ├─ resume_session_id = memory_data.get("last_session_id")
   ├─ ClaudeTaskSpec(..., continue_session=continue_session,
   │                      resume_session_id=None)
   └─ AICliService.run_batch(..., connected_memory=memory_data,
                             broadcaster=...)
        └─ For context/memory-wired single-task runs, route through ClaudeSessionPool
-          (service.py:343-358 — use_pool = claude AND one task AND
-           (connected_memory OR a Context bridge)):
+          (service.py:357-363 — use_pool = the provider registered a session pool;
+           bound_key = context_bridge.pool_key, else connected_memory["node_id"],
+           else None. Unbound batches still run pooled, one ephemeral session per task.)
             ├─ pool.acquire(session_key, spec, cwd=<workspace>/<node>/wt_session, env, ...)
             │    session_key = context_bridge.pool_key when a Context node is wired (the
             │    RFC-0002 conversation key, so a Reset's generation bump

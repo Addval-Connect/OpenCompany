@@ -1,6 +1,6 @@
 # Memory Compaction, Session Token Tracking, and Cost Calculation
 
-> **Related docs:** [memory_lifecycle.md](./memory_lifecycle.md) for the markdown / vector-store / state-clear surface. This doc is the SSOT for the **service** (`CompactionService`, thresholds, shared native summarization, and pricing). `memory_lifecycle.md` is the SSOT for the **flow** (how the markdown moves through an agent turn).
+> **Related docs:** [memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) for the retired markdown / vector-store / state-clear surface (archived, not an SSOT). This doc is the SSOT for the **service** (`CompactionService`, thresholds, shared native summarization, and pricing). [agent_context_flow.md](./agent_context_flow.md) is the SSOT for the **flow** (how a conversation moves through an agent turn).
 
 ## Overview
 

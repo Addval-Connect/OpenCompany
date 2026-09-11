@@ -3,7 +3,7 @@
 > **TL;DR.** `ClaudeSessionPool` keeps a warm `claude` subprocess per
 > session key (the RFC-0002 conversation key `context_bridge.pool_key` when
 > a Context node is wired; the legacy `simpleMemory.node_id` on `input-memory`
-> graphs — `services/cli_agent/service.py:354-358`) and drives it with the same flags Anthropic's
+> graphs — `services/cli_agent/service.py:359-363`) and drives it with the same flags Anthropic's
 > own VSCode extension uses — stdio pipes, `--output-format stream-json
 > --input-format stream-json --verbose --ide`. Multi-turn happens by
 > writing newline-delimited JSON to `proc.stdin` of the long-lived
@@ -131,7 +131,10 @@ allowlist gate.
 ## Session pool — warm-process reuse
 
 [`ClaudeSessionPool`](../server/nodes/agent/claude_code_agent/_pool.py) is
-keyed by `simpleMemory.node_id`. Each entry is a
+keyed by the RFC-0002 conversation key `context_bridge.pool_key`
+(`(workflow_id, agent_node_id, generation)`), falling back to the legacy
+`simpleMemory.node_id` only on `input-memory` graphs
+(`services/cli_agent/service.py:359-363`). Each entry is a
 `PooledClaudeSession` carrying the live `asyncio.subprocess.Process`,
 the captured session UUID (filled in from the first event that has
 one), the MCP bearer token embedded in the spawn argv, a per-session

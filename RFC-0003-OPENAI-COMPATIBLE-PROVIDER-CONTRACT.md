@@ -330,11 +330,9 @@ separately.
 ## 13. Compatibility audit of the nine compat providers
 
 All nine `base_url` values in `llm_defaults.json` match their vendor docs and
-need no change. In particular **`deepseek` is path-less and correct**.
-
-The defect is in our documentation: `docs-internal/native_llm_sdk.md:235` states
-DeepSeek's base as `https://api.deepseek.com/v1`, which the vendor does not
-document. Phase 1 fixes the doc, not the config. Any future change that
+need no change; in particular `deepseek` is path-less and correct.
+`native_llm_sdk.md` already documents it as root-mounted with no `/v1`; the doc
+defect this section originally recorded has been fixed. Any future change that
 "corrects" the JSON toward `/v1` is a regression.
 
 ## 14. References

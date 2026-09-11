@@ -5,7 +5,7 @@ Detailed architecture reference for how AI Agent (`aiAgent`) and Chat Agent (`ch
 > **Related Documentation:**
 > - [Node Creation Guide](./node_creation.md) - Canonical plugin recipe (covers tool nodes, dual-purpose nodes, specialized agents)
 > - [Tool Building Pipeline](./tool_building_pipeline.md) - Canonical home for `_build_tool_from_node`, tool discovery, per-type Temporal dispatch
-> - [Agent Context Flow](./agent_context_flow.md) - Canonical home for conversation continuity (RFC-0002 Context store); [Memory Lifecycle](./memory_lifecycle.md) covers only the retired markdown model
+> - [Agent Context Flow](./agent_context_flow.md) - Canonical home for conversation continuity (RFC-0002 Context store). The retired markdown memory model is archived at [ARCHIVE/memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) and is not an SSOT for anything current.
 > - [CLAUDE.md](../CLAUDE.md) - Project overview and full node inventory
 
 ## Table of Contents
@@ -182,9 +182,9 @@ next iteration.
 
 ### `max_iterations` precedence
 
-Resolved per-execution by `execute_agent` / `execute_chat_agent` (and `prepare_agent_payload` for F4.B), highest to lowest:
+Resolved per-execution, and the two runtimes differ. **Temporal** (`prepare_agent_payload`, `services/temporal/agent_activities.py`) applies all four tiers below. **In-process** (`execute_agent` / `execute_chat_agent` in `services/ai.py`) applies only tiers 2 and 4: it never reads `parameters.max_iterations` and never consults env `Settings`. Highest to lowest:
 
-1. **Per-agent-node** `parameters.max_iterations` — set by the user on the agent node itself.
+1. **Per-agent-node** `parameters.max_iterations` — set by the user on the agent node itself. Temporal path only; no agent plugin currently declares a `max_iterations` Params field, so this tier is reachable only from a hand-written graph.
 2. **Per-user** `UserSettings.agent_recursion_limit` — Settings tab override (DB-backed).
 3. **Env** `Settings.agent_recursion_limit` from `AGENT_RECURSION_LIMIT` (default 200).
 4. **JSON** `llm_defaults.json:agent.recursion_limit` — last-resort fallback when Settings can't load.
@@ -654,7 +654,7 @@ Both agents resolve their prompt the same way (logic in `server/nodes/agent/_inl
    - When `not parameters.get("prompt") and input_data`, the agent reads the output of the node wired to its `input-main` / `input-chat` handle (`input_data`, surfaced by `collect_agent_connections`).
    - Extraction order: `input_data["message"]` → `input_data["text"]` → `input_data["content"]` → `str(input_data)` (whole-output fallback).
 
-**Task-context injection (Step 1)** runs before the prompt fallback: when an `input-task` edge supplies `task_data`, `format_task_context(task_data)` is prepended to the prompt and tools may be stripped (the agent is reacting to a completed delegation, not starting fresh).
+**Task-context injection (Step 1)** runs before the prompt fallback: when an `input-task` edge supplies `task_data`, `format_task_context(task_data)` is prepended to the prompt. Tools are deliberately **kept**: the injected guidance tells a lead to `list_tasks` / `accept_task` / `reassign_task`, which needs the Task Manager tool (`nodes/agent/_inline.py` module docstring). The only agent that strips tools on task completion is `rlm_agent` (`nodes/agent/rlm_agent/__init__.py`, status in `("completed", "error")`).
 
 **Example workflow:**
 ```
