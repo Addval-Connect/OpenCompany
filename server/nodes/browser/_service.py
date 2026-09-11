@@ -438,8 +438,14 @@ async def shutdown_browser_service() -> None:
 
     Called during FastAPI lifespan shutdown. This is the daemon's intended
     cleanup API -- it stops the background process and releases file locks.
+
+    Reads the module singleton directly instead of ``get_browser_service()``:
+    that accessor lazily *installs* agent-browser (``npm install`` over the
+    network) on first call, and a process that never used the browser has
+    no daemon to close. Running the installer at teardown blocked the event
+    loop for as long as npm took and wedged every graceful shutdown.
     """
-    svc = get_browser_service()
+    svc = _instance
     if not svc:
         return
     try:

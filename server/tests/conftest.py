@@ -121,6 +121,19 @@ sys.modules["core.auth_cookies"] = _auth_cookies_mod
 _auth_cookies_spec.loader.exec_module(_auth_cookies_mod)
 setattr(_core_pkg, "auth_cookies", _auth_cookies_mod)
 
+# core.approot is stdlib-only and is imported at module load by
+# core.env_defaults, core.paths and core.config (app-tree root + env file
+# locations, OPENCOMPANY_APP_ROOT override). It must be resolvable under
+# the stubbed package BEFORE those modules are file-loaded below.
+_approot_spec = _importlib_util.spec_from_file_location(
+    "core.approot",
+    SERVER_DIR / "core" / "approot.py",
+)
+_approot_mod = _importlib_util.module_from_spec(_approot_spec)
+sys.modules["core.approot"] = _approot_mod
+_approot_spec.loader.exec_module(_approot_mod)
+setattr(_core_pkg, "approot", _approot_mod)
+
 # core.env_defaults is stdlib-only (the .env.template-backed env
 # resolver plugin folders use instead of hardcoded port fallbacks) —
 # expose the real module so plugin imports resolve during collection.

@@ -62,8 +62,20 @@ def executor_port() -> int:
 
 
 def _sidecar_dir() -> Path:
-    # <server>/nodes/code/_runtime.py -> <server>/nodejs
-    return Path(__file__).resolve().parents[2] / "nodejs"
+    # <server>/nodejs — resolved through core.approot so the layout rule
+    # lives in one place.
+    from core.approot import server_root
+
+    return server_root() / "nodejs"
+
+
+def _node_binary() -> str | None:
+    """The ``node`` executable: ``OPENCOMPANY_NODE_BIN`` (set by the desktop
+    shell to its bundled runtime) else whatever is first on PATH."""
+    override = os.environ.get("OPENCOMPANY_NODE_BIN", "").strip()
+    if override and Path(override).is_file():
+        return override
+    return shutil.which("node")
 
 
 class NodeJSExecutorRuntime(BaseProcessSupervisor):
@@ -76,9 +88,9 @@ class NodeJSExecutorRuntime(BaseProcessSupervisor):
     # ---- BaseProcessSupervisor overrides ---------------------------------
 
     async def _pre_spawn(self) -> None:
-        if shutil.which("node") is None:
+        if _node_binary() is None:
             raise RuntimeError(
-                "Node.js not found on PATH — the JS/TS executor sidecar "
+                "Node.js not found on PATH (or OPENCOMPANY_NODE_BIN) — the JS/TS executor sidecar "
                 "requires the same Node 18+ install as the rest of OpenCompany."
             )
         if not (_sidecar_dir() / "dist" / "index.js").is_file():
@@ -88,7 +100,7 @@ class NodeJSExecutorRuntime(BaseProcessSupervisor):
             )
 
     def binary_path(self) -> Path:
-        return Path(shutil.which("node") or "node")
+        return Path(_node_binary() or "node")
 
     def argv(self) -> list[str]:
         return [str(self.binary_path()), str(_sidecar_dir() / "dist" / "index.js")]

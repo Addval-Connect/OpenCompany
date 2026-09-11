@@ -84,7 +84,9 @@ async def run_temporal_lifecycle(
     while True:
         attempt += 1
         if owned:
+            _set_phase(app_state, "installing_temporal" if not _temporal_binary_present() else "starting_temporal")
             await _ensure_dev_server(attempt, log)
+        _set_phase(app_state, "connecting")
         client = await wrapper.connect(retries=1, delay=0)
         if client is None:
             # Surface every failed attempt to stdout so users can see the
@@ -97,8 +99,10 @@ async def run_temporal_lifecycle(
             )
         else:
             try:
+                _set_phase(app_state, "starting_workers")
                 await _startup_sweep(wrapper, settings, log)
                 await _start_execution_engine(client, app_state, settings, log)
+                _set_phase(app_state, "ready")
                 log(f"[Temporal] Worker started, execution engine ready (attempt {attempt})")
                 logger.info(
                     "Temporal integration initialized successfully",
@@ -118,6 +122,31 @@ async def run_temporal_lifecycle(
     await _boot_reconcile(log)
     if owned:
         await _watch_dev_server(wrapper, settings)
+
+
+def _set_phase(app_state: Any, phase: str) -> None:
+    """Record coarse progress for ``/health/ready`` (read by the desktop splash)."""
+    try:
+        app_state.temporal_phase = phase
+    except Exception:  # noqa: BLE001 — app_state may be a bare object in tests
+        pass
+
+
+def _temporal_binary_present() -> bool:
+    """True when the pooch-managed ``temporal`` CLI is already on disk.
+
+    Distinguishes a first-run download (~114 MB, tens of seconds) from a
+    plain spawn so the readiness phase can say which one is happening.
+    """
+    try:
+        from core.paths import package_dir
+
+        root = package_dir("temporal")
+        if not root.is_dir():
+            return False
+        return any(p.is_file() and p.name.startswith("temporal") for p in root.rglob("temporal*"))
+    except Exception:  # noqa: BLE001 — never let a probe break the connect loop
+        return True
 
 
 async def _ensure_dev_server(attempt: int, log: Callable[[str], None]) -> None:

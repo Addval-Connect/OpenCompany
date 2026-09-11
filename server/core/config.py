@@ -5,6 +5,8 @@ from pathlib import Path
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
+from core.approot import env_file_path, env_template_path
+
 
 # The dev placeholder secrets shipped in ``.env.template``. SSOT for these
 # literals — ``company build`` scaffolds fresh values over the ``dev-``
@@ -553,7 +555,14 @@ class Settings(BaseSettings):
         return self._resolve_under_data(self.workspace_base_dir)
 
     model_config = {
-        "env_file": "../.env",
+        # Layered like ``cli.config.load_config``: the canonical template
+        # supplies every default, the operator's ``.env`` overrides it, the
+        # process environment wins over both. Resolved through
+        # ``core.approot`` (absolute paths), so ``Settings()`` no longer
+        # depends on the process cwd being ``server/`` — the desktop shell
+        # spawns uvicorn from a relocated bundle and points
+        # ``OPENCOMPANY_ENV_FILE`` at its writable data dir.
+        "env_file": (str(env_template_path()), str(env_file_path())),
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         # ``ignore`` lets stale ``.env`` files survive obsolete vars

@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 PUBLIC_PATHS = frozenset(
     [
         "/health",
+        "/health/ready",  # readiness probe for the desktop shell splash / CI
+        "/api/desktop/shutdown",  # desktop shell; gated by X-Desktop-Token, not the cookie
         "/docs",
         "/openapi.json",
         "/redoc",
