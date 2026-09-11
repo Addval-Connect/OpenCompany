@@ -109,7 +109,7 @@ Keep `sourcemap: analyze` (already correct), keep React Compiler config.
 ### 3. Node sidecar esbuild bundle
 
 - `server/nodejs/package.json` → add `esbuild` devDep; replace scripts:
-  - `"build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/index.js"`
+  - `"build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --packages=external --outfile=dist/index.js"` (kept in sync with `engines.node` by `test_sidecar_engines_match_esbuild_target`)
   - `"start": "node dist/index.js"` (was `tsx src/index.ts`)
   - keep `"dev": "tsx watch src/index.ts"`
 - `server/nodejs/.gitignore` → new file: `dist/`

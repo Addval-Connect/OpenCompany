@@ -62,7 +62,7 @@ Restart-Service SysMain
 
 **Fix** (if admin is unavailable): **Reboot**. This is what clears the stuck kernel cache reliably.
 
-**Prevention** (`cli/commands/start.py`, `_sqlalchemy_preflight`): a preflight probe times `import sqlalchemy` in the server venv. If it exceeds 8 seconds, it fails fast with actionable remediation steps instead of letting uvicorn hang silently.
+**Prevention** (`cli/commands/start.py`, `_sqlalchemy_preflight`): a preflight probe times `import sqlalchemy` in the server venv with a 15-second timeout. If the import times out or crashes it fails fast with actionable remediation steps instead of letting uvicorn hang silently; an import that succeeds but takes over 5 seconds only prints a warning.
 
 ---
 
@@ -309,7 +309,7 @@ Or start a fresh terminal that doesn't inherit from the Claude Code harness.
 
 **Symptom**: `scripts/install.js` reports `Python: Python 3.13.7` as valid, but `pyproject.toml` requires `>=3.11,<3.13`.
 
-**Root cause**: The version check at `install.js:59` uses `minor >= 12` with no upper bound:
+**Root cause**: The version check at `install.js:76` uses `minor >= 12` with no upper bound:
 ```js
 if (major >= 3 && minor >= 12) { return { cmd, version }; }
 ```

@@ -350,13 +350,12 @@ AgentWorkflow.run(context):
        _build_tool_from_node produces AgentToolSpec values. Tool entries
        carry the serialized ToolDef declaration plus routing tool_info;
        native LLM steps consume the definition directly.
-       Records llm_engine="native" + message_wire_version=2.
   emit_phase("starting", status="executing")
   loop until "final" or max_iterations:
     1. emit_phase("llm_step", iteration=N)
     2. execute_activity("agent.execute_llm_step")
          returns {kind, assistant_message, calls?, content?, usage}.
-         assistant_message is MessageWireV2: ordered text/reasoning/tool
+         assistant_message is a MessageWire dict: ordered text/reasoning/tool
          blocks plus JSON-safe provider continuation state (Gemini thought
          signatures, Anthropic signed/redacted thinking, OpenAI response
          metadata). It is appended verbatim to messages.
@@ -413,17 +412,15 @@ AgentWorkflow.run(context):
   emit_phase("completed", status="success")
 ```
 
-The `agent.prepare_payload` result is recorded in history and therefore
-acts as the deterministic engine selector. New executions default to
-`llm_engine="native"` with Message Wire V2 and use `ChatUnifier` plus the
-native provider SDKs for every turn. Histories whose recorded prepare result
-has no engine marker are pre-cutover histories: their messages are in a retired
-wire format the native reader cannot interpret, so `agent.execute_llm_step`
-refuses them with a non-retryable
-`ApplicationError(type="InvalidAgentLLMEngine")` rather than misreading them.
-The operator fix is to Reset the deployment, which starts a fresh generation.
-Changing the environment cannot change an execution after it starts,
-and a native run never falls back after a provider request starts.
+The `agent.prepare_payload` result is recorded in history. There is one
+engine and one wire standard (`MessageWire`): every turn uses `ChatUnifier`
+plus the native provider SDKs, and no `llm_engine` / `message_wire_version`
+discriminator is recorded (the cutover-era markers and the
+`InvalidAgentLLMEngine` refusal path were purged; `tests/llm/test_single_wire_standard.py`
+fails the build if they reappear). Pre-cutover deployments are handled by Reset,
+which starts a fresh generation. Changing the environment cannot change an
+execution after it starts, and a native run never falls back after a provider
+request starts.
 
 `emit_phase(phase, status?)` is a thin helper that schedules `agent.broadcast_progress`. The activity emits `WorkflowEvent.agent_progress` (CloudEvents v1.0, `type="com.opencompany.agent.progress"`) for FE consumers; when `status` is supplied it also drives a raw-dict `update_node_status` for the canvas-glow color (executing / success / error). Same dual-channel pattern F4.A's `_node_activity` uses. When this workflow is itself a delegated child (`context["parent_node_id"]` set), every `emit_phase` call ALSO schedules a second broadcast against the parent's `node_id` with `phase="delegating"` — the parent's canvas badge then advances in real time while the child loops, instead of freezing at "executing" glow until the child completes.
 
@@ -441,7 +438,7 @@ addition. Seven are the core loop activities:
 
 | Activity | Purpose |
 |---|---|
-| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / auto_rebind_tools), records `llm_engine` + `message_wire_version`, and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit` + `UserSettings.auto_rebind_tools_after_canvas_change`. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
+| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / auto_rebind_tools), and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit` + `UserSettings.auto_rebind_tools_after_canvas_change`. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
 | `agent.execute_llm_step` | One LLM turn. The native branch decodes Message Wire V2, rebuilds `ToolDef` values, calls `run_native_llm_step(ChatUnifier, ...)` with SDK retries disabled, heartbeats while awaiting the provider, and returns the exact assistant message + tool calls + normalized usage. Guards against un-invokable payloads: post-filter system-only message lists raise `ApplicationError(type="EmptyAgentPrompt", non_retryable=True)`. |
 | `agent.refresh_tools` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
 | `agent.persist_turn` | Appends the latest human/assistant exchange to memory markdown, trims the window, broadcasts `node.parameters.updated`. |

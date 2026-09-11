@@ -48,7 +48,7 @@ Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [nati
 | `client/src/components/` | React Flow canvas, parameter panel, modals | [CLAUDE.md](CLAUDE.md) |
 | `server/services/` | WorkflowService, NodeExecutor, AI service | [DESIGN.md](docs-internal/DESIGN.md) |
 | `server/services/handlers/` | Cross-cutting orchestration only (`tools.py` AI-tool dispatch + delegation, `triggers.py`, `todo.py`) — per-node handlers live inside the plugins since Wave 11 | [node_creation.md](docs-internal/node_creation.md) |
-| `server/services/llm/` | Native LLM SDK layer (12 providers) | [native_llm_sdk.md](docs-internal/native_llm_sdk.md) |
+| `server/services/llm/` | Native LLM SDK layer (13 providers) | [native_llm_sdk.md](docs-internal/native_llm_sdk.md) |
 | `server/services/execution/` | Decide pattern, DLQ, recovery, conditions | [DESIGN.md](docs-internal/DESIGN.md) |
 | `server/services/temporal/` | Distributed execution via Temporal | [TEMPORAL_ARCHITECTURE.md](docs-internal/TEMPORAL_ARCHITECTURE.md) |
 | `server/routers/websocket.py` | WebSocket endpoint + core `MESSAGE_HANDLERS` (plugins register more via `ws_handler_registry`) | [status_broadcaster.md](docs-internal/status_broadcaster.md) |

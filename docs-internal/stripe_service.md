@@ -71,7 +71,7 @@ StripeWebhookSource.handle(request)
    │
    ├── shape(request, body, payload)
    │      → WorkflowEvent(id=evt_…, type="stripe.charge.succeeded",
-   │                      source="stripe://acct_…", data=payload)
+   │                      source="stripe://acct_…", data=payload["data"])
    │
    └── event_waiter.dispatch(source.type, event)
           ▼
@@ -88,9 +88,10 @@ StripeActionNode.run(params)
 shlex.split(command)
    │ → ["customers", "create", "--email", "a@b.com"]
    ▼
-run_cli_command(binary="stripe", argv=…)        # NO credential= injection
+ensure_stripe_cli() → absolute binary path
+   ▼
+run_cli_command(binary=<abs path>, argv=…)     # NO credential= injection
    │
-   ├── shutil.which("stripe") → resolves binary on PATH
    ├── asyncio.create_subprocess_exec(
    │       binary, *argv,                        # plain argv, no --api-key
    │       stdout=PIPE, stderr=PIPE,
@@ -218,7 +219,7 @@ StripeListenSource.stop()
 | `server/nodes/stripe/_install.py` | `ensure_stripe_cli()` — async, idempotent, lock-guarded. Resolves the binary path: in-process cache → system PATH → previously-downloaded copy at `<DATA_DIR>/packages/stripe/bin/stripe[.exe]` (`core.paths.package_dir("stripe") / "bin"`) → fresh download from GitHub releases (pinned `_VERSION = "1.40.9"`) into that same dir. Asset-name map covers Windows AMD64, Linux x86_64/arm64, macOS x86_64/arm64. Subsequent calls hit the cache instantly. |
 | `server/skills/payments_agent/stripe-skill/SKILL.md` | LLM teaching markdown for the `stripe_action` tool. ~10K chars covering customers, charges, payment_intents, refunds, invoices, products/prices, subscriptions, the `trigger` command, common workflows, quoting/escaping, idempotency, test vs live mode, error patterns, and webhook delivery. |
 | `server/config/credential_providers.json` | JSON-driven Credentials Modal catalogue. The `payments` category + `stripe` provider entry tell the frontend modal to render a **Login with Stripe** button (no API-key field) wired to the `stripe_login` / `stripe_logout` / `stripe_status` WebSocket handlers. No React file edits required. |
-| `server/services/ai.py` | `DEFAULT_TOOL_NAMES['stripeAction'] = 'stripe_action'` and the matching tool-description entry — what the LLM sees when the action node is wired to an agent's `input-tools` handle. |
+| `server/nodes/stripe/stripe_action.py` | `tool_name = "stripe_action"` ClassVar (resolved via `services/node_registry.py`) and the matching `tool_description` — what the LLM sees when the action node is wired to an agent's `input-tools` handle. |
 | `server/nodes/stripe/_source.py` | `StripeListenSource(DaemonEventSource)` and `StripeWebhookSource(WebhookSource)` plus their singletons. |
 | `server/nodes/stripe/_handlers.py` | WS handlers via `make_lifecycle_handlers`; the only plugin-specific handler is `stripe_trigger` (synthetic test events). |
 | `server/nodes/stripe/stripe_action.py` | `StripeActionNode` — pass-through over the CLI via `run_cli_command`. |
@@ -232,11 +233,11 @@ StripeListenSource.stop()
 | `server/services/events/lifecycle.py` | `make_lifecycle_handlers` + `make_status_refresh`. |
 | `server/services/events/verifiers/stripe.py` | `StripeVerifier` (`t=…,v1=…` HMAC-SHA256). |
 | `server/routers/webhook.py` | Path-handler arm: consults `WEBHOOK_SOURCES` before falling through to legacy generic dispatch. |
-| `server/nodes/visuals.json` | `stripeAction` / `stripeReceive` icon + color (`asset:stripe`, `#635BFF`). |
+| `server/nodes/visuals.json` | `stripeAction` skill map only (`{"skill": "stripe-skill"}`); no `stripeReceive` key. The `asset:stripe` icon and `#635BFF` colour come from `nodes/groups.py` (`payments` group) and `nodes/stripe/meta.json`. |
 | `server/nodes/groups.py` | `payments` palette group. |
 | `server/credentials/icons/stripe.svg` | Stripe credential-tile icon, served at `/api/schemas/credentials/stripe/icon`. |
-| `server/tests/services/test_events.py` | 18 framework tests (envelope, verifiers, polling/daemon lifecycle, WebhookSource). |
-| `server/tests/nodes/test_stripe_plugin.py` | 21 Stripe-specific tests (shape, filter, action passthrough, registrations). |
+| `server/tests/services/test_events.py` | 27 framework tests (envelope, verifiers, polling/daemon lifecycle, WebhookSource). |
+| `server/tests/nodes/test_stripe_plugin.py` | 20 Stripe-specific tests (shape, filter, action passthrough, registrations). |
 
 ## Plugin classes
 
@@ -261,7 +262,9 @@ class StripeCredential(Credential):
 
     @classmethod
     async def resolve(cls, *, user_id: str = "owner") -> Dict[str, Any]:
-        secret = await container.auth_service().get_api_key("stripe_webhook_secret")
+        from services.plugin.deps import get_auth_service
+
+        secret = await get_auth_service().get_api_key("stripe_webhook_secret")
         return {"stripe_webhook_secret": secret} if secret else {}
 ```
 
@@ -319,7 +322,7 @@ class StripeWebhookSource(WebhookSource):
             type=f"stripe.{payload.get('type', 'unknown')}",
             source=f"stripe://{account}",
             time=time,
-            data=payload,
+            data=payload.get("data") or {},
             subject=payload.get("type"),
         )
 ```
@@ -396,7 +399,8 @@ class StripeActionNode(ActionNode):
             raise RuntimeError("command is required")
         # No credential= — Stripe CLI reads its own creds from
         # ~/.config/stripe/config.toml after `stripe login`.
-        result = await run_cli_command(binary="stripe", argv=shlex.split(cmd))
+        binary = str(await ensure_stripe_cli())
+        result = await run_cli_command(binary=binary, argv=shlex.split(cmd))
         if not result["success"]:
             raise RuntimeError(result.get("error") or "Stripe CLI invocation failed")
         return {
@@ -457,7 +461,7 @@ their target:
 | Place | Value | File |
 |---|---|---|
 | Node `type` (camelCase) | `stripeAction` | [`server/nodes/stripe/stripe_action.py`](../server/nodes/stripe/stripe_action.py) |
-| LLM tool name (snake_case of node type) | `stripe_action` | [`server/services/ai.py`](../server/services/ai.py) — `DEFAULT_TOOL_NAMES['stripeAction'] = 'stripe_action'` |
+| LLM tool name (snake_case of node type) | `stripe_action` | [`server/nodes/stripe/stripe_action.py`](../server/nodes/stripe/stripe_action.py) — `tool_name = "stripe_action"` (resolved via `services/node_registry.py`) |
 | Skill `allowed-tools` (matches LLM tool name) | `stripe_action` | [`server/skills/payments_agent/stripe-skill/SKILL.md`](../server/skills/payments_agent/stripe-skill/SKILL.md) |
 | `visuals.json` key (= node type) | `stripeAction` with `"skill": "stripe-skill"` | [`server/nodes/visuals.json`](../server/nodes/visuals.json) |
 
@@ -517,8 +521,7 @@ Stripe is wired into the JSON-driven Credentials Modal catalogue at
   "category": "payments",
   "color": "dracula.purple",
   "kind": "oauth",
-  "icon_ref": "asset:stripe",
-  "status_hook": "stripe",
+  "icon_ref": "/api/schemas/credentials/stripe/icon",
   "ws": {
     "login":  "stripe_login",
     "logout": "stripe_logout",
@@ -583,7 +586,7 @@ existing generic mechanisms:
 
 [`server/routers/websocket.py:handle_get_credential_catalogue`](../server/routers/websocket.py)
 enriches every provider with `stored: bool`. For providers that
-declare `status_hook` (Twitter, Google, Telegram, Stripe), the check is:
+declare `status_hook` (Twitter, Google, Telegram), the check is:
 
 ```python
 tokens = await auth_service.get_oauth_tokens(status_hook)
@@ -618,7 +621,7 @@ already use. The contract is locked by
 introspection over each handler).
 
 `WebSocketContext.tsx` already has a generic case for this event
-(line 671 — predates Stripe). Its handler calls `invalidateCatalogue`
+(line 1003 — predates Stripe). Its handler calls `invalidateCatalogue`
 on the TanStack Query client; the catalogue refetches; the modal
 sees the new `provider.stored` value and re-renders. **No
 stripe-specific code anywhere on the frontend.**
@@ -695,7 +698,7 @@ class attributes:
 | Knob | Where | Default |
 |---|---|---|
 | Daemon process name | `StripeListenSource.process_name` | `"stripe-listen"` |
-| Binary name | `StripeListenSource.binary_name` | `"stripe"` |
+| Binary name | `StripeListenSource.binary_name` | `""` (empty; disables the framework PATH check) |
 | Daemon process key | `StripeListenSource.workflow_namespace` | `"_stripe"` (logical `ProcessService` key; cwd is the shared `daemons_dir()` = `<DATA_DIR>/daemons/`, not a per-namespace subdir) |
 | Webhook path | `StripeWebhookSource.path` | `"stripe"` (i.e. `/webhook/stripe`) |
 | Forward-to port | derived from `Settings().port` | the app port (`PYTHON_BACKEND_PORT`) |
@@ -718,8 +721,9 @@ provides:
 - **Disconnect** button → fires `stripe_logout`, which stops the
   daemon and runs `stripe logout --all` to clear
   `~/.config/stripe/config.toml`.
-- **Status indicator** — driven by the `stripe_status` broadcast
-  (`connected`, `webhook_secret_captured`).
+- **Status indicator** — derived from the catalogue's `config.stored`
+  (`OAuthPanel.tsx:22`); the `stripe_status` WS handler is a read-only
+  diagnostic poll.
 - **Reconnect** button — issues `stripe_reconnect` for stuck states.
 
 No webhook-secret input is needed — the daemon captures it
@@ -770,8 +774,8 @@ by id.
 
 If `stripe listen` exits unexpectedly, the framework surfaces the
 disconnected status and waits for the user to reconnect via the
-Credentials Modal. The `_capture_secret` task hits EOF on the log
-file and exits cleanly. There's no exponential-backoff respawn loop
+Credentials Modal. The per-line `parse_line` callback simply stops
+receiving lines when `ProcessService` reaps the process. There's no exponential-backoff respawn loop
 — that's deliberate to keep failing daemons visible rather than
 hidden behind silent retries.
 
@@ -812,13 +816,13 @@ End-to-end smoke (requires Stripe CLI installed and a Stripe account):
    `process_service.list_processes("_stripe_global")` is empty AND
    `~/.config/stripe/config.toml` no longer contains an `_api_key`
    line.
-9. **Auto-reconnect.** Restart OpenCompany. If still logged in
-   (`is_logged_in()` returns true), the first WS-client connect
-   triggers `make_status_refresh` which auto-spawns the daemon.
+9. **Restart.** Restart OpenCompany. The status refresh does NOT
+   auto-spawn the daemon; start it via the modal's Connect
+   (`stripe_connect`) or by deploying a workflow with a Stripe trigger.
 
 Unit tests live in [`server/tests/nodes/test_stripe_plugin.py`](../server/tests/nodes/test_stripe_plugin.py)
 (20 collected cases at time of writing) and [`server/tests/services/test_events.py`](../server/tests/services/test_events.py)
-(29 framework tests; counts via `pytest --collect-only -q`). Run via `pytest server/tests/services/test_events.py
+(27 framework tests; counts via `pytest --collect-only -q`). Run via `pytest server/tests/services/test_events.py
 server/tests/nodes/test_stripe_plugin.py -v`.
 
 ## Related Docs
@@ -828,4 +832,4 @@ server/tests/nodes/test_stripe_plugin.py -v`.
 - [Node Creation Guide](./node_creation.md) — when to use which framework piece for a new plugin.
 - [Event Waiter System](./event_waiter_system.md) — generic dispatch path that `WebhookSource.handle` calls into.
 - [Status Broadcaster](./status_broadcaster.md) — `register_service_refresh` registry that backs `make_status_refresh`.
-- [Credentials Encryption](./credentials_encryption.md) — how `stripe_api_key` and `stripe_webhook_secret` are stored.
+- [Credentials Encryption](./credentials_encryption.md) — how `stripe_webhook_secret` is stored.

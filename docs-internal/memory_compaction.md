@@ -397,7 +397,7 @@ usage = final_state["usage"]
 
 In `server/services/ai.py`, the in-process path calls the service only when a
 legacy memory session id was resolved earlier in the run (`session_id` is set
-from `memory_data["session_id"]` at `ai.py:1005`; it stays `None` once a
+from `memory_data["session_id"]` at `ai.py:1006`; it stays `None` once a
 Context runtime resolves, because `execute_agent` nulls `memory_data` in that
 case):
 
@@ -536,7 +536,7 @@ F4.B performs a parallel check inside `AgentWorkflow` using the workflow's
 active-context usage counter and the ratio-based threshold recorded by
 `agent.prepare_payload`. It invokes the same `compact_context()` method
 through the `agent.compact_context` activity
-(`services/temporal/agent_activities.py:1944`).
+(`services/temporal/agent_activities.py:1945`).
 
 ### AI Service Wiring
 
@@ -605,7 +605,7 @@ Broadcast when compaction finishes:
 The Token Usage panel is displayed in the MiddleSection of the parameter panel
 for **agent nodes that have a memory session connected** — the gate is
 `isAgentWithSkills && connectedMemorySessionId`
-(`client/src/components/parameterPanel/MiddleSection.tsx:767-768`), not the
+(`client/src/components/parameterPanel/MiddleSection.tsx:768-769`), not the
 memory node itself. It shows:
 
 - **Progress bar**: tokens used vs the model's context length when known (`compactionStats.context_length`), else vs the threshold; turns destructive at 80%
@@ -615,7 +615,7 @@ memory node itself. It shows:
 Built from shadcn primitives (no antd):
 
 ```typescript
-// client/src/components/parameterPanel/MiddleSection.tsx:768-870 (abridged)
+// client/src/components/parameterPanel/MiddleSection.tsx:768-879 (abridged)
 {isAgentWithSkills && connectedMemorySessionId && (
   <Accordion type="single" collapsible defaultValue="tokens">
     <AccordionItem value="tokens">

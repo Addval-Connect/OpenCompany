@@ -248,7 +248,7 @@ whole plugin silently disappear rather than report anything.
 **Both trigger frozensets matter.** Omitting a trigger from
 `EVENT_TRIGGER_TYPES` / `WORKFLOW_TRIGGER_TYPES` is a silent failure: deploy
 filters on them and ignores the node with no listener and no warning
-([constants.py:400](../server/constants.py)). Tests assert the membership.
+([constants.py:402-406](../server/constants.py)). Tests assert the membership.
 
 ## Testing
 

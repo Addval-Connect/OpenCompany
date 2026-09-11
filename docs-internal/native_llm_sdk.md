@@ -262,15 +262,15 @@ ChatUnifier.chat(provider=..., Message[], ToolDef[])
         |
         +--> registry.get_provider(name)
         +--> official SDK or OpenAI-compatible base URL
-        +--> LLMResponse(assistant_message=lossless MessageWireV2)
+        +--> LLMResponse(assistant_message=lossless MessageWire)
 ```
 
 `run_native_agent_loop` appends the provider's exact assistant envelope before
 executing tools. This preserves Gemini thought signatures, Anthropic signed and
 redacted thinking blocks, and OpenAI reasoning continuation state across
-in-process and Temporal turns. Executions record `llm_engine=native` and wire
-version 2. A markerless prepare result identifies a pre-cutover history, which
-is refused rather than executed (see the end of this document).
+in-process and Temporal turns. There is one wire standard (`MessageWire`) and
+no engine or wire-version discriminator is recorded (see the end of this
+document).
 
 ## Thinking and Reasoning
 
@@ -485,15 +485,12 @@ the plugin folder or add a `visuals.json` entry (`"openrouterChatModel":
 
 ## Temporal migration and dependency lifecycle
 
-`agent.prepare_payload` records `llm_engine` and `message_wire_version`.
-The marker is a discriminator, not a switch: there is one engine.
-
-A history recorded before the native cutover carries neither field, and its
-messages are in a retired wire format the native `messages_from_wire` reader
-cannot interpret. `execute_llm_step` refuses such a payload with a
-non-retryable `ApplicationError(type="InvalidAgentLLMEngine")` rather than
-reinterpreting the messages and corrupting the conversation. The operator fix
-is to Reset the deployment, which starts a fresh generation.
+`agent.prepare_payload` builds the payload; there is one engine and one wire
+standard. The `llm_engine` / `message_wire_version` discriminators and the
+`InvalidAgentLLMEngine` refusal path from the cutover period were purged, and
+`tests/llm/test_single_wire_standard.py` fails the build if any of those
+identifiers reappear in production source. Pre-cutover deployments are handled
+by Reset, which starts a fresh generation.
 
 `tests/llm/test_langchain_removed.py` enforces the dependency end state via an
 AST walk over production sources, the `pyproject.toml` declarations, runtime

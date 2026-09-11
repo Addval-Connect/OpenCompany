@@ -263,15 +263,19 @@ What you **do** still write:
 ## Wave summary (current state)
 
 - **Wave 11** — Class-based plugin system. 9 Temporal worker pools;
-  plugin count via `glob server/nodes/**/__init__.py`; invariant total
-  via `pytest --collect-only`. `services/handlers/` shrank from
+  plugin count via `len(services.node_registry.NODE_METADATA)` after
+  `import nodes` (a bare `**/__init__.py` glob overcounts because it also
+  matches the group packages); invariant total via `pytest --collect-only`. `services/handlers/` shrank from
   12.8K → 1.1K LOC.
-- **Wave 11.H** — Self-contained plugin folders. Eighteen generic
-  registries (live list: `grep -rn '^def register_' server/services server/core`)
-  replace per-plugin hardcoding in core (five at 11.H;
-  `register_router` landed in 11.I), plus newer `register_*`
-  entrypoints for webhook sources / option loaders / OAuth callback
-  paths / canary trigger types. Telegram is the reference.
+- **Wave 11.H** — Self-contained plugin folders. Five generic
+  registries at 11.H, `register_router` at 11.I; the set has since
+  grown to 19 (webhook sources, option loaders, OAuth callback paths,
+  canary trigger types, poll factories, social send handlers, shutdown
+  hooks, service factories, log-source tags, conversation listeners,
+  process supervisors, master-skill expander, agent-context builder).
+  Live list: the registry table in
+  [plugin_system.md](./plugin_system.md#self-contained-plugin-folders). Telegram
+  is the reference.
 - **Wave 12** — Generalized event framework
   ([`services/events/`](../server/services/events/)). `EventSource`
   hierarchy + CloudEvents-shaped envelope + verifier registry +

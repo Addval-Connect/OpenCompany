@@ -19,7 +19,7 @@ warm OS file cache, with bytecode pre-compile applied:
 | Status broadcasters fully settled | **12.27 s** | same |
 | AIService import (warm) | **703 ms** | same — was ~31 s on v0.0.75 |
 | Application startup complete (cold, post-`company clean` first launch) | **21.5 s** | `cold.txt` 18:44 (2026-07-14, post boot-delay fixes; was **71 s** the same day pre-fix) |
-| LLM provider registration (all 12, cold) | **17 ms** | same — was 44.6 s pre-fix (eager SDK imports) |
+| LLM provider registration (all 13, cold) | **17 ms** | same — was 44.6 s pre-fix (eager SDK imports) |
 | Vite production build | **~16 s** | last `vite build` run |
 | Vite main bundle | **234 KB gz** | `client/dist/assets/index-*.js` |
 
@@ -51,16 +51,17 @@ workspace and launches the `company` CLI; everything after spawn
 (uvicorn imports, lifespan, Vite on Node 22) is byte-identical. The
 extra ~0.7 s sits entirely in the import phase — "all imports complete"
 at 3.29 s vs 1.98 s in the May timeline, and the routers + plugin-walker
-segment at 1.83 s vs 0.84 s — because the walker now loads **184**
+segment at 1.83 s vs 0.84 s — because the walker now loads **185**
 plugin modules against the **137** it walked in May. Lifespan cost is
 unchanged.
 
 **Counting rule for every plugin figure in this document.** The numbers
-(137 in May, 152 in July, 184 in September 2026) are the walker's
+(137 in May, 152 in July, 185 in September 2026) are the walker's
 *module* count — the `node plugins loaded: N modules` log line from
 `server/nodes/__init__.py`, i.e. `len(nodes._DISCOVERED)`, which
-includes `_*.py` helpers and per-folder submodules. They are **not**
-node-type counts: `len(services.node_registry.NODE_METADATA)` is 147
+counts every non-private module and subpackage (`_*.py` helpers and
+`_*/` subpackages are skipped by `_discover()`). They are **not**
+node-type counts: `len(services.node_registry.NODE_METADATA)` is 148
 today, spread across 37 group folders under `server/nodes/`. Both are
 computed from the tree; neither is hand-maintained here. The dev-mode rows were never benchmarked before (Vite and
 uvicorn compete for I/O during a dev boot, so they are not comparable
@@ -148,7 +149,7 @@ same-day pre-fix cold boot in parentheses:
 ```
 T+0.00 — port-free begin
 T+2.6  — container: core imports done          (was 10.2 s → 1.2 s segment)
-T+3.2  — AIService imported, 12 providers in 17 ms  (was 44.6 s segment)
+T+3.2  — AIService imported, 13 providers in 17 ms  (was 44.6 s segment)
 T+8.7  — 152 node plugins loaded               (was 10.8 s → 4.7 s segment)
 T+11.9 — Lifespan startup begin                (3.2 s gap: CLI-agent MCP mount)
 T+21.5 — Application startup complete          (lifespan 9.6 s: fresh-DB init 4.4 s,
@@ -204,7 +205,7 @@ optimisations above; sum is what hurts.
 
 | # | Bottleneck | Cost | Class | Notes |
 |---|---|---|---|---|
-| 1 | Plugin walker at import time (152 modules under `server/nodes/` at the July measurement, 184 today — see the counting rule above; ~2 s warm / ~4.7 s cold, dominated by `nodes/google`'s eager `googleapiclient` import) | ~2 s | Backend | `_HANDLER_REGISTRY` populates via `BaseNode.__init_subclass__` at import. Lazy `googleapiclient` is the cheap win (see follow-ups); full lazy-loading of the walker is the big-blast-radius option. |
+| 1 | Plugin walker at import time (152 modules under `server/nodes/` at the July measurement, 185 today — see the counting rule above; ~2 s warm / ~4.7 s cold, dominated by `nodes/google`'s eager `googleapiclient` import) | ~2 s | Backend | `_HANDLER_REGISTRY` populates via `BaseNode.__init_subclass__` at import. Lazy `googleapiclient` is the cheap win (see follow-ups); full lazy-loading of the walker is the big-blast-radius option. |
 | 2 | TanStack Query auth bootstrap retry window | ~3-5 s | Frontend | See "remaining +5 s gap" above. |
 | 3 | AIService/native orchestration import graph | ~0.7 s | Backend | Historical May baseline; new agent execution uses native `Message` / `AgentToolSpec` values and provider registration remains lazy. Re-measure before attributing this cost further. |
 | 4 | Status-broadcaster refresh (`refresh_all_services`, 2.6 s) | ~2.6 s | Backend | Runs after `Application startup complete`, doesn't block server-ready. WhatsApp + Telegram are the long tails. |

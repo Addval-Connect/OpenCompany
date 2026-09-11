@@ -30,7 +30,7 @@ deprecation warning; kept for upgrade compatibility).
 | `company clean` | Stop services, then remove build artifacts, node_modules, `.venv`, repo-local state (preserves `.opencompany/{workflows,deploy,packages}`) |
 | `company deploy up/status/destroy` | Self-deploy a login-gated VM (gcloud preflight + Terraform; see `cli/commands/deploy/`) |
 | `company daemon start/stop/status/restart` | Detached backend management (PID file under user data dir) |
-| `company version sync` | Propagate the root package.json version |
+| `company version sync [tag]` | Write the latest git tag's version into the package.json files (defaults to the latest tag) |
 | `company docs nodes [--check]` | Regenerate (or verify) the `docs-internal/node-logic-flows/` index |
 
 There is no `help` verb: `company` with no arguments, `company --help`, and
@@ -38,8 +38,9 @@ There is no `help` verb: `company` with no arguments, `company --help`, and
 
 ### Dependency checks
 
-`start` and `build` verify Node.js 22+, Python 3.12+, and uv before
-running.
+`build` checks that Node.js and npm/bun are present (no version floor), verifies
+Python 3.12+ (`_check_python`), and installs `uv` via pip if missing. `start` runs
+no toolchain check, only the `_sqlalchemy_preflight` venv-health probe.
 
 ---
 

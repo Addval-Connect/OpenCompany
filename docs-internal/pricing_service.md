@@ -61,14 +61,14 @@ The pricing service provides centralized cost tracking for both LLM tokens and e
 
 ## Configuration: pricing.json
 
-Located at `server/config/pricing.json`. User-editable with hot-reload support.
+Located at `server/config/pricing.json`. User-editable; picked up via `PricingService.reload()` or `save_config()`; there is no filesystem watcher.
 
 ### Structure
 
 ```json
 {
-  "version": "2026.02",
-  "last_updated": "2026-02-20",
+  "version": "2026.07",
+  "last_updated": "2026-07-25",
 
   "llm": {
     "openai": {
@@ -275,12 +275,12 @@ await track_twitter_usage(node_id, 'search', len(tweets), ctx_raw)
 
 ### Example: Google Workspace Plugins
 
-The 6 Google service plugins (`server/nodes/google/{gmail,calendar,drive,sheets,tasks,contacts}`) plus `gmail_receive` call `track_google_usage()` on `server/nodes/google/_base.py`. Google Workspace APIs are free within rate limits, so this records resource counts at `cost=$0` for analytics.
+The 6 Google service plugins (`server/nodes/google/{gmail,calendar,drive,sheets,tasks,contacts}`) plus `gmail_receive` call `track_google_usage()` on `server/nodes/google/_base.py`. Google Workspace APIs are free within rate limits, so this records resource counts at `cost=$0` for analytics; `service` must be the pricing key (`gmail`, `google_calendar`, `google_drive`, `google_sheets`, `google_tasks`, `google_contacts`), not the folder name.
 
 ```python
 # server/nodes/google/_base.py
 
-async def track_google_usage(node_id, service, action, resource_count, context):
+async def track_google_usage(service, node_id, action, resource_count, context):
     pricing = get_pricing_service()
     cost_data = pricing.calculate_api_cost(service, action, resource_count)
     # ... save to database ...

@@ -551,7 +551,7 @@ themselves** into those registries from their package `__init__.py`.
 
 ```
 server/nodes/telegram/
-├── __init__.py          # imports + register_* calls covering seven registries (no logic)
+├── __init__.py          # imports + register_* calls covering seven of the generic registries (no logic)
 ├── _credentials.py      # TelegramCredential (ApiKeyCredential)
 ├── _service.py          # TelegramService singleton (bot lifecycle)
 ├── _handlers.py         # WebSocket handlers + WS_HANDLERS dict
@@ -566,7 +566,7 @@ Underscore-prefixed files are package-private; the `nodes` walker
 skips them. The two non-underscore files are the plugin classes (one
 per node type) — same pattern as every other folder.
 
-### Cross-cutting registries (18 at time of writing; live list: `grep -rn '^def register_' server/services server/core`) — use only what your plugin needs
+### Cross-cutting registries (19 at time of writing, hand-curated below; `grep -rn '^def register_' server/services server/core` also lists the node / group / provider / session-pool registration internals) — use only what your plugin needs
 
 | Concern | Registry module | Register from plugin via |
 |---|---|---|
@@ -588,13 +588,14 @@ per node type) — same pattern as every other folder.
 | Service factory for the DI container (`container.<name>()` resolves to a plugin-owned service) | `services.plugin.service_factories` | `register_service_factory(name, factory)` |
 | Short Terminal-UI log tag for a logger-name prefix (only when the `nodes.<plugin>` auto-rule yields an unwanted tag) | `core.logging` | `register_log_source_tag(prefix, tag)` |
 | Callback fired after a conversation durably saves (RFC-0002 Context live-view) | `services.agent_context.listeners` | `register_conversation_listener(listener)` — keyword-args only; a listener can never fail a save. |
+| Long-lived process supervisor (WhatsApp bridge, Node sidecar, Discord gateway) | `services._supervisor` | `register_supervisor(supervisor)` — idempotent per `supervisor.label`; a label collision raises `ValueError`. |
 
 All accept idempotent re-imports (same callable / class for the
 same key is a no-op; conflicts raise `ValueError`).
 
-**Plugins use only the registries they need.** Telegram uses 5 (no
+**Plugins use only the registries they need.** Telegram uses 7 (no
 router); Stripe uses 4 (webhook-driven, no filter/precheck); Android
-uses 4 (with router); WhatsApp uses 5. There is no "register every
+uses 6 (with router); WhatsApp uses 8. There is no "register every
 hook" rule.
 
 ### Telegram `__init__.py` (canonical wiring)

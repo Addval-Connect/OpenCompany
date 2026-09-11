@@ -195,7 +195,8 @@ connect directly to `input-tools`. Legacy
 `service -> androidTool -> agent` graphs are rewritten on load by
 `services/workflow_migrations.normalize_legacy_android_toolkit`, and sub-node
 exclusion keys solely on the AI-agent config handles (`input-context` /
-`input-tools` / `input-skill` / `input-teammates`; `execution/models.py:351-359`) — the
+`input-memory` (legacy compatibility) / `input-tools` / `input-skill` /
+`input-teammates`; `execution/models.py:351-359`) — the
 `TOOLKIT_NODE_TYPES` constant is gone.
 
 ## 8. Internal delegation identities (`delegate_to_*`)
@@ -227,8 +228,9 @@ Parent agents see results via three paths — see [agent_delegation.md](./agent_
 
 When `TEMPORAL_PER_TYPE_DISPATCH=true` and the run is happening inside a Temporal workflow, tool calls do NOT go through `execute_tool` directly. Instead:
 
-1. `agent.prepare_payload` records `llm_engine="native"` and
-   `message_wire_version=2` for new executions.
+1. `agent.prepare_payload` builds the payload; there is one wire standard
+   with no `llm_engine` / `message_wire_version` discriminators (locked by
+   `tests/llm/test_single_wire_standard.py`).
 2. `AgentWorkflow` (the F4.B child workflow) gets the LLM's tool-calls list
    back from `agent.execute_llm_step`, whose native branch sends `ToolDef`
    declarations through `ChatUnifier`.
@@ -244,16 +246,13 @@ When `TEMPORAL_PER_TYPE_DISPATCH=true` and the run is happening inside a Tempora
 
 This means tool calls inside an agent loop get Temporal's retry / timeout / heartbeat semantics independently of the parent agent's. A `code-exec` task burns its own retries; a `browser` task survives past the parent's `start_to_close_timeout` via its own heartbeat. See [TEMPORAL_ARCHITECTURE.md](./TEMPORAL_ARCHITECTURE.md).
 
-Histories recorded before the engine marker existed cannot replay: their tool
-and message shapes belong to a retired wire format, so `execute_llm_step`
-refuses them with a non-retryable `InvalidAgentLLMEngine` instead of
-reconstructing them.
+The v1/v2 wire duality was purged; there is no engine-marker refusal path.
 
 ## 10. Auto-skill edges
 
 Some tools bundle a default skill — `writeTodos` ships with `write-todos-skill`, the WhatsApp tools ship with their respective skills. The frontend `useAutoSkillEdges.ts` hook detects these connections at canvas-edit time and auto-creates a phantom skill connection so the LLM gets both the tool schema (for invocation) and the skill instructions (for usage guidance) without the user having to wire two edges.
 
-`MASTER_SKILL_NODE_TYPE` constant resolves via `getCachedNodeSpec(type)?.uiHints?.isMasterSkillEditor === true`, not a hardcoded string match.
+The `isMasterSkillNode()` helper (`useAutoSkillEdges.ts:35`) resolves via `getCachedNodeSpec(type)?.uiHints?.isMasterSkillEditor === true`, not a hardcoded string match.
 
 ## 11. Pytest invariants
 

@@ -45,8 +45,10 @@ shared.
 
 ## 2. Decisions
 
-- Reuse `MessageWireV2`, including ordered blocks, raw malformed tool
-  arguments, signed/thought blocks, and provider continuation state.
+- Reuse `MessageWire` (superseded name: `MessageWireV2` — the v1/v2 duality
+  was purged; there is one wire standard), including ordered blocks, raw
+  malformed tool arguments, signed/thought blocks, and provider continuation
+  state.
 - Preserve existing Temporal histories. The Context store is selected only by
   a new graph/generation and uses new workflow/activity type names.
 - Keep Gemini on `generate_content`; an Interactions migration is out of
@@ -74,14 +76,8 @@ The `context` plugin is a passive, system-managed configuration node:
 context.output-context -> agent.input-context
 ```
 
-Its parameters are policy only:
-
-```text
-compaction_mode: auto | native | portable | disabled
-trigger_ratio: float = 0.8
-context_window_override?: integer
-exact_tail_retention_count: integer
-```
+It declares no parameters; the connection is the whole configuration
+(`AgentContextParams` is empty).
 
 Its NodeSpec advertises `isContextPanel` and `systemManaged`. The frontend
 renders the panel and calls backend handlers; it does not create journals,
@@ -183,7 +179,7 @@ For every iteration it commits:
 1. effective request snapshot, including resolved messages/system instruction,
    provider/model/settings, compiled tool definitions, attachments, and
    dynamic tool surface;
-2. complete assistant `MessageWireV2`, before any requested tool executes;
+2. complete assistant `MessageWire`, before any requested tool executes;
 3. each tool result, validation error, execution error, or ambiguous outcome,
    before another provider request;
 4. final response and usage through the same journal.
@@ -258,8 +254,8 @@ transcripts, own provider identity, or compact Context.
 (`AgentWorkflowV2`, `agent.*.v2`) so V1 and V2 histories could run side by side.
 That split was never needed — history back-compatibility is not a requirement
 here — and it has been folded away. There is one workflow class, `AgentWorkflow`,
-and one unsuffixed activity per concern: `agent.prepare_context`,
-`agent.execute_llm_step`, `agent.append_context`, `agent.compact_context`.
+and one unsuffixed activity per concern: `agent.prepare_payload`,
+`agent.execute_llm_step`, `agent.persist_turn`, `agent.compact_context`.
 
 What still holds: the child workflow carries only `AgentContextRef`, operation
 IDs/hashes and iteration state, so provider messages and large tool results stay
@@ -279,7 +275,7 @@ the agent answer an empty question.
 The rule is now inverted and load-bearing: **the request is always built from
 `messages`; the journal records what was sent.** `agent.execute_llm_step` writes
 each turn from the exact list it hands to `ChatUnifier.chat`, after the call
-returns. `agent.prepare_context` journals nothing, because it runs before a
+returns. `agent.prepare_payload` journals nothing, because it runs before a
 request exists and could only fabricate one. Journal operation ids derive from
 the per-firing `context_execution_id`; deriving them from the generation-scoped
 `execution_id` made every turn in a generation collide on idempotency and
@@ -331,10 +327,12 @@ Ordinary broadcasts contain metadata only:
 
 ```text
 context.updated
-context.compacted
-context.epoch.started
-memory.changed
+memory.updated
 ```
+
+Superseded: `context.compacted` and `context.epoch.started` were never shipped
+(only `context.updated` survives), and `memory.changed` shipped as
+`memory.updated`.
 
 `context.updated` is emitted from `AgentContextStore`'s commit boundary through
 `services/agent_context/listeners.py`, so every writer is covered without

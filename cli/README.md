@@ -7,11 +7,13 @@ with `bun run start`/`dev`/`stop`/etc.
 
 ## Install
 
-Done automatically in `scripts/postinstall.js` after `bun install`. To
-install manually:
+No install step is required for a source checkout: `bin/cli.js` and the root
+package.json scripts both invoke `python -m cli` from the repo root;
+`scripts/postinstall.js` deliberately does not pip-install it. To install the
+`company` entry point on PATH:
 
 ```sh
-python -m pip install -e .
+python -m pip install -e .   # run from the repository root, not from cli/
 ```
 
 ## Use

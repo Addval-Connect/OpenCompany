@@ -46,7 +46,7 @@ Notes for Linux servers:
 
 ### Local Development (from source)
 
-**Prerequisites:** Node.js 18+ (22 recommended; CI builds on 22), Python 3.12+, uv, bun 1.4+ (https://bun.sh)
+**Prerequisites:** Node.js 18+ (22 recommended; CI builds on 22), Python 3.12 (CLI needs >=3.12, server venv pins >=3.11,<3.13), uv, bun 1.4+ (https://bun.sh)
 
 ```bash
 git clone https://github.com/zeenie-ai/OpenCompany.git OpenCompany

@@ -182,12 +182,12 @@ next iteration.
 
 ### `max_iterations` precedence
 
-Resolved per-execution, and the two runtimes differ. **Temporal** (`prepare_agent_payload`, `services/temporal/agent_activities.py`) applies all four tiers below. **In-process** (`execute_agent` / `execute_chat_agent` in `services/ai.py`) applies only tiers 2 and 4: it never reads `parameters.max_iterations` and never consults env `Settings`. Highest to lowest:
+Resolved per-execution, and the two runtimes differ. **Temporal** (`prepare_agent_payload`, `services/temporal/agent_activities.py`) applies tiers 1-3 below and falls back to a hardcoded 200 if `Settings` cannot instantiate; it never reads `llm_defaults.json`. **In-process** (`execute_agent` / `execute_chat_agent` in `services/ai.py`) applies tiers 2-4 through `get_model_registry().get_agent_defaults()`, where the env value wins and the JSON is the last resort; only tier 1 is unreachable there. Highest to lowest:
 
 1. **Per-agent-node** `parameters.max_iterations` — set by the user on the agent node itself. Temporal path only; no agent plugin currently declares a `max_iterations` Params field, so this tier is reachable only from a hand-written graph.
 2. **Per-user** `UserSettings.agent_recursion_limit` — Settings tab override (DB-backed).
 3. **Env** `Settings.agent_recursion_limit` from `AGENT_RECURSION_LIMIT` (default 200).
-4. **JSON** `llm_defaults.json:agent.recursion_limit` — last-resort fallback when Settings can't load.
+4. **JSON** `llm_defaults.json:agent.recursion_limit` — in-process only, reached when `Settings` cannot instantiate; the Temporal path uses a hardcoded 200 instead.
 
 The iteration limit is the termination backstop. Compaction is a post-turn
 context-pressure control for agents with connected memory; it summarizes active
@@ -541,15 +541,12 @@ Two settings flags route agent execution through different Temporal paths (see [
 
 Both flags default to `true` in `.env.template`.
 
-New `AgentWorkflow` executions record `llm_engine="native"` and
-`message_wire_version=2` in the `agent.prepare_payload` result by default.
-Recorded histories whose prepare result predates those markers cannot run:
-`agent.execute_llm_step` refuses them with a non-retryable
-`InvalidAgentLLMEngine`, because their messages are in a retired wire format.
-Marker-bearing
-native executions never fall back after a provider request starts, and changing
-the environment does not alter an execution whose prepare result is already in
-history.
+`AgentWorkflow` executions carry messages in the single `MessageWire` shape;
+there is one engine and one wire standard, with no `llm_engine` or
+`message_wire_version` discriminator recorded (locked by
+`tests/llm/test_single_wire_standard.py`). Native executions never fall back
+after a provider request starts, and changing the environment does not alter an
+execution whose `agent.prepare_payload` result is already in history.
 
 **Team leads** (`orchestrator_agent`, `ai_employee`) run the same
 `execute_chat_agent` path as the other specialized agents but add an

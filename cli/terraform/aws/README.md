@@ -3,7 +3,8 @@
 One login-gated EC2 instance running OpenCompany. File layout and workflow
 follow the HashiCorp AWS get-started tutorial
 (https://developer.hashicorp.com/terraform/tutorials/aws-get-started):
-`terraform.tf` (providers), `main.tf`, `variables.tf`, `outputs.tf`.
+`terraform.tf` (providers), `main.tf`, `variables.tf`, `outputs.tf`, plus
+`startup.sh.tftpl` (the cloud-init startup script template).
 
 Settings are the ones validated on a live t3.micro in September 2026:
 

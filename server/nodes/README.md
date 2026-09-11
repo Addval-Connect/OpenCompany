@@ -1,9 +1,9 @@
 # `server/nodes/` — plugin cookbook
 
 **One plugin = one folder** (`server/nodes/<group>/<name>/__init__.py`),
-or a single `.py` file inside a domain folder when the plugin ships no
-icon/meta of its own. Both auto-register at import time; no other code
-needs to change.
+or a single `.py` file inside a domain folder whose icon/meta are shared
+folder-wide (`stripe/`, `telegram/`, `speech/`, ...). Both auto-register
+at import time; no other code needs to change.
 
 Full reference: [docs-internal/plugin_system.md](../../docs-internal/plugin_system.md).
 
@@ -330,7 +330,7 @@ Four ideas worth stealing wholesale:
 See [Multi-credential nodes](../../docs-internal/plugin_system.md#multi-credential-nodes)
 for the `ctx.connection(id)` contract and the `routing=` trap that comes with it.
 
-### Generic registries to plug into (18 at time of writing; `grep -rn '^def register_' server/services server/core`)
+### Generic registries to plug into (19 at time of writing; the hand-curated table lives in [plugin_system.md](../../docs-internal/plugin_system.md#self-contained-plugin-folders))
 
 Telegram's `__init__.py` is the canonical wiring example. Adding any
 of these concerns to your plugin is one `register_*` call from your

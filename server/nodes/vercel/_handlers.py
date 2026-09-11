@@ -8,8 +8,9 @@ cannot use :func:`run_cli_command` (it buffers output via
 ``communicate()`` until process exit — the URL is needed mid-run).
 Instead it spawns the CLI directly, reads stdout/stderr incrementally
 until the URL appears, returns ``{success, url}`` to the frontend
-(which ``window.open``s the url — it never renders a separate code, so
-the url must be the code-embedding link), and lets a background task
+(which ``window.open``s the url and renders ``verification_code`` in
+``OAuthConnect.tsx``; the url should still be the code-embedding link
+so the opened tab works on its own), and lets a background task
 await process exit.
 
 Success gate mirrors Stripe's exit-code-distrust idiom: the pinned
@@ -204,8 +205,8 @@ async def _start_login_flow() -> Dict[str, Any]:
             _LOGIN_TIMEOUT_SECONDS,
         )
         _spawn_background(_complete_login(proc, pre_mtime))
-        # The frontend only opens `url`; `verification_code` rides along for
-        # forward-compat (never rendered today — keep the URL code-embedding).
+        # The frontend opens `url` and renders `verification_code`
+        # (OAuthConnect.tsx); keep the URL code-embedding so the tab works alone.
         return {"success": True, "url": url, "verification_code": code}
     except Exception as e:
         logger.exception("[Vercel] login flow raised unexpectedly: %s", e)
