@@ -1,9 +1,9 @@
 # OpenCompany desktop shell
 
 Electron host for the OpenCompany backend. It ships `uv`, a standalone
-Python and Node inside the installer, provisions the backend's virtual
-environment in the user's data directory on first launch, spawns uvicorn,
-and shows the backend-served UI in a native window.
+Python and bun inside the installer (no Node, no npm), provisions the
+backend's virtual environment in the user's data directory on first
+launch, spawns uvicorn, and shows the backend-served UI in a native window.
 
 Full documentation: [docs-internal/desktop_app.md](../docs-internal/desktop_app.md)
 and the backend contract in

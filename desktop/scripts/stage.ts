@@ -2,22 +2,21 @@
  * Assemble `stage/` — everything electron-builder ships as extraResources.
  *
  *   stage/app-root/        the backend tree in the sibling layout core.approot expects
- *   stage/runtime/<t>/     uv, python, node for target <t> (see fetch-runtimes.ts)
+ *   stage/runtime/<t>/     uv, python, bun for target <t> (see fetch-runtimes.ts)
  *   stage/manifest.json    what was staged, for the invariant test + release notes
  *
- * The app-root file list is NOT hand-maintained. `npm pack --dry-run --json`
- * at the repo root yields exactly the files the published npm package ships
- * (the root package.json `files` allowlist filtered by .npmignore), which is
- * the same sibling layout `company start` already runs from. We take that
- * list, drop what a desktop bundle never needs (the CLI, install scripts,
- * client sources, backend tests) and force-include the few files the
- * .npmignore hides but the desktop needs (server/uv.lock).
+ * The app-root file list is NOT hand-maintained. `bun pm pack --dry-run` at
+ * the repo root lists exactly the files the published package ships (the
+ * root package.json `files` allowlist filtered by .npmignore), which is the
+ * same sibling layout `company start` already runs from. We take that list,
+ * drop what a desktop bundle never needs (the CLI, install scripts, client
+ * sources, backend tests) and force-include the few files the .npmignore
+ * hides but the desktop needs (server/uv.lock).
  *
- * The Node executor sidecar is re-bundled here with its dependencies
- * inlined: server/nodejs/dist/index.js is built with `--packages=external`,
- * and under bun's isolated linker `server/nodejs/node_modules/express` is a
- * symlink into <repo>/node_modules/.bun/ — copying it verbatim would ship a
- * dangling link and the JS executor would fail on first use.
+ * The JS executor sidecar is built here with the sidecar package's own
+ * `bun build` script (a self-contained bundle with express inlined, run by
+ * the bundled bun at runtime) rather than copied from the checkout, so a
+ * stale or missing dist/ in the working tree can never reach a release.
  *
  *   bun run scripts/stage.ts                        # host target runtime
  *   bun run scripts/stage.ts --target mac-arm64,mac-x64
@@ -41,7 +40,7 @@ const DROP_PREFIXES = [
   "client/public/",
   "server/tests/",
   "server/scripts/",
-  "server/nodejs/", // re-bundled below
+  "server/nodejs/", // built below with the sidecar's own bun build
   "server/experiments/",
   "server/.venv/",
 ];
@@ -55,13 +54,18 @@ const DROP_SUFFIXES = [".db", ".db-journal", ".db-shm", ".db-wal", ".sqlite", ".
 /** Files the .npmignore hides (lockfiles) but the desktop must ship. */
 const FORCE_INCLUDE = ["server/uv.lock", "server/pyproject.toml", "server/nodejs/package.json", ".env.template", "package.json"];
 
-function npmPackFileList(): string[] {
-  const out = run(process.platform === "win32" ? "npm.cmd" : "npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: REPO_ROOT });
-  const start = out.indexOf("[");
-  const parsed = JSON.parse(out.slice(start)) as Array<{ files: Array<{ path: string }> }>;
-  const first = parsed[0];
-  if (!first) fail("npm pack --dry-run returned no package");
-  return first.files.map((f) => f.path.replace(/\\/g, "/"));
+const BUN = process.platform === "win32" ? "bun.exe" : "bun";
+
+/** The published file list, from bun's own packer (`packed <size> <path>` lines). */
+function packFileList(): string[] {
+  const out = run(BUN, ["pm", "pack", "--dry-run", "--ignore-scripts"], { cwd: REPO_ROOT });
+  const files: string[] = [];
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^packed\s+\S+\s+(.+?)\s*$/.exec(line);
+    if (m) files.push(m[1]!.replace(/\\/g, "/"));
+  }
+  if (files.length === 0) fail("bun pm pack --dry-run listed no files");
+  return files;
 }
 
 function keep(path: string): boolean {
@@ -83,28 +87,15 @@ function copyInto(rel: string): void {
 
 function bundleSidecar(): void {
   const sidecarDir = join(REPO_ROOT, "server", "nodejs");
+  const built = join(sidecarDir, "dist", "index.js");
   const outfile = join(APP_ROOT, "server", "nodejs", "dist", "index.js");
+  // One definition of the build: the sidecar package's own script
+  // (`bun build --target=bun`, which inlines express). It resolves through
+  // the sidecar's node_modules, so run it from there.
+  run(BUN, ["run", "build"], { cwd: sidecarDir });
+  if (!existsSync(built)) fail(`sidecar build produced no ${built}`);
   mkdirSync(dirname(outfile), { recursive: true });
-  // esbuild resolves through the sidecar's own node_modules (bun symlinks
-  // are followed), so run it from there. The banner restores `require`
-  // for the CJS-style dynamic requires inside express/body-parser once
-  // they are inlined into an ESM output.
-  const esbuild = process.platform === "win32" ? "bun.exe" : "bun";
-  run(
-    esbuild,
-    [
-      "x",
-      "esbuild",
-      "src/index.ts",
-      "--bundle",
-      "--platform=node",
-      "--target=node22",
-      "--format=esm",
-      "--banner:js=import { createRequire as __oc_createRequire } from 'node:module'; const require = __oc_createRequire(import.meta.url);",
-      `--outfile=${outfile}`,
-    ],
-    { cwd: sidecarDir },
-  );
+  copyFileSync(built, outfile);
   const text = readFileSync(outfile, "utf-8");
   if (/^\s*(import|export)[^\n]*['"]express['"]/m.test(text) || /require\(["']express["']\)/.test(text)) {
     fail("sidecar bundle still references express externally; inlining failed");
@@ -116,7 +107,7 @@ function stageAppRoot(): { files: number } {
   rmSync(APP_ROOT, { recursive: true, force: true });
   mkdirSync(APP_ROOT, { recursive: true });
 
-  const listed = npmPackFileList();
+  const listed = packFileList();
   const kept = listed.filter(keep);
   const all = new Set<string>([...kept, ...FORCE_INCLUDE]);
   for (const rel of all) copyInto(rel);

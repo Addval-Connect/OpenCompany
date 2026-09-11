@@ -13,7 +13,8 @@ describe("resolveLayout", () => {
     expect(l.runtimeDir).toBe(join("/res", "runtime"));
     expect(l.uvBin).toBe(join("/res", "runtime", "uv", "uv"));
     expect(l.pythonBin).toBe(join("/res", "runtime", "python", "bin", "python3"));
-    expect(l.nodeBin).toBe(join("/res", "runtime", "node", "bin", "node"));
+    expect(l.bunBin).toBe(join("/res", "runtime", "bun", "bun"));
+    expect(l.bunHomeDir).toBe(join("/ud", "bun"));
     expect(l.venvDir).toBe(join("/ud", "pyenv", "venv"));
     expect(l.userEnvFile).toBe(join("/ud", "desktop.env"));
     expect(l.logsDir).toBe(join("/ud", "logs"));
@@ -23,8 +24,8 @@ describe("resolveLayout", () => {
     const l = resolveLayout({ resources: "C:\\res", userData: "C:\\ud", platform: "win32" });
     expect(l.uvBin.endsWith(join("uv", "uv.exe"))).toBe(true);
     expect(l.pythonBin.endsWith(join("python", "python.exe"))).toBe(true);
-    expect(l.nodeBin.endsWith(join("node", "node.exe"))).toBe(true);
-    expect(l.nodeBinDir).toBe(l.nodeDir);
+    expect(l.bunBin.endsWith(join("bun", "bun.exe"))).toBe(true);
+    expect(l.bunBin.startsWith(l.bunDir)).toBe(true);
   });
 
   it("honours app-root and runtime overrides independently", () => {

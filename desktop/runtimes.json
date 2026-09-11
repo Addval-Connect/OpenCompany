@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned third-party runtimes bundled into the desktop app. Target keys are <os>-<arch> using electron-builder's ${os}/${arch} spellings (win|mac|linux, x64|arm64). Every archive is verified against the upstream checksum manifest at fetch time (scripts/fetch-runtimes.ts); bump a version here and nowhere else. The Python pin must satisfy server/pyproject.toml requires-python and match the root .python-version major.minor.",
+  "_comment": "Pinned third-party runtimes bundled into the desktop app. Target keys are <os>-<arch> using electron-builder's ${os}/${arch} spellings (win|mac|linux, x64|arm64). Every archive is verified against the upstream checksum manifest at fetch time (scripts/fetch-runtimes.ts); bump a version here and nowhere else. The Python pin must satisfy server/pyproject.toml requires-python and match the root .python-version major.minor. bun is the only JavaScript runtime shipped: it runs the JS executor sidecar and installs + runs the npm-registry CLIs the plugins need (no Node, no npm).",
   "uv": {
     "version": "0.12.13",
     "base": "https://github.com/astral-sh/uv/releases/download/{version}/",
@@ -23,15 +23,16 @@
       "linux-x64": { "file": "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz", "strip": 1 }
     }
   },
-  "node": {
-    "version": "22.23.2",
-    "base": "https://nodejs.org/dist/v{version}/",
+  "bun": {
+    "version": "1.4.0",
+    "base": "https://github.com/oven-sh/bun/releases/download/bun-v{version}/",
     "checksum": "SHASUMS256.txt",
+    "license": "https://raw.githubusercontent.com/oven-sh/bun/bun-v{version}/LICENSE.md",
     "assets": {
-      "win-x64": { "file": "node-v22.23.2-win-x64.zip", "strip": 1 },
-      "mac-arm64": { "file": "node-v22.23.2-darwin-arm64.tar.gz", "strip": 1 },
-      "mac-x64": { "file": "node-v22.23.2-darwin-x64.tar.gz", "strip": 1 },
-      "linux-x64": { "file": "node-v22.23.2-linux-x64.tar.xz", "strip": 1 }
+      "win-x64": { "file": "bun-windows-x64.zip", "strip": 1 },
+      "mac-arm64": { "file": "bun-darwin-aarch64.zip", "strip": 1 },
+      "mac-x64": { "file": "bun-darwin-x64.zip", "strip": 1 },
+      "linux-x64": { "file": "bun-linux-x64.zip", "strip": 1 }
     }
   }
 }

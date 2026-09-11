@@ -1,6 +1,6 @@
 # Desktop installers for Windows, macOS and Linux, attached to the GitHub
-# Release for the tag. Kept separate from release.yml (npm publish) so a
-# desktop failure never blocks the npm release and the strings that
+# Release for the tag. Kept separate from release.yml (registry publish) so a
+# desktop failure never blocks the package release and the strings that
 # cli/tests/test_release_pipeline_config.py locks stay untouched.
 #
 # Unsigned first release: no certificates are read here. Signing is wired
@@ -63,7 +63,7 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build client and Node sidecar
+      - name: Build client and JS executor sidecar
         # Targeted builds only: `bun run build` would also uv-sync a server
         # venv and download the Temporal binary, neither of which ships.
         run: |

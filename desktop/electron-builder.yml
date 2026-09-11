@@ -4,7 +4,7 @@
 # copied verbatim outside the asar, because Python needs real files:
 #   resources/app-root/   the backend sibling layout (server/, client/dist,
 #                         .env.template, package.json, .opencompany/workflows)
-#   resources/runtime/    uv, python, node for THIS os/arch
+#   resources/runtime/    uv, python, bun for THIS os/arch
 # Both come from desktop/stage/ (scripts/stage.ts). The ${os}-${arch}
 # macro selects the per-target runtime dir so one config serves every
 # platform and both macOS architectures.
@@ -36,8 +36,8 @@ extraResources:
     to: runtime/
   - from: ../LICENSE
     to: licenses/OpenCompany-LICENSE
-  - from: stage/runtime/${os}-${arch}/node/LICENSE
-    to: licenses/Node-LICENSE
+  - from: stage/runtime/${os}-${arch}/bun/LICENSE.md
+    to: licenses/Bun-LICENSE.md
   - from: stage/runtime/${os}-${arch}/python/LICENSE.txt
     to: licenses/Python-LICENSE.txt
 
@@ -86,7 +86,7 @@ linux:
   category: Office
   maintainer: OpenCompany contributors
   synopsis: Agent-first workflow automation, running locally
-  description: OpenCompany desktop app. Bundles uv, Python and Node; provisions the backend on first launch.
+  description: OpenCompany desktop app. Bundles uv, Python and bun; provisions the backend on first launch.
 deb:
   depends:
     - libgtk-3-0

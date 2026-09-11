@@ -13,7 +13,7 @@ function fakeLayout(withBinaries: boolean) {
   const userData = join(root, "ud");
   const layout = resolveLayout({ resources, userData, platform: process.platform });
   if (withBinaries) {
-    for (const p of [layout.uvBin, layout.nodeBin, layout.pythonBin]) {
+    for (const p of [layout.uvBin, layout.bunBin, layout.pythonBin]) {
       mkdirSync(join(p, ".."), { recursive: true });
       writeFileSync(p, "");
     }
@@ -62,18 +62,21 @@ describe("buildBackendEnv", () => {
     expect(env.UV_NATIVE_TLS).toBeUndefined();
     expect(env.LOG_FORMAT).toBe("json");
     expect(env.OPENCOMPANY_UV_BIN).toBe(layout.uvBin);
-    expect(env.OPENCOMPANY_NODE_BIN).toBe(layout.nodeBin);
+    expect(env.OPENCOMPANY_BUN_BIN).toBe(layout.bunBin);
+    expect(env.BUN_INSTALL).toBe(layout.bunHomeDir);
+    expect(env.BUN_INSTALL_CACHE_DIR).toBe(join(layout.bunHomeDir, "install", "cache"));
+    expect(env.OPENCOMPANY_NODE_BIN).toBeUndefined();
     expect(env.VIRTUAL_ENV).toBeUndefined();
     expect(env.PYTHONPATH).toBeUndefined();
     expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(env.HOME).toBe("/home/u");
   });
 
-  it("prepends bundled node and uv to PATH but never the bare python dir", () => {
+  it("prepends bundled bun and uv to PATH but never the bare python dir", () => {
     const layout = fakeLayout(true);
     const env = buildBackendEnv({ layout, port: 1, token: "t", parentPid: 1, baseEnv: { PATH: "/usr/bin" } });
     const parts = (env.PATH as string).split(delimiter);
-    expect(parts[0]).toBe(layout.nodeBinDir);
+    expect(parts[0]).toBe(layout.bunDir);
     expect(parts[1]).toBe(join(layout.uvBin, ".."));
     expect(parts).toContain(layout.uvToolBinDir);
     expect(parts.some((p) => p.includes(join("runtime", "python")))).toBe(false);
@@ -83,7 +86,8 @@ describe("buildBackendEnv", () => {
     const layout = fakeLayout(false);
     const env = buildBackendEnv({ layout, port: 1, token: "t", parentPid: 1, baseEnv: { PATH: "/usr/bin" } });
     expect(env.OPENCOMPANY_UV_BIN).toBeUndefined();
-    expect(env.OPENCOMPANY_NODE_BIN).toBeUndefined();
+    expect(env.OPENCOMPANY_BUN_BIN).toBeUndefined();
+    expect(env.BUN_INSTALL).toBeUndefined();
     expect((env.PATH as string).split(delimiter)[0]).toBe(layout.uvToolBinDir);
   });
 

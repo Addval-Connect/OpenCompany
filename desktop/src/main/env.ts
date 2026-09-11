@@ -12,7 +12,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { delimiter } from "node:path";
+import { delimiter, join } from "node:path";
 
 import type { Layout } from "./paths";
 
@@ -110,18 +110,24 @@ export function buildBackendEnv(opts: BackendEnvOptions): NodeJS.ProcessEnv {
     UV_SYSTEM_CERTS: "1",
   };
   if (existsSync(layout.uvBin)) contract.OPENCOMPANY_UV_BIN = layout.uvBin;
-  if (existsSync(layout.nodeBin)) contract.OPENCOMPANY_NODE_BIN = layout.nodeBin;
+  if (existsSync(layout.bunBin)) {
+    contract.OPENCOMPANY_BUN_BIN = layout.bunBin;
+    // Keep bun's own package cache and global state inside the app's data
+    // dir rather than the user's ~/.bun, which may belong to a dev install.
+    contract.BUN_INSTALL = layout.bunHomeDir;
+    contract.BUN_INSTALL_CACHE_DIR = join(layout.bunHomeDir, "install", "cache");
+  }
 
   const user = readUserEnvFile(layout.userEnvFile);
   for (const [k, v] of Object.entries(user)) {
     if (!LOCKED_KEYS.has(k)) contract[k] = v;
   }
 
-  // PATH: bundled node (node/npm/npx) and uv first; the bundled bare Python
-  // is deliberately NOT added so plugins never pick it over the venv.
+  // PATH: bundled bun and uv first; the bundled bare Python is deliberately
+  // NOT added so plugins never pick it over the venv.
   const pathKey = Object.keys(base).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   const uvDir = existsSync(layout.uvBin) ? layout.uvBin.slice(0, layout.uvBin.lastIndexOf(layout.uvBin.includes("\\") ? "\\" : "/")) : "";
-  contract[pathKey] = prependPath(base[pathKey], existsSync(layout.nodeBin) ? layout.nodeBinDir : "", uvDir, layout.uvToolBinDir);
+  contract[pathKey] = prependPath(base[pathKey], existsSync(layout.bunBin) ? layout.bunDir : "", uvDir, layout.uvToolBinDir);
 
   return { ...base, ...contract };
 }

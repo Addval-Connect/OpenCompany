@@ -4,7 +4,7 @@
  *   resources/  read-only, shipped inside the app bundle (electron-builder
  *               extraResources) or, in development, `desktop/stage/`.
  *     app-root/           backend sibling layout -> OPENCOMPANY_APP_ROOT
- *     runtime/{uv,python,node}
+ *     runtime/{uv,python,bun}
  *   userData/   Electron's per-user writable dir (%APPDATA%/OpenCompany,
  *               ~/Library/Application Support/OpenCompany, ~/.config/OpenCompany)
  *     pyenv/venv          UV_PROJECT_ENVIRONMENT (the backend interpreter)
@@ -12,6 +12,7 @@
  *     pyenv/cache         UV_CACHE_DIR
  *     pyenv/tools         UV_TOOL_DIR / bin (browser-harness etc.)
  *     pycache/            PYTHONPYCACHEPREFIX (the bundle is read-only)
+ *     bun/                BUN_INSTALL (bun's package cache for the plugin CLIs)
  *     logs/
  *     desktop-state.json  persisted port etc.
  *     desktop.env         operator overrides -> OPENCOMPANY_ENV_FILE
@@ -34,9 +35,11 @@ export interface Layout {
   runtimeDir: string;
   uvBin: string;
   pythonBin: string;
-  nodeDir: string;
-  nodeBinDir: string;
-  nodeBin: string;
+  /** The bundled bun: the JS executor runtime and the installer for the npm-registry CLIs. */
+  bunDir: string;
+  bunBin: string;
+  /** BUN_INSTALL for the backend: bun's package cache and global state, under userData. */
+  bunHomeDir: string;
   userData: string;
   pyenvDir: string;
   venvDir: string;
@@ -83,8 +86,7 @@ export function resolveLayout(opts: LayoutOptions): Layout {
   const appRoot = opts.appRoot ?? join(resources, "app-root");
   const runtimeDir = opts.runtimeDir ?? join(resources, "runtime");
   const win = platform === "win32";
-  const nodeDir = join(runtimeDir, "node");
-  const nodeBinDir = win ? nodeDir : join(nodeDir, "bin");
+  const bunDir = join(runtimeDir, "bun");
   const pyenvDir = join(opts.userData, "pyenv");
   return {
     platform,
@@ -95,9 +97,9 @@ export function resolveLayout(opts: LayoutOptions): Layout {
     runtimeDir,
     uvBin: join(runtimeDir, "uv", win ? "uv.exe" : "uv"),
     pythonBin: bundledPython(runtimeDir, platform),
-    nodeDir,
-    nodeBinDir,
-    nodeBin: join(nodeBinDir, win ? "node.exe" : "node"),
+    bunDir,
+    bunBin: join(bunDir, win ? "bun.exe" : "bun"),
+    bunHomeDir: join(opts.userData, "bun"),
     userData: opts.userData,
     pyenvDir,
     venvDir: join(pyenvDir, "venv"),
@@ -121,6 +123,6 @@ export function layoutReport(layout: Layout): Record<string, boolean> {
     envTemplate: existsSync(join(layout.appRoot, ".env.template")),
     uv: existsSync(layout.uvBin),
     python: existsSync(layout.pythonBin),
-    node: existsSync(layout.nodeBin),
+    bun: existsSync(layout.bunBin),
   };
 }

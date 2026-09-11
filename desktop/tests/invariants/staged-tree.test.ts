@@ -68,12 +68,11 @@ describe.skipIf(!staged)("staged app-root", () => {
     expect(leaked).toEqual([]);
   });
 
-  it("re-bundled the Node sidecar with express inlined", () => {
+  it("bundled the JS executor sidecar with express inlined", () => {
     const js = readFileSync(join(APP_ROOT, "server", "nodejs", "dist", "index.js"), "utf-8");
     expect(js.length).toBeGreaterThan(50_000);
     expect(/from\s+["']express["']/.test(js)).toBe(false);
     expect(/require\(["']express["']\)/.test(js)).toBe(false);
-    expect(js).toContain("createRequire");
   });
 
   it("carries the version the root package.json declares", () => {
@@ -83,38 +82,45 @@ describe.skipIf(!staged)("staged app-root", () => {
     const manifest = JSON.parse(readFileSync(join(STAGE, "manifest.json"), "utf-8")) as { appVersion: string; runtimes: Record<string, string> };
     expect(manifest.appVersion).toBe(root.version);
     expect(manifest.runtimes.python ?? "").toMatch(/^3\.12\./);
+    expect(manifest.runtimes.bun ?? "").toMatch(/^\d+\.\d+\.\d+$/);
+    expect(manifest.runtimes.node).toBeUndefined();
   });
 });
 
 describe.skipIf(!staged || !runtimesStaged)("staged runtimes", () => {
   const layout = resolveLayout({ resources: STAGE, userData: join(STAGE, "_ud"), runtimeDir: RUNTIME });
 
-  it("has uv, python and node where paths.ts looks", () => {
+  it("has uv, python and bun where paths.ts looks, and no node or npm", () => {
     expect(existsSync(layout.uvBin), layout.uvBin).toBe(true);
     expect(existsSync(layout.pythonBin), layout.pythonBin).toBe(true);
-    expect(existsSync(layout.nodeBin), layout.nodeBin).toBe(true);
-    const npm = process.platform === "win32" ? join(layout.nodeDir, "npm.cmd") : join(layout.nodeBinDir, "npm");
-    expect(existsSync(npm), npm).toBe(true);
+    expect(existsSync(layout.bunBin), layout.bunBin).toBe(true);
+    expect(existsSync(join(layout.bunDir, "LICENSE.md"))).toBe(true);
+    expect(existsSync(join(layout.runtimeDir, "node"))).toBe(false);
   });
 
   it("runs the bundled interpreters", () => {
     const py = spawnSync(layout.pythonBin, ["--version"], { encoding: "utf-8" });
     expect(py.status, py.stderr).toBe(0);
     expect(`${py.stdout}${py.stderr}`).toMatch(/Python 3\.12\./);
-    const node = spawnSync(layout.nodeBin, ["--version"], { encoding: "utf-8" });
-    expect(node.status).toBe(0);
-    expect(node.stdout.trim()).toMatch(/^v22\./);
+    const bun = spawnSync(layout.bunBin, ["--version"], { encoding: "utf-8" });
+    expect(bun.status).toBe(0);
+    expect(bun.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
     const uv = spawnSync(layout.uvBin, ["--version"], { encoding: "utf-8" });
     expect(uv.status).toBe(0);
     expect(uv.stdout).toMatch(/^uv \d+\.\d+\.\d+/);
   });
 
-  it("the re-bundled sidecar boots on the bundled node", async () => {
+  it("the bundled sidecar boots on the bundled bun with no node on PATH", async () => {
     const { spawn } = await import("node:child_process");
     const port = 5600 + Math.floor(Math.random() * 300);
-    const child = spawn(layout.nodeBin, [join(APP_ROOT, "server", "nodejs", "dist", "index.js")], {
+    const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+    const strippedPath = (process.env[pathKey] ?? "")
+      .split(process.platform === "win32" ? ";" : ":")
+      .filter((p) => !/nodejs|[\\/]npm|pnpm|\.nvm|fnm|volta/i.test(p))
+      .join(process.platform === "win32" ? ";" : ":");
+    const child = spawn(layout.bunBin, [join(APP_ROOT, "server", "nodejs", "dist", "index.js")], {
       cwd: join(APP_ROOT, "server", "nodejs"),
-      env: { ...process.env, NODEJS_EXECUTOR_PORT: String(port), NODEJS_EXECUTOR_HOST: "127.0.0.1" },
+      env: { ...process.env, [pathKey]: strippedPath, NODEJS_EXECUTOR_PORT: String(port), NODEJS_EXECUTOR_HOST: "127.0.0.1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
