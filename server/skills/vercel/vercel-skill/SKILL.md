@@ -161,7 +161,7 @@ Two independent paths (either is enough), configured in the
 Credentials Modal → Vercel:
 
 1. **Login with Vercel** — browser device flow driven through the
-   CLI. The CLI is auto-installed via npm on first use and keeps its
+   CLI. The CLI is auto-installed with bun on first use and keeps its
    auth state in a OpenCompany-owned config directory.
 2. **Access token** — paste a token from
    [vercel.com/account/tokens](https://vercel.com/account/tokens).

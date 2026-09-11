@@ -505,3 +505,11 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 **Root cause**: The `tar` first on PATH in a Git Bash shell is Git for Windows' GNU tar, which cannot read `.zip` and parses `D:\...` as `host:path`. The system bsdtar at `%SystemRoot%\System32\tar.exe` handles zip, tar.gz and tar.xz.
 
 **Fix**: `desktop/scripts/_lib.ts::tarBinary()` prefers the System32 tar on Windows and always passes the archive as a path relative to the extraction directory so no argument carries a drive colon.
+
+## 23. `company: command not found` after `bun add -g`, or `bun pm ls -g` aborts with `InvalidNPMLockfile`
+
+**Symptom**: `bun add -g @zeenie-ai/opencompany` succeeds, but `company` is not found in the same shell; or `bun pm ls -g` prints `error: failed to migrate lockfile: InvalidNPMLockfile`.
+
+**Root cause**: bun puts global bin shims in `$(bun pm bin -g)` (`~/.bun/bin`, or `$BUN_INSTALL/bin`), which a shell opened before the bun installer ran does not have on PATH. Separately, bun keeps its global packages in a directory it chooses per platform and configuration (on Windows 1.4 it was the user profile, not `$BUN_INSTALL/install/global`), and a stray npm `package-lock.json` in that directory makes `bun pm ls -g` try to migrate it and fail.
+
+**Fix**: open a new shell, or `export PATH="$HOME/.bun/bin:$PATH"` (`$env:USERPROFILE\.bun\bin` on Windows). Nothing in OpenCompany depends on where the global package lives: `company provision` runs from the shim's own package root, `uninstall.sh` uses `bun remove -g` rather than listing, and the installers address the shim through `bun pm bin -g`. Delete the stray `package-lock.json` only if you know it is not yours.

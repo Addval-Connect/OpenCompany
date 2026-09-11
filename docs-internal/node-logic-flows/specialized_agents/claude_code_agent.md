@@ -159,7 +159,7 @@ flowchart TD
 
 ## External Dependencies
 
-- **Binaries**: `@anthropic-ai/claude-code`, OpenCompany-managed — auto-installed on first use into the shared npm tree at `<DATA_DIR>/packages/` (binary at `<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]`); requires `npm` on PATH.
+- **Binaries**: `@anthropic-ai/claude-code`, OpenCompany-managed — auto-installed on first use into the shared packages tree at `<DATA_DIR>/packages/` with `bun add --trust` via `core.js_runtime.add_package` (bin shim at `<DATA_DIR>/packages/node_modules/.bin/claude[.exe]`, executed on the bun runtime); requires bun (`OPENCOMPANY_BUN_BIN` or PATH), never Node or npm.
 - **Python packages**: standard library + the `services/cli_agent/` framework
   (FastMCP bridge, session pool).
 - **Credentials**: Claude Code handles its own authentication via

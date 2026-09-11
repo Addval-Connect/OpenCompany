@@ -284,7 +284,7 @@ server/nodes/code/                # Executor plugins (javascript_executor, types
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check: `runtime: "bun"`, `runtime_version`, and still `node_version` (the Node API level bun reports) |
-| `/execute` | POST | Execute JS/TS code with input_data and timeout |
+| `/execute` | POST | Execute JS/TS code with input_data and timeout (`language: "typescript"` is type-stripped by `Bun.Transpiler` first, then both run in a `node:vm` context) |
 | `/packages/install` | POST | Install npm-registry packages into user-packages via `bun add` (run through `process.execPath`, i.e. the sidecar's own bun) |
 | `/packages` | GET | List installed packages from the user-packages dir's `package.json` |
 
@@ -443,7 +443,7 @@ locked by `server/tests/test_output_contract.py`.
 
 **Always use the existing design and theme systems.** Tribal styling reintroduced anywhere defeats the migration. The following rules are non-negotiable for any new or edited frontend file:
 
-1. **Compose shadcn primitives** from [client/src/components/ui/](./client/src/components/ui/) — `Button`, `Badge`, `Alert`, `AlertDialog`, `Dialog`, `DropdownMenu`, `Select`, `Progress`, `Tooltip`, `Tabs`, `Card`, `Input`, `Textarea`, `Switch`, `Checkbox`, `Slider`, `Label`, `Form`, `Collapsible`, `Accordion`, `Skeleton`, `Sonner`. **Do not hand-roll** modals, dropdowns, menus, toasts, dialogs, or buttons when a primitive exists. Add `npx shadcn@latest add <name>` if the primitive is missing.
+1. **Compose shadcn primitives** from [client/src/components/ui/](./client/src/components/ui/) — `Button`, `Badge`, `Alert`, `AlertDialog`, `Dialog`, `DropdownMenu`, `Select`, `Progress`, `Tooltip`, `Tabs`, `Card`, `Input`, `Textarea`, `Switch`, `Checkbox`, `Slider`, `Label`, `Form`, `Collapsible`, `Accordion`, `Skeleton`, `Sonner`. **Do not hand-roll** modals, dropdowns, menus, toasts, dialogs, or buttons when a primitive exists. Add `bun x shadcn@latest add <name>` if the primitive is missing.
 2. **Action buttons → `<ActionButton intent="...">`** ([client/src/components/ui/action-button.tsx](./client/src/components/ui/action-button.tsx)). The `intent` prop is a semantic role (`run | stop | save | config | secret | tools`), never a palette color. Never re-introduce the `actionButtonStyle()` / hand-built colored buttons.
 3. **Style with Tailwind classes**, not `style={{...}}`. Inline `style` is allowed only for genuinely dynamic values (React Flow `<Handle>` positioning, runtime-computed coordinates, dynamic per-definition `nodeColor` on canvas nodes).
 4. **Use the token tier table** in [docs-internal/frontend_architecture.md](./docs-internal/frontend_architecture.md#tokens--theming):
@@ -807,7 +807,7 @@ See **[Scripts Reference](./docs-internal/SCRIPTS.md)** for full documentation.
 ✅ **Production Deployment**: `company deploy` provisions a login-gated VM via Terraform + cloud-init running `company serve` under systemd; the Docker Compose topology was removed (see [deployment_legacy.md](./docs-internal/deployment_legacy.md))
 ✅ **Authentication System**: n8n-style JWT authentication with HttpOnly cookies, single-owner and multi-user modes, rate-limited login. Note `AUTH_MODE=multi` authenticates but does NOT isolate data — see Known Limitations in [authentication.md](./docs-internal/authentication.md)
 ✅ **Cache System**: n8n-pattern cache with Redis (production) / SQLite (local dev) / Memory fallback hierarchy
-✅ **AI Thinking/Reasoning**: Extended thinking for Claude, Gemini 2.5/3, OpenAI GPT-5/o-series, Groq Qwen3 with output available in Input Data & Variables for downstream nodes
+✅ **AI Thinking/Reasoning**: Extended thinking for Claude, Gemini 2.5/3, OpenAI GPT-5/GPT-6/o-series, Groq Qwen3 with output available in Input Data & Variables for downstream nodes
 ✅ **Onboarding Service**: 4-step welcome wizard with shadcn UI, database persistence, skip/resume/replay support
 ✅ **Proxy System**: Residential proxy provider management with template-based URL formatting, auto-selection by health score, transparent proxy injection on httpRequest/httpScraper nodes via `useProxy: true`
 ✅ **Markdown Formatter**: GFM markdown to platform-native formatting (Telegram HTML, WhatsApp syntax, plain text) using markdown-it-py

@@ -482,7 +482,7 @@ cd client && bun run typecheck && bun run build
 Touched components should pass lint:
 
 ```bash
-cd client && npx eslint <files>
+cd client && bun x eslint <files>
 ```
 
 ## File index

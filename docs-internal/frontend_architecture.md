@@ -603,7 +603,7 @@ The DIY widget registry (RHF + zod + a tester+rank dispatch) is modeled on n8n's
 | [client/src/components/ui/alert-dialog.tsx](../client/src/components/ui/alert-dialog.tsx) | Confirmation / destructive-action modals. **Never hand-roll a `position: fixed; background: rgba(0,0,0,0.5)` backdrop** — use `<AlertDialog open onOpenChange>` with `AlertDialogHeader` / `AlertDialogDescription` / `AlertDialogFooter`. Focus trap, escape-to-close, and `role="alertdialog"` come from Radix. MiddleSection Clear Memory + Reset Skill dialogs are the canonical consumers (Wave 3 commit `61bf23c`). |
 | [client/src/components/ui/sonner.tsx](../client/src/components/ui/sonner.tsx) | The `<Toaster />` mount — call `import { toast } from 'sonner'` directly at use sites; do not wrap. |
 | [client/src/components/ui/Modal.tsx](../client/src/components/ui/Modal.tsx) | Composition primitive on top of shadcn `<Dialog>`. Owns the recurring "title bar with centered headerActions and a close button + size-constrained content panel" 8 panels share. Not an antd facade. For destructive confirmations prefer `AlertDialog` above. |
-| `client/src/components/ui/{button,input,select,switch,checkbox,form,…}.tsx` | shadcn-generated primitives. Add new ones via `npx shadcn@latest add <name>`. Don't re-implement what the registry ships. |
+| `client/src/components/ui/{button,input,select,switch,checkbox,form,…}.tsx` | shadcn-generated primitives. Add new ones via `bun x shadcn@latest add <name>`. Don't re-implement what the registry ships. |
 
 ## Theme + canvas chrome
 

@@ -23,7 +23,7 @@ company --help        # list commands
 company stop          # kill ports + orphans + temporal
 ```
 
-Or via the npm scripts (which now invoke the same Python CLI):
+Or via the package.json scripts (`bun run <script>`, which invoke the same Python CLI):
 
 ```sh
 bun run stop

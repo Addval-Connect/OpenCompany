@@ -67,7 +67,7 @@ Follow the plugin-runtime pattern (references: `nodes/whatsapp/_runtime.py`,
 |---------|---------------|-----------------|
 | Spawning from a status refresh | a passive probe boots an optional daemon | Consult the supervisor (`is_running()`); demand signals own the starts |
 | Adding plugin-daemon ports to `Config.all_ports` | the CLI would kill a backend-owned daemon during startup | The backend supervises them; the CLI carries no plugin knowledge |
-| Resolving `node_modules/.bin/<cli>` path | Breaks if not in PATH, tribal workaround | Install globally |
-| Using `npx <service-cli>` in `execSync` | Slow, may use wrong version, npx overhead | Install globally, call directly |
+| Spelling `node_modules/.bin/<cli>[.cmd]` by hand | Drifts per platform (bun writes `<name>.exe` + `<name>.bunx` on Windows, `<name>` elsewhere) | `core.js_runtime.shared_tree_bin(name)` after `add_package(spec)` |
+| Running the CLI through `bun x` / `npx` per call | Slow, unpinned version, no shared tree | `add_package("<pkg>@<version>")` once into the shared packages tree, then call the shim directly |
 | Wrapping CLI in a JS script | Unnecessary indirection | Use CLI commands directly |
 | Hardcoding port numbers in code or docs | drifts when ports change | Declare in `.env.template`; read via `core.env_defaults` |
