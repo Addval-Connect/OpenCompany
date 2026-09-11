@@ -26,7 +26,7 @@ GETTING_STARTED_COLUMNS = [
 
 
 @pytest.fixture
-async def settings_database():
+async def settings_database(tmp_path: Path):
     module_name = "tests._real_settings_database"
     spec = importlib.util.spec_from_file_location(
         module_name, Path(__file__).resolve().parents[2] / "core" / "database.py"
@@ -35,7 +35,7 @@ async def settings_database():
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-    db_path = Path.cwd() / f".getting-started-{uuid.uuid4().hex}.db"
+    db_path = tmp_path / f"getting-started-{uuid.uuid4().hex}.db"
     database = module.Database(SimpleNamespace(
         database_url=f"sqlite+aiosqlite:///{db_path.as_posix()}",
         database_echo=False, database_pool_size=5, database_max_overflow=5,
