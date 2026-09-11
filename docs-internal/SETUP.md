@@ -72,6 +72,30 @@ Services (production `company start`; every port is declared once in `.env.templ
 
 `company dev` serves the same app URL from the Vite HMR server, which proxies /api /ws /webhook /health /mcp to the backend; `.env.dev` moves the backend one port up (`PYTHON_BACKEND_PORT` override) so the app URL stays put.
 
+### Desktop app (Electron shell)
+
+End users can skip Python and Node entirely: the installers attached to each
+GitHub Release bundle `uv`, a standalone CPython 3.12 and Node 22, provision
+the backend's virtual environment into the app's data directory on first
+launch (one-time download of the Python wheels, plus the Temporal binary the
+CLI also downloads), and host the same backend-served UI in a native window.
+Data lives in `~/.opencompany` exactly as for a CLI install, so both can be
+used on one machine; the shell even attaches to a `company serve` that is
+already running on the app port instead of starting a second backend.
+
+Developing the shell (from a built checkout — `client/dist` and the sidecar
+bundle must exist):
+
+```bash
+cd desktop
+bun install
+bun run stage        # app-root + pinned runtimes for this machine
+bun run dev          # or: OPENCOMPANY_DESKTOP_APP_ROOT=.. OPENCOMPANY_DESKTOP_VENV_PYTHON=../server/.venv/bin/python bun run dev
+```
+
+Full reference: [desktop_app.md](./desktop_app.md); the backend's side of
+the arrangement is [desktop_host_contract.md](./desktop_host_contract.md).
+
 ## Services Overview
 
 ### Frontend (React — always at the app port; Vite dev server proxying the backend, or the production build served by uvicorn)
@@ -177,7 +201,7 @@ PYTHON_BACKEND_PORT=6678
 ```
 
 ### Python dependencies fail
-The server is uv-managed — prefer `uv sync` from `server/` (creates `server/.venv` against `uv.lock`). The pip fallback works too:
+The server is uv-managed — prefer `uv sync` from `server/` (creates `server/.venv` against the committed `uv.lock`; after editing `pyproject.toml` run `uv lock` and commit the result, CI checks it with `uv lock --check`). The pip fallback works too:
 ```bash
 cd server
 python -m venv venv

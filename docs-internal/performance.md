@@ -298,6 +298,8 @@ These were observed and fixed; the lessons are durable.
 - **`if (event.code !== 1000)` magic numbers** scattered through the WS lifecycle. Replaced with `WS_CLOSE.NORMAL_CLOSURE` from [connectionConfig.ts](../client/src/lib/connectionConfig.ts) per RFC 6455 §7.4.1.
 - **Inline `chunkSizeWarningLimit: 1500`** silently masking bundle bloat. Lowered to 850 KB so future regressions surface at `vite build` time.
 
+- **Setting `PYTHONPYCACHEPREFIX` without pre-warming it.** With a prefix set, CPython ignores every in-tree `__pycache__` — site-packages included — so the first boot recompiles ~20k files (measured 32 s vs 2.9 s warm). The desktop shell needs the prefix because its bundle is read-only, and pays the cost once during provisioning with `python -m compileall -q -j 0 <venv> <server>` under the same prefix (`desktop/src/main/provision.ts`). The CLI path does not set a prefix and keeps uv's `compile-bytecode = true` output in-tree.
+
 ## Open follow-ups
 
 Tracked but explicitly **not** in any active plan.

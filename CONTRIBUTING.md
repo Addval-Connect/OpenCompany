@@ -57,6 +57,7 @@ Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [nati
 | `server/config/` | llm_defaults.json, pricing.json, model_registry.json, email_providers.json, google_apis.json, credential_providers.json, ai_cli_providers.json, node_allowlist.json | [pricing_service.md](docs-internal/pricing_service.md), [node_allowlist.md](docs-internal/node_allowlist.md) |
 | `server/tests/` | Contract-test invariants + per-category node tests + `NodeTestHarness` | [tests/nodes/_harness.py](server/tests/nodes/_harness.py), [tests/credentials/README.md](server/tests/credentials/README.md) |
 | `client/src/` (styling + themes) | Tailwind tokens, shadcn primitives, the 12-theme contract | [frontend_architecture.md](docs-internal/frontend_architecture.md), [theme_system.md](docs-internal/theme_system.md) |
+| `desktop/` | Electron desktop shell — a standalone bun package (not a root workspace member) that bundles uv + Python + Node, provisions the backend venv on first launch and hosts the backend-served SPA in a native window | [desktop_app.md](docs-internal/desktop_app.md), [desktop_host_contract.md](docs-internal/desktop_host_contract.md) |
 | `docs-internal/` | In-repo architecture deep dives (50+ files) | Index below |
 
 ## How to Contribute Features
@@ -122,6 +123,7 @@ The diagram above shows the full lifecycle of a workflow node: one self-containe
 - **Import sanity:** `uv run pytest --collect-only` (from `server/`) is the live plugin-count invariant — it fails if any plugin errors at import.
 - **Credential tests** follow the numbered-invariant style documented in [server/tests/credentials/README.md](server/tests/credentials/README.md).
 - Run everything: `uv run pytest` from `server/`, `bun run --filter react-flow-client test` from the repo root, `uv run pytest cli/tests` from the repo root.
+- **Desktop shell:** from `desktop/`, `bun run typecheck && bun run test && bun run test:invariants` (the last needs `bun run stage` first), and `bun run build && bun run test:e2e` for the Playwright Electron smoke. In an editor-hosted terminal unset `ELECTRON_RUN_AS_NODE` before launching Electron by hand.
 
 ## Local Dev Quick Reference
 
@@ -136,6 +138,10 @@ bun run --filter react-flow-client typecheck   # THE gate: TypeScript 7 (native 
 bun run --filter react-flow-client typecheck:tsc # second opinion under tsc 5.9 — for triaging a red gate, not a substitute
 uv run pytest          # run backend tests (from server/, uv-managed venv)
 ```
+
+The desktop shell has its own package: `cd desktop && bun install && bun run stage && bun run dev` (see [desktop/README.md](desktop/README.md)). It is not a root workspace member, so root `bun install` does not touch it.
+
+`server/uv.lock` is committed. After changing `server/pyproject.toml`, run `uv lock` in `server/` and commit the lock too; CI fails with `uv lock --check` otherwise, and the desktop app installs from the lock with `--frozen`.
 
 **Known differences from pnpm** (the workspace migrated from pnpm@9 to bun@1.4):
 
@@ -177,6 +183,8 @@ Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.
 | [pricing_service.md](docs-internal/pricing_service.md) | LLM and API cost tracking |
 | [proxy_service.md](docs-internal/proxy_service.md) | Residential proxy provider management |
 | [ci_cd.md](docs-internal/ci_cd.md) | GitHub Actions workflows |
+| [desktop_app.md](docs-internal/desktop_app.md) | Electron desktop shell: bundled runtimes, first-run provisioning, packaging, updates, CI |
+| [desktop_host_contract.md](docs-internal/desktop_host_contract.md) | The backend's side of being owned by a GUI shell: relocatable app root, readiness, watchdogs, shutdown route |
 | [node_creation.md](docs-internal/node_creation.md) | How to create new nodes |
 | [memory_lifecycle.md](docs-internal/ARCHIVE/memory_lifecycle.md) | *Archived* pre-RFC-0002 markdown memory model; see agent_context_flow.md and memory_compaction.md |
 | [tool_building_pipeline.md](docs-internal/tool_building_pipeline.md) | Canonical home for `_build_tool_from_node`, tool discovery, per-type Temporal dispatch |

@@ -160,6 +160,7 @@ Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is determinis
 ### 6. Tarball verification
 
 - `npm pack --dry-run` after the change. Confirm `server/nodejs/dist/index.js` is included (existing `server/` glob already covers it). Confirm no `__pycache__/` leakage.
+- `server/uv.lock` is committed (since the desktop app) and ships in the tarball; `.npmignore` only hides `package-lock.json`. The desktop stage script also reads the `npm pack --dry-run --json` file list as its layout source of truth, so a change to the root `files` allowlist reaches the desktop bundle automatically.
 
 ## Critical files
 
@@ -185,9 +186,13 @@ Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is determinis
 6. `npm pack --dry-run` → `server/nodejs/dist/index.js` included; no `__pycache__/`; tarball size ≤ v0.0.76.
 7. Smoke: `company start` → load the app URL (`http://localhost:${PYTHON_BACKEND_PORT}`) → run "AI Assistant" example → agent responds.
 
+## Desktop installers
+
+The Electron shell has its own pipeline (`.github/workflows/desktop-release.yml`) that consumes this one's outputs (`client/dist`, the sidecar bundle) and adds the bundled runtimes; it is documented in [desktop_app.md](./desktop_app.md). Nuitka / PyOxidizer freezing was evaluated and rejected there: `temporalio`'s PyO3 bridge, `dependency-injector` wiring by string, `pkgutil.walk_packages` plugin discovery and `uv tool install browser-harness` at runtime all need a real interpreter on disk.
+
 ## Out of scope (future work)
 
-- Nuitka / PyOxidizer standalone binaries (separate release channel, ~1-2 weeks CI matrix).
+- Nuitka / PyOxidizer standalone binaries — rejected for the desktop app (see above); a separate release channel for the CLI would face the same constraints.
 - Plugin walker lazy-loading (~11s).
 - Service-status refresh parallelisation (~20s post-startup-complete).
 - mypyc / Cython for hot paths (low ROI — pydantic V2 already Rust, httpx/aiohttp already C).

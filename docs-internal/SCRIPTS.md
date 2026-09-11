@@ -36,6 +36,21 @@ deprecation warning; kept for upgrade compatibility).
 There is no `help` verb: `company` with no arguments, `company --help`, and
 `company <verb> --help` print Typer's help (`no_args_is_help=True` in `cli/cli.py`).
 
+### Desktop shell scripts (`desktop/package.json`, run from `desktop/`)
+
+The Electron shell is its own bun package with its own lockfile; root `bun run` does not reach it.
+
+| Command | Description |
+|---------|-------------|
+| `bun run stage` | Assemble `stage/`: the backend sibling layout from `npm pack --dry-run` (CLI, install scripts, client sources and backend tests dropped; `server/uv.lock` force-included; Node sidecar re-bundled with express inlined) plus the pinned runtimes for this host. `--target mac-arm64,mac-x64` stages other targets; `--skip-runtimes` stages app-root only |
+| `bun run fetch-runtimes` | Just the runtimes: download uv / python-build-standalone / Node pinned in `runtimes.json`, verify against the upstream checksum manifests, cache in `vendor/`, extract into `stage/runtime/<os>-<arch>/` |
+| `bun run dev` | electron-vite dev against `stage/` (`OPENCOMPANY_DESKTOP_APP_ROOT=..` and `OPENCOMPANY_DESKTOP_VENV_PYTHON=../server/.venv/...` run against the checkout without staging or provisioning) |
+| `bun run build` | electron-vite build of main / preload / setup renderer into `out/` |
+| `bun run typecheck` / `bun run test` / `bun run test:invariants` / `bun run test:e2e` | TS7 gate; vitest unit tests; staged-tree invariants (after `stage`); Playwright Electron smoke (after `build`) |
+| `bun run gen-icons` | Render `build/icon.svg` to `build/icon.png` (electron-builder derives icns / ico / Linux PNGs) |
+| `bun run sync-version` | Copy the root `package.json` version into `desktop/package.json` (CI runs it before `dist`) |
+| `bun run pack` / `bun run dist` | electron-builder unpacked dir / installers into `release/` |
+
 ### Dependency checks
 
 `build` checks that Node.js and npm/bun are present (no version floor), verifies

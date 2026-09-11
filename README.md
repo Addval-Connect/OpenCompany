@@ -24,6 +24,8 @@ company start
 
 Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`) and click the key icon (**API Credentials**) in the toolbar to connect your first AI provider.
 
+**Prefer a desktop app?** Installers for Windows (`.exe`), macOS (`.dmg`, Apple Silicon and Intel) and Linux (`.AppImage` / `.deb`) are attached to every [GitHub Release](https://github.com/zeenie-ai/OpenCompany/releases). They need no Python or Node on the machine: the app bundles them, sets up the backend on first launch (one-time download, a minute or two), and shares its data with a CLI install in `~/.opencompany`. The first releases are unsigned, so macOS asks you to allow the app under System Settings > Privacy & Security and Windows SmartScreen needs "More info > Run anyway". Details in [docs-internal/desktop_app.md](docs-internal/desktop_app.md).
+
 <details>
 <summary><b>Run from source (for contributors)</b></summary>
 

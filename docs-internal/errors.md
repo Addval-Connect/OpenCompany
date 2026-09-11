@@ -472,3 +472,30 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 **Root cause**: The sidecar bundle is built with `--packages=external`, so Express stays a runtime dependency, but it was declared only in `server/nodejs/package.json`. The npm package excludes every `node_modules`, and `nodes/code/_runtime.py` only checks that `dist/index.js` exists, so nothing ever installed Express on an npm-installed copy. Source checkouts never saw it because `bun install` provisions the workspace.
 
 **Fix**: `express` is declared in the root `package.json` `dependencies`, so npm installs it beside the package and Node resolves it from `server/nodejs/dist` by walking up to the package root. Nothing else changed; the sidecar still runs under whichever `node` is on `PATH` (18+ verified on Ubuntu 24.04's distro package).
+
+## 20. Graceful backend shutdown hangs, then the supervisor tree-kills it (Temporal / node / edgymeow orphaned)
+
+**Symptom**: `company stop`, Ctrl+C, or the desktop app's quit takes the full grace window and ends in a tree-kill. With the lifespan markers (`Lifespan shutdown: ...` in stdout) the log stops after `proxy stopped`, or never prints `Lifespan shutdown begin` at all.
+
+**Root causes** (two, found while building the desktop shell; the CLI's 5 s grace + tree-kill had masked both):
+
+1. `nodes/browser/_service.py::shutdown_browser_service` called `get_browser_service()`, which lazily runs `npm install agent-browser@latest` on first call — so a process that never used the browser ran a network install *at teardown*, synchronously on the event loop, and every graceful exit wedged there.
+2. uvicorn's `timeout_graceful_shutdown` defaults to `None`: it waits forever for open connections and in-flight handler tasks before sending the lifespan shutdown. A browser WebSocket that disappears with a TCP reset (the tab or window closing) can leave its handler task lingering, and the lifespan teardown — the part that reaps the child daemons — is never reached.
+
+**Fix**: the browser hook reads its module singleton and closes only a service that was actually created; every plugin shutdown hook now runs under `HOOK_TIMEOUT_SECONDS` (10 s, `services/plugin/shutdown_hooks.py`) and names the offender at WARNING; `company serve` / `company start` and the desktop shell pass `--timeout-graceful-shutdown 5` (`cli/_common.py::UVICORN_GRACEFUL_SHUTDOWN_SECONDS`). Note that the hook timeout cannot interrupt a hook that blocks the loop synchronously — keep hooks async.
+
+## 21. Electron boots as plain Node: `Cannot read properties of undefined (reading 'isPackaged')` / Playwright `Process failed to launch!`
+
+**Symptom**: Launching the desktop shell (or its Playwright smoke) from a terminal inside VS Code, Claude Code or another Electron-hosted editor crashes immediately with `electron.app` undefined; Playwright only reports `Process failed to launch!`.
+
+**Root cause**: Editor-hosted terminals export `ELECTRON_RUN_AS_NODE=1`. Electron honours it and starts as a bare Node runtime, so `require("electron")` returns the binary path string instead of the API.
+
+**Fix**: `unset ELECTRON_RUN_AS_NODE` before launching Electron by hand; `desktop/tests/e2e/smoke.spec.ts` strips it from the environment it passes to `electron.launch`, and `desktop/src/main/env.ts` strips it from the backend's environment too.
+
+## 22. Desktop runtime extraction fails on Windows: `tar: This does not look like a tar archive` / `Cannot connect to D: resolve failed`
+
+**Symptom**: `bun run stage` / `bun run fetch-runtimes` fails while extracting the uv zip or a Node archive.
+
+**Root cause**: The `tar` first on PATH in a Git Bash shell is Git for Windows' GNU tar, which cannot read `.zip` and parses `D:\...` as `host:path`. The system bsdtar at `%SystemRoot%\System32\tar.exe` handles zip, tar.gz and tar.xz.
+
+**Fix**: `desktop/scripts/_lib.ts::tarBinary()` prefers the System32 tar on Windows and always passes the archive as a path relative to the extraction directory so no argument carries a drive colon.

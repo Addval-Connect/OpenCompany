@@ -39,6 +39,8 @@ The repo currently ships **three workflows** plus one composite action. A number
 | CI | `.github/workflows/ci.yml` | push/PR → main | Delegates to predeploy.yml |
 | Predeploy | `.github/workflows/predeploy.yml` | `workflow_call` | build/lint + backend tests + CLI tests + cross-OS build/start smoke |
 | Release | `.github/workflows/release.yml` | `v*.*.*` tag, `workflow_dispatch` | predeploy gate → publish (npm + GitHub Packages) |
+| Desktop CI | `.github/workflows/desktop-ci.yml` | PR touching `desktop/**` or the backend host-contract files; push to main touching `desktop/**` | typecheck + unit + staged-tree invariants + `electron-vite build` + Playwright Electron smoke on ubuntu-22.04 (xvfb) and windows-latest |
+| Desktop release | `.github/workflows/desktop-release.yml` | `v*.*.*` tag, `workflow_dispatch` | 3-runner matrix (windows-latest x64, macos-14 arm64+x64, ubuntu-22.04 x64) builds installers with electron-builder into one **draft** GitHub Release; `finalize` undrafts once every leg is green. Artifacts-only on dispatch unless `publish` is ticked |
 | Setup | `.github/actions/setup/action.yml` | (composite) | bun 1.4 + Node 22 + Python 3.12 + uv v8 + editable CLI install |
 
 ### Toolchain pin
@@ -50,7 +52,9 @@ The repo currently ships **three workflows** plus one composite action. A number
 | Secret | Used by | Description |
 |--------|---------|-------------|
 | `NPM_TOKEN` | release.yml | npmjs publish access to the public `@zeenie-ai` scope (`publish-npm`) |
-| `GITHUB_TOKEN` | release.yml | GitHub Packages publish (auto-provided) |
+| `GITHUB_TOKEN` | release.yml, desktop-release.yml | GitHub Packages publish; desktop installer upload to the draft release and the `finalize` undraft (auto-provided; the desktop workflow needs `contents: write`) |
+
+Desktop code signing is deliberately absent for the first releases: `CSC_IDENTITY_AUTO_DISCOVERY=false` is set so electron-builder never looks for a certificate. Adding it later is secrets-only (`CSC_LINK` + `CSC_KEY_PASSWORD` for Windows; a Developer ID cert plus `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` for macOS) plus the three mac flags in `desktop/electron-builder.yml` — see [desktop_app.md](./desktop_app.md#signing-and-updates).
 
 ---
 
@@ -85,7 +89,7 @@ After tool install the composite installs the supervisor CLI editably (`uv pip i
 Reusable `workflow_call` workflow with four independent jobs (no plan/change-detection gate, no aggregator — every job runs on every call):
 
 - `build-and-lint` — `bun install --frozen-lockfile` + `bun run build`, then client lint (`bun run --filter react-flow-client lint`), TypeScript check (`... typecheck`), and frontend tests (`... test`, vitest). Runs on `ubuntu-latest`.
-- `backend-tests` — `uv sync` + `uv run pytest tests/ -v` in `server/`. Whole suite, unsharded. Runs on `ubuntu-latest`.
+- `backend-tests` — `uv lock --check` (the committed `server/uv.lock` must match `pyproject.toml`; the desktop app installs from it with `--frozen`), then `uv sync` + `uv run pytest tests/ -v` in `server/`. Whole suite, unsharded. Runs on `ubuntu-latest`.
 - `cli-tests` — `uv pip install --system pytest pytest-asyncio pyyaml` + `python -m pytest cli/tests/ -v`. Runs on `ubuntu-latest`.
 - `test-build-start` — cross-OS matrix (`ubuntu-latest`, `macos-latest`, `windows-latest`, `fail-fast: false`). Runs `bun run build`, then `bun run tsc --version` (proves the per-platform TypeScript 7 Go binary delivered via `optionalDependencies` resolves on every OS — the type-check gate itself runs on ubuntu only; `bun run`, never `bunx`, so it resolves strictly from the root `node_modules/.bin`), then a start smoke test. On Unix it backgrounds `bun run start`, reads `PYTHON_BACKEND_PORT` out of `.env.template` and polls `http://localhost:${APP_PORT}/health` for up to ~30 s, then `bun run stop`. On Windows it starts the supervisor as a background job, waits 15 s, and fails if the job already exited.
 
@@ -151,6 +155,8 @@ folder — both the folder and the workflow are gone.
 | `.github/workflows/ci.yml` | CI entry point (delegates to predeploy.yml) |
 | `.github/workflows/predeploy.yml` | Reusable validation (build/lint + backend tests + CLI tests + OS matrix build/start) |
 | `.github/workflows/release.yml` | Tag / manual release: predeploy gate → publish npm + GitHub Packages |
+| `.github/workflows/desktop-ci.yml` | Desktop shell checks on PRs: typecheck, unit, invariants, build, Playwright smoke |
+| `.github/workflows/desktop-release.yml` | Tag-triggered desktop installers (NSIS / DMG+zip / AppImage+deb) into a draft release, then undraft. Separate from `release.yml` so npm publish is never blocked |
 | `.github/actions/setup/action.yml` | Composite: bun + Node + Python + uv + editable CLI install |
 | `.github/dependabot.yml` | **Security updates only** — version-update PRs disabled; see below |
 | `.python-version` | Toolchain pin (`3.12`) — single source of truth |
