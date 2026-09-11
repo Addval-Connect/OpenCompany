@@ -161,7 +161,7 @@ isn't already present in `executionResults` (deduplicated via `JSON.stringify`).
 than `success`/`error` (e.g. `running`) are ignored.
 
 Rendering lives in [client/src/components/output/OutputPanel.tsx](../client/src/components/output/OutputPanel.tsx)
-(the active renderer — `ui/OutputDisplayPanel.tsx` is legacy and unimported). The Response
+(the active and only renderer; the former `ui/OutputDisplayPanel.tsx` was deleted). The Response
 section picks, in order: `response` / `output` / `text` / `content` (prose keys), then an
 object-typed `result` (the canonical payload key CLI nodes fill with server-side-parsed JSON —
 arrays survive `unwrap` un-peeled and surface here), then `stdout`. Objects/arrays render in the
@@ -210,8 +210,8 @@ Locked in by the test suite at:
 ```bash
 cd client
 npm install
-npm run test:run -- src/hooks/__tests__/useDragVariable.test.ts \
-                    src/components/parameterPanel/__tests__
+npm run test -- src/hooks/__tests__/useDragVariable.test.ts \
+                src/components/parameterPanel/__tests__
 ```
 
 Or use the dedicated script (added in `client/package.json`):

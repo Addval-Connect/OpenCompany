@@ -2,7 +2,7 @@
 
 Post-migration (2026-04-14). Single source of truth for the current frontend.
 
-> The pre-migration audit / research / RFC docs (`frontend_architecture_analysis.md`, `frontend_component_functionality_and_design.md`, `frontend_system_design_rfc.md`, `frontend_ui_framework_research.md`, `frontend_ui_stack_recommendation.md`) were deleted on 2026-04-14 — they're preserved in git history under commit `4cb3dd9` if you ever need to reference them. The migration log lives at [ui_migration_plan.md](./ui_migration_plan.md).
+> The pre-migration audit / research / RFC docs (`frontend_architecture_analysis.md`, `frontend_component_functionality_and_design.md`, `frontend_system_design_rfc.md`, `frontend_ui_framework_research.md`, `frontend_ui_stack_recommendation.md`) were deleted on 2026-04-14 — they're preserved in git history under commit `4cb3dd9` if you ever need to reference them. The migration log lives at [ui_migration_plan.md](./ARCHIVE/ui_migration_plan.md).
 
 ## TL;DR
 
@@ -64,12 +64,16 @@ client/src/
 │   │   ├── alert.tsx        # + success/warning/info variants we added
 │   │   ├── accordion.tsx    # Radix accordion
 │   │   ├── dialog.tsx       # Radix dialog (Modal.tsx re-exports via thin wrapper)
-│   │   ├── popover.tsx / tooltip.tsx / dropdown-menu.tsx
+│   │   ├── tooltip.tsx / dropdown-menu.tsx
 │   │   ├── select.tsx       # Radix select (no search; grouped items via SelectGroup/SelectLabel)
 │   │   ├── input.tsx / textarea.tsx / switch.tsx / checkbox.tsx / label.tsx / slider.tsx
 │   │   ├── collapsible.tsx / tabs.tsx / alert-dialog.tsx / card.tsx / progress.tsx
 │   │   ├── form.tsx         # react-hook-form + FormField/FormItem/FormControl/FormMessage
-│   │   └── sonner.tsx       # Patched to read ThemeContext (not next-themes)
+│   │   ├── sonner.tsx       # Patched to read ThemeContext (not next-themes)
+│   │   ├── ApiKeyInput.tsx  # Composite: input + eye toggle + save/delete buttons
+│   │   ├── SettingsPanel.tsx # Shadcn Switch + Slider + Input
+│   │   ├── ConsolePanel.tsx # Chat + console + terminal + output
+│   │   └── TopToolbar.tsx   # File menu + model picker + action buttons
 │   │
 │   ├── Modal.tsx (src/components/ui/Modal.tsx)
 │   │                        # Thin wrapper over shadcn Dialog; preserves the pre-migration
@@ -115,19 +119,12 @@ client/src/
 │   │
 │   ├── onboarding/
 │   │   ├── OnboardingWizard.tsx    # Custom step indicator (no antd Steps)
-│   │   └── steps/*.tsx             # Welcome / Concepts / ApiKey / Canvas / GetStarted
-│   │
-│   ├── ui/
-│   │   ├── ApiKeyInput.tsx         # Composite: input + eye toggle + save/delete buttons
-│   │   ├── SettingsPanel.tsx       # Shadcn Switch + Slider + Input
-│   │   ├── ConsolePanel.tsx        # Chat + console + terminal + output
-│   │   ├── Modal.tsx               # Shadcn Dialog wrapper
-│   │   ├── NodeOutputPanel.tsx     # Deleted (superseded by output/OutputPanel)
-│   │   └── TopToolbar.tsx          # File menu + model picker + action buttons
+│   │   ├── GetStartedChecklist.tsx # Post-wizard checklist
+│   │   └── steps/                  # WelcomeStep / HowItWorksStep / ConnectAIStep / TryItStep
 │   │
 │   ├── icons/                      # AI provider icons (SVG data URIs)
 │   ├── auth/                       # Login page + protected route
-│   ├── SquareNode.tsx, StartNode.tsx, TriggerNode.tsx, GenericNode.tsx, AIAgentNode.tsx, WhatsAppNode.tsx, ModelNode.tsx
+│   ├── SquareNode.tsx, StartNode.tsx, TriggerNode.tsx, AIAgentNode.tsx, ToolkitNode.tsx, TeamMonitorNode.tsx
 │   │                               # React Flow nodes with lucide icons
 │   └── APIKeyValidator.tsx         # Shadcn Input + Button + Tooltip composition
 │
@@ -154,12 +151,6 @@ client/src/
 │   ├── useAppStore.ts              # UI state (sidebar, palette, pro mode, persisted)
 │   └── useCredentialRegistry.ts    # UI-only: selectedId + paletteOpen + query
 │
-├── lib/
-│   ├── queryClient.ts              # Module-singleton QueryClient so imperative
-│   │                               # code (Zustand actions) can invalidate without
-│   │                               # going through React context.
-│   └── utils.ts                    # cn() = clsx + tailwind-merge (shadcn convention)
-│
 ├── styles/
 │   └── theme.ts                    # `lightColors` / `darkColors` base packs +
 │                                   # `dracula` / `solarized` constants. Read
@@ -177,11 +168,26 @@ client/src/
 │
 ├── adapters/
 │   └── nodeSpecToDescription.ts    # Backend NodeSpec -> legacy INodeTypeDescription shape
+├── assets/icons/                   # NodeIcon.tsx + themedGlyphs.ts + icon-ref resolver (index.ts)
+├── config/api.ts                   # Backend base-URL config (env-driven)
 ├── lib/
 │   ├── nodeSpec.ts                 # TanStack-Query spec fetch, resolveNodeDescription, listCachedNodeSpecs
 │   ├── aiModelProviders.ts         # Frontend-only AI provider icon/credential map
-│   ├── queryClient.ts / queryConfig.ts / featureFlags.ts
-│   └── utils.ts
+│   ├── queryClient.ts              # Module-singleton QueryClient (imperative invalidation without React context)
+│   ├── queryConfig.ts / featureFlags.ts
+│   ├── queryPersist.ts             # localStorage persister + PERSISTED_KEY_PREFIXES whitelist
+│   ├── brandStorage.ts             # Canonical browser-storage keys + pre-rebrand aliases
+│   ├── connectionConfig.ts         # WS reconnect + auth-bootstrap backoff constants
+│   ├── workflowOps.ts              # applyOperations for backend workflow-ops batches
+│   ├── canvasLock.ts               # Server-owned can_edit capability -> canvas lock
+│   ├── sound.ts                    # WebAudio sound engine (10 packs)
+│   └── utils.ts                    # cn() = clsx + tailwind-merge (shadcn convention)
+├── schemas/workflowSchema.ts       # Structural pre-flight for workflow export (backend is the schema authority)
+├── stores/
+│   ├── nodeStatusStore.ts          # Per-workflow node statuses (slice-subscribed Zustand)
+│   └── canvasDockStore.ts          # Docked Canvas sidebar state
+├── test/                           # Vitest setup.ts, builders.ts, providers.tsx, README.md
+├── themes/                         # base.css + animations.css + 12 per-theme CSS files
 ├── types/                          # INodeProperties, NodeTypes, etc.
 └── utils/                          # formatters, apiKeySecurity, workflowExport, parameterSanitizer
 ```
@@ -357,13 +363,13 @@ components/credentials/CredentialsModal.tsx
 - **DB is the single source of truth.** The retired `providers.tsx` static fallback is gone — `useCatalogueQuery` is the only source. Cold-boot with no IDB cache renders a `<Skeleton>` palette while the WS catalogue arrives; server-unreachable shows an explicit error state, never stale fallback data.
 - **`provider.stored` is the canonical "do we have a credential for X?".** The retired `apiKeyStatuses[id].hasKey` mirror duplicated this answer with no synchronisation contract. Two new selector hooks (`useProviderStored(id)`, `useStoredProviderCount()`) read the catalogue. `apiKeyStatuses[id]` now narrowly carries the validation result (`valid`, `models`, `message`, `timestamp`).
 
-**App-wide query persistence ([client/src/lib/queryPersist.ts](../client/src/lib/queryPersist.ts)):** the QueryClient is wrapped in `<PersistQueryClientProvider>` ([main.tsx](../client/src/main.tsx)) with a localStorage persister + `__APP_VERSION__` buster + 24h SWR window. Only queries with key prefixes `nodeSpec` / `nodeGroups` / `skillContent` are dehydrated -- high-frequency / per-session queries stay in-memory. Hard refresh paints from cached specs **before** the WebSocket connects, so canvas nodes never flash placeholder icons. The credentials catalogue uses its own dedicated `idb-keyval` warm-start (above) because its payload is large enough that localStorage's 5-10MB cap is a real constraint. **Decrypted credential values are NOT persisted** (was the retired `'credentialValues'` prefix) per OWASP HTML5 Security Cheat Sheet / ASVS V9.9 — plaintext API keys in `localStorage` are readable via DevTools on shared / compromised browsers; the in-memory TanStack Query cache (`gcTime: ∞`) keeps the form populated for the session lifetime, on reload the panel refetches via WS.
+**App-wide query persistence ([client/src/lib/queryPersist.ts](../client/src/lib/queryPersist.ts)):** the QueryClient is wrapped in `<PersistQueryClientProvider>` ([main.tsx](../client/src/main.tsx)) with a localStorage persister + `__APP_VERSION__` buster + 24h SWR window. Only queries with key prefixes `nodeSpec` / `nodeGroups` are dehydrated -- high-frequency / per-session queries stay in-memory. Hard refresh paints from cached specs **before** the WebSocket connects, so canvas nodes never flash placeholder icons. The credentials catalogue uses its own dedicated `idb-keyval` warm-start (above) because its payload is large enough that localStorage's 5-10MB cap is a real constraint. **Decrypted credential values are NOT persisted** (was the retired `'credentialValues'` prefix) per OWASP HTML5 Security Cheat Sheet / ASVS V9.9 — plaintext API keys in `localStorage` are readable via DevTools on shared / compromised browsers; the in-memory TanStack Query cache (`gcTime: ∞`) keeps the form populated for the session lifetime, on reload the panel refetches via WS.
 
 **`useNodeSpec` is a slice subscription, not a `useQuery`** ([client/src/lib/nodeSpec.ts](../client/src/lib/nodeSpec.ts)): reads via `useSyncExternalStore` filtered by `hashKey(['nodeSpec', type])`. Per-spec observer count is **0**; only the matching slot triggers a re-render. Lazy fetch is one-shot via `useEffect` gated on `isReady`. Do not re-introduce `useQuery(['nodeSpec', type])` -- N consumers create N observers, all woken on every cache write.
 
 **Slice-subscribed cache entries MUST set `gcTime: GC_TIME.FOREVER`.** Slice subscribers don't register as TanStack observers, so without this override the cache entry is garbage-collected after the default `gcTime` (5 min) and every consumer reads `undefined`. The user-visible regression is "canvas nodes lose their icons / handles after idle." Applies to `fetchNodeSpec`, `fetchNodeGroups`, and the `useNodeGroups` `useQuery`; the persistor in `lib/queryPersist.ts` only handles cross-reload survival.
 
-**Anchor cache contracts at the prefix root via `setQueryDefaults`, not per-call options.** `PersistQueryClientProvider` hydrates entries from localStorage with the QueryClient's *default* options, so per-call `staleTime: FOREVER` does not stop `gcTime: 5min` eviction on hydration. Every persisted prefix must have a matching `queryClient.setQueryDefaults(['<prefix>'], { staleTime: FOREVER, gcTime: FOREVER })` declaration in [client/src/lib/queryClient.ts](../client/src/lib/queryClient.ts). The current canonical set is `['nodeSpec']`, `['nodeGroups']`, `['skillContent']`. The persistor whitelist in [client/src/lib/queryPersist.ts](../client/src/lib/queryPersist.ts) must mirror it; a string in the whitelist that doesn't match a real query key (the prior `'pluginCatalogue'` typo) is silently dead. `credentialCatalogue` is intentionally NOT in either list — it has its own `idb-keyval` warm-start. `credentialValues` keeps `gcTime: FOREVER` for the in-memory cache so the credentials form survives idle, but it is intentionally NOT persisted (OWASP — see "Persistence layers" above).
+**Anchor cache contracts at the prefix root via `setQueryDefaults`, not per-call options.** `PersistQueryClientProvider` hydrates entries from localStorage with the QueryClient's *default* options, so per-call `staleTime: FOREVER` does not stop `gcTime: 5min` eviction on hydration. Every persisted prefix must have a matching `queryClient.setQueryDefaults(['<prefix>'], { staleTime: FOREVER, gcTime: FOREVER })` declaration in [client/src/lib/queryClient.ts](../client/src/lib/queryClient.ts). The persisted set is `['nodeSpec']`, `['nodeGroups']`; both carry `setQueryDefaults`. `['skillContent']` and `['credentialValues']` carry `setQueryDefaults` for in-memory longevity only and are intentionally absent from the persistor whitelist. The persistor whitelist in [client/src/lib/queryPersist.ts](../client/src/lib/queryPersist.ts) must mirror it; a string in the whitelist that doesn't match a real query key (the prior `'pluginCatalogue'` typo) is silently dead. `credentialCatalogue` is intentionally NOT in either list — it has its own `idb-keyval` warm-start. `credentialValues` keeps `gcTime: FOREVER` for the in-memory cache so the credentials form survives idle, but it is intentionally NOT persisted (OWASP — see "Persistence layers" above).
 
 **Component rules:**
 - `PanelRenderer` lazy-loads each panel type so the initial JS payload doesn't grow linearly with provider count.
@@ -376,7 +382,7 @@ Currently a 2152-line switch on `parameter.type` ([client/src/components/Paramet
 
 **Phase 6 plan:** replace with `@jsonforms/react` renderer registry. Requires backend to expose a `get_node_spec` WebSocket handler returning `NodeSpec { jsonSchema, uiSchema, _uiHints? }` per the RFC. Frontend will own the custom renderer set (one file per widget under `components/inspector/renderers/`) and route via JSON Forms' tester-based dispatch. Feature flag `VITE_USE_NODESPEC` gates the rollout; the old `ParameterRenderer` deletes once stable.
 
-See [ui_migration_plan.md](./ui_migration_plan.md) Phase 6.
+See [ui_migration_plan.md](./ARCHIVE/ui_migration_plan.md) Phase 6.
 
 ### Name-based magic in this file (read before naming a Params field)
 
@@ -458,7 +464,8 @@ See [media_transport.md](./media_transport.md).
   Simple Memory parameters are refreshed from the backend's cleared-row
   broadcast, and `compactionStats` caches are evicted. The old transcript stays
   available only through the archived generation. See
-  [Memory Lifecycle](memory_lifecycle.md#workflow-reset-archives-then-clears-memory).
+  [Memory Lifecycle](ARCHIVE/memory_lifecycle.md#workflow-reset-archives-then-clears-memory)
+  (archived; it describes the retired pre-RFC-0002 markdown memory model).
 - **`currentWorkflowId` lives in `useAppStore` only.** Non-React listeners (WS handlers) read it via `useAppStore.getState().currentWorkflow?.id` -- the documented Zustand escape hatch (https://github.com/pmndrs/zustand#read-state-without-subscription). The previous `currentWorkflowIdRef` mirror inside WebSocketContext was a one-render-late copy that misrouted broadcasts during workflow switches. The push to `nodeStatusStore.setCurrentWorkflowId` is driven from a single `useEffect` in `Dashboard.tsx`.
 
 ## Ownership boundary: TanStack Query vs Zustand vs WebSocketContext
@@ -470,7 +477,7 @@ This is the rule that keeps the data layer schema-driven instead of imperatively
 | **TanStack Query** | Anything the server has authoritative state for. List / single-record / settings reads. Mutations that change server state. | `useWorkflowsQuery`, `useNodeParamsQuery`, `useUserSettingsQuery`, `useCatalogueQuery`, `useSaveWorkflowMutation`, `useSaveNodeParamsMutation`, `useSaveUserSettingsMutation` |
 | **Zustand** | UI-only state that survives navigation. The active edit buffer for the current workflow. Sidebar/panel visibility flags. | `useAppStore.currentWorkflow` (mutable buffer), `sidebarVisible`, `proMode`, `renamingNodeId`, `useCredentialRegistry.selectedId` |
 | **`useState` / `useReducer`** | Per-component transient state. Form-field drafts. Hover/focus. | text-input drafts, dropdown-open, inline-edit toggles |
-| **`WebSocketContext`** | Raw WS connection, `sendRequest`, push-only broadcast slices (workflow progress, android/whatsapp/twitter status, console/terminal logs). The provider value is `useMemo`'d so unrelated state changes do not re-render every consumer. Exposes `isOpen` (socket open) and `isReady` (post init-burst) -- gate catalogue/spec queries on `isReady`. The init burst now runs **in parallel** via `Promise.allSettled` over named helpers (`probeApiKey`, `loadTerminalLogs`, `loadChatHistory`, `loadConsoleLogs`), each backed by a small `sendBurstRequest` factory that owns its own request id, message handler, and 5 s timeout. `drainPendingSends(ws)` still runs synchronously after the await and before `setIsReady(true)` so the queue replay ordering is preserved. Time-to-`isReady` is one wide round-trip rather than 8 sequential ones. Catalogue invalidation routes through `invalidateCatalogue(queryClient)` ([`hooks/useCatalogueQuery.ts`](../client/src/hooks/useCatalogueQuery.ts)) which debounces the refetch on a 300 ms trailing edge, so an oauth burst or multi-service reconnect collapses to one refetch instead of N. | `androidStatus`, `consoleLogs`, broadcast streams |
+| **`WebSocketContext`** | Raw WS connection, `sendRequest`, push-only broadcast slices (workflow progress, android/whatsapp/twitter status, console/terminal logs). The provider value is `useMemo`'d so unrelated state changes do not re-render every consumer. Exposes `isConnected` (socket open) and `isReady` (open + pending-send queue drained); gate catalogue/spec queries on `isReady`. `drainPendingSends(ws)` runs synchronously, then `setIsReady(true)` fires immediately; terminal/chat/console history restore is fire-and-forget in the background (Wave 32 removed the init-burst gate and the hardcoded `probeApiKey` loop). Catalogue invalidation routes through `invalidateCatalogue(queryClient)` ([`hooks/useCatalogueQuery.ts`](../client/src/hooks/useCatalogueQuery.ts)) which debounces the refetch on a 300 ms trailing edge, so an oauth burst or multi-service reconnect collapses to one refetch instead of N. | `androidStatus`, `consoleLogs`, broadcast streams |
 | **`stores/nodeStatusStore.ts`** (Zustand) | Per-workflow node-execution statuses -- moved out of WebSocketContext so a status tick does not cascade through the React tree. `useNodeStatus(id)` is a slice selector; only the affected node's consumers re-render. Mirror this pattern for any new high-frequency push state. | `allStatuses[workflowId][nodeId]`, `currentWorkflowId` |
 
 **Hard rules:**
@@ -479,7 +486,7 @@ This is the rule that keeps the data layer schema-driven instead of imperatively
 - Imperative WebSocket request/response inside a component (`useEffect` + `sendRequest` + `setState`) is a code smell — wrap it in a `useQuery` hook. Inline the hook at the top of the consuming file when there's exactly one consumer (Wave 2/3 colocation rule); promote to `client/src/hooks/` when a second consumer appears. Phase-2 commit `b2b6fba` did this for `useParameterPanel` and `useOnboarding`; Wave 3 commits `2c5f227` / `7706afb` / `327f792` followed the same pattern inline inside MiddleSection / MasterSkillEditor / InputSection.
 - After a mutation, **invalidate the corresponding query key**, don't manually patch a Zustand list or call a local refetch helper. Mutations that need it from non-React code use the `queryClient` singleton at [client/src/lib/queryClient.ts](../client/src/lib/queryClient.ts).
 - Schema metadata for parameter behavior (selectors, validators, dynamic options) belongs in the node-definition `typeOptions`, NOT in `parameter.name === '...'` checks inside `ParameterRenderer`. Phase-5 commit `8353c48` introduced `typeOptions.loadOptionsMethod` for the WhatsApp selectors as the canonical pattern.
-- **Runtime output shapes for the Input panel's variable list live on the backend** via Pydantic models in `server/services/node_output_schemas.py`. The frontend fetches them lazy via `get_node_output_schema`; real execution data takes precedence. See the "Node output shape" section below and [schema_source_of_truth_rfc.md](./schema_source_of_truth_rfc.md).
+- **Runtime output shapes for the Input panel's variable list live on the backend** via Pydantic models in `server/services/node_output_schemas.py`. The frontend fetches them lazy via `get_node_output_schema`; real execution data takes precedence. See the "Node output shape" section below and [schema_source_of_truth_rfc.md](./ARCHIVE/schema_source_of_truth_rfc.md).
 - **Never hand-roll a modal backdrop.** Destructive confirmations use `<AlertDialog>`; composite panels use the `Modal.tsx` primitive on top of shadcn `<Dialog>`. A raw `position: fixed; background: rgba(0,0,0,0.5)` in new code should not pass review.
 
 ## Schema-driven node + panel hints
@@ -488,7 +495,7 @@ Wave 2 introduced two typed fields on `INodeTypeDescription` so panels and the i
 
 ### `uiHints` — per-node panel visibility flags
 
-Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts](../client/src/types/INodeProperties.ts)). Each flag is consumed by exactly one panel and defaults to off (the panel renders normally). The current set (live list = the `known` set in `test_node_spec.py`):
+Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts](../client/src/types/INodeProperties.ts)). Each flag is consumed by exactly one panel and defaults to off (the panel renders normally). The current set (the backend `known` set in `server/tests/test_node_spec.py` must match `INodeUIHints`; a flag with no frontend consumer is dead weight and gets removed from both):
 
 | Flag | Read by | Effect |
 |---|---|---|
@@ -500,9 +507,9 @@ Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts]
 | `isMemoryPanel` | `MiddleSection` | **Legacy.** The pre-RFC-0002 combined markdown/transcript panel. `simpleMemory` no longer declares it; kept while `normalize_workflow_graph` upgrades `input-memory` graphs |
 | `isMemoryToolPanel` | `MiddleSection` | Render the durable Memory item browser (search, edit, forget, clear). Declared by `simpleMemory`, and selected *before* `isMemoryPanel` |
 | `isContextPanel` | `MiddleSection` | Render the Context inspector (journal, active replay, fork/export/clear). Read-only: it observes the agent's journal and must never alter execution |
+| `isDataPanel` | `MiddleSection` | Render the Data node's mounts + read-only file browser (`DataPanel`). Declared by `dataSource`. |
 | `requiresContext` | backend graph normalization | Declared in `STD_AGENT_HINTS`. Not a rendering flag — `normalize_workflow_graph` pairs every plugin carrying it with a Context companion, and `workflow_validator` enforces the topology |
 | `systemManaged` | canvas | Marks the auto-created Context companion. The backend owns its lifecycle; the user does not add or delete it directly |
-| `isToolPanel` | `MiddleSection` | Surface the ToolSchemaEditor for connected services |
 | `isMonitorPanel` | `MiddleSection`, `ParameterPanel` | Render the team-monitor panel |
 | `isTodoEditor` | `MiddleSection` | Render the editable Current Todos manager (`writeTodos`) instead of the plain params list |
 | `isTaskManagerPanel` | `MiddleSection` | Render the execution-scoped team task control panel |
@@ -510,7 +517,6 @@ Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts]
 | `isGalleryPanel` | `MiddleSection` | Render the workspace file browser (breadcrumbs, grid/list, search, preview, upload, drag-to-parameter) instead of the plain params list. Declared by `gallery`, which pairs it with `hideInputSection` but **keeps** the Output section — unlike `processManager` it produces output worth seeing and dragging. The panel writes back to the node's own `path` / `selection` params, so what you browse is what the node emits. |
 | `isCanvasPanel` | `MiddleSection`, `CanvasDock` | Render the pushed-content Canvas board instead of the plain params list. Declared by `canvas`. Double duty: the docked canvas sidebar also uses this flag to FIND Canvas nodes in the graph (`resolveNodeDescription(type)?.uiHints?.isCanvasPanel`) — never the type string. Pairs with an explicit `isConfigNode: False` because the `tool` group would auto-derive `True` while the node's `input-main` is real dataflow. See [canvas_node.md](./canvas_node.md). |
 | `showLocationPanel` | `LocationParameterPanel` | Special-case panel for nodes with map preview |
-| `isAndroidToolkit` | `ToolSchemaEditor` | Toolkit aggregator (Android service hub) |
 | `isChatTrigger` | `ConsolePanel` | This node is a chat-message target |
 | `isConsoleSink` | `ConsolePanel` | This node consumes console output (filter source) |
 | `hasSkills` | Agent panels | Connect the connected-skills section |
@@ -570,7 +576,7 @@ Frontend does **not** declare output shapes anymore. The backend owns them exclu
 2. Backend-declared schema fetched on demand (fallback).
 3. `{ data: 'any' }` empty state (final fallback — the legacy `sampleSchemas` map was deleted in Wave 3).
 
-**Adding a new node type's output shape:** define a Pydantic model in `node_output_schemas.py`, register it in `NODE_OUTPUT_SCHEMAS`. The frontend picks it up automatically — no client change, no rebuild. Research and rationale in [docs-internal/schema_source_of_truth_rfc.md](./schema_source_of_truth_rfc.md).
+**Adding a new node type's output shape:** define a Pydantic model in `node_output_schemas.py`, register it in `NODE_OUTPUT_SCHEMAS`. The frontend picks it up automatically — no client change, no rebuild. Research and rationale in [docs-internal/schema_source_of_truth_rfc.md](./ARCHIVE/schema_source_of_truth_rfc.md).
 
 **`jsonSchemaToShape` must resolve Pydantic's indirection.** `model_json_schema()` does not emit a flat `{field: {type}}` map: `Optional[X]` becomes `{anyOf: [<X>, {type: 'null'}]}` with **no top-level `type`**, and a nested `BaseModel` becomes `{$ref: '#/$defs/Name'}` with the body in `$defs`. A reader that only inspects `prop.type` types both as `'any'`. Since every field on the trigger output models is Optional, that mistyped *every* field and left nested blocks (`telegramReceive.media`, `whatsappReceive.group_info`) with no drillable leaves — the useful drag target is `media.file_id`, not `media`. `resolveSchemaNode` unwraps unions (first non-null branch) and follows local `#/$defs/` pointers, threading the expanded-ref chain through the mutual recursion so a self-referencing model cannot recurse until the stack blows and takes the panel with it. Locked by [jsonSchemaToShape.test.ts](../client/src/components/parameterPanel/__tests__/jsonSchemaToShape.test.ts).
 
@@ -628,7 +634,7 @@ The `OPENCOMPANY_INSTALLING=true` env var suppresses the recursive project posti
 
 ## Migration history (for context)
 
-This architecture is the post-migration state. Pre-migration was antd + `styled-components` + a custom theme.ts-driven palette. See [ui_migration_plan.md](./ui_migration_plan.md) for the phase-by-phase transition and the 17 commits that executed it.
+This architecture is the post-migration state. Pre-migration was antd + `styled-components` + a custom theme.ts-driven palette. See [ui_migration_plan.md](./ARCHIVE/ui_migration_plan.md) for the phase-by-phase transition and the 17 commits that executed it.
 
 **`useAppTheme()` powers the canvas + maps surface across all 12 themes.** The hook returns a `theme` object with the legacy `Colors` shape (`theme.colors.X`, `theme.isDarkMode`) so existing call sites don't change. Under non-light/dark themes it merges a per-theme overlay (primary, focus, action palette, edge stroke / selection / executing / completed / error) on top of the chosen base pack (`lightColors` for utopian-bright themes, `darkColors` for dystopian / dark themes). Adding a new theme overlay is a single entry in the `THEME_OVERRIDES` map in [hooks/useAppTheme.ts](../client/src/hooks/useAppTheme.ts).
 
