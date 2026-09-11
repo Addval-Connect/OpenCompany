@@ -138,6 +138,14 @@ describe.skipIf(!staged || !runtimesStaged)("staged runtimes", () => {
         }
       }
       expect(ok, output).toBe(true);
+      // TypeScript is type-stripped by Bun.Transpiler inside the sidecar; a
+      // Node-hosted sidecar would fail this with a SyntaxError.
+      const res = await fetch(`http://127.0.0.1:${port}/execute`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "const n: number = 21; output = n * 2;", language: "typescript" }),
+      });
+      expect(((await res.json()) as { output: unknown }).output).toBe(42);
     } finally {
       child.kill();
     }

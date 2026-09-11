@@ -52,9 +52,21 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
+// TypeScript is type-stripped by bun's own transpiler before it reaches the
+// vm context (which evaluates JavaScript only). Type annotations, interfaces
+// and enums therefore work in typescriptExecutor; a syntax error surfaces as
+// the same {success: false, error} envelope as a runtime error.
+const tsTranspiler = typeof Bun !== 'undefined' ? new Bun.Transpiler({ loader: 'ts', target: 'node' }) : null;
+
+function prepareSource(code: string, language: ExecuteRequest['language']): string {
+  if (language !== 'typescript') return code;
+  if (!tsTranspiler) throw new Error('TypeScript execution needs the bun runtime');
+  return tsTranspiler.transformSync(code);
+}
+
 // Execute code - all parameters from request body
 app.post('/execute', (req: Request, res: Response) => {
-  const { code, input_data = {}, timeout = 30000 } = req.body as ExecuteRequest;
+  const { code, language = 'javascript', input_data = {}, timeout = 30000 } = req.body as ExecuteRequest;
 
   if (!code || typeof code !== 'string') {
     res.status(400).json({ success: false, error: 'Missing or invalid "code" field' });
@@ -89,7 +101,7 @@ app.post('/execute', (req: Request, res: Response) => {
     // Python backend via NodeJSClient. Public network exposure is the
     // operator's responsibility.
     // codeql[js/code-injection]
-    vm.runInContext(code, context, { timeout, filename: 'user-code.js' });
+    vm.runInContext(prepareSource(code, language), context, { timeout, filename: language === 'typescript' ? 'user-code.ts' : 'user-code.js' });
 
     res.json({
       success: true,
