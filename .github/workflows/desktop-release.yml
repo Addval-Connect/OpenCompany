@@ -8,10 +8,12 @@
 # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID + a Developer ID
 # cert for macOS) plus flipping the mac flags in desktop/electron-builder.yml.
 #
-# Flow: build the client + sidecar with the repo toolchain -> stage the
-# app-root and fetch the pinned runtimes for the job's target -> invariant
-# test -> electron-builder publishes into one DRAFT release -> the finalize
-# job publishes the draft once every matrix leg is green.
+# Flow: prepare drafts the GitHub Release from the annotated tag's message
+# (first line = title, rest = notes) -> each matrix leg builds the client +
+# sidecar with the repo toolchain, checks the synced version against the tag,
+# stages the app-root with the pinned runtimes for its target, runs the
+# invariant test and lets electron-builder upload into that one draft -> the
+# finalize job publishes the draft once every leg is green.
 
 name: Desktop release
 
@@ -34,8 +36,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+      # Drafted once, here, so the three legs upload into one release:
+      # electron-builder finds an existing draft by tag and only adds assets,
+      # whereas three legs racing to create it is how duplicate drafts
+      # happen, and a draft electron-builder creates carries no notes. The
+      # notes are the annotated tag's message, the text `git tag -a`
+      # recorded; a lightweight tag falls back to GitHub's generated notes.
+      # Skipped on manual dispatch (no tag): electron-builder drafts as before.
+      - name: Draft the release from the tag message
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $TAG already exists; keeping it"
+            exit 0
+          fi
+          if [ "$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.type)" = tag ]; then
+            sha=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+            gh api "repos/$REPO/git/tags/$sha" --jq .message > tag-message.txt
+            title=$(head -n 1 tag-message.txt)
+            tail -n +2 tag-message.txt | sed '1{/^$/d;}' > notes.md
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "$title" --notes-file notes.md
+          else
+            echo "$TAG is a lightweight tag; drafting with generated notes"
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "OpenCompany $TAG" --generate-notes
+          fi
+
   build:
     name: ${{ matrix.name }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -80,10 +116,30 @@ jobs:
           path: desktop/vendor
           key: desktop-runtimes-${{ runner.os }}-${{ hashFiles('desktop/runtimes.json') }}
 
-      - name: Sync version, stage bundle, render icon
+      - name: Sync version
+        working-directory: desktop
+        run: bun run sync-version
+
+      # electron-builder uploads into the draft for `v<desktop version>`. A
+      # release commit that forgot to bump the root package.json would ship
+      # installers and an updater feed under the previous version and open a
+      # second draft for that tag; fail here instead.
+      - name: Version must match the tag
+        if: github.event_name == 'push'
+        working-directory: desktop
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(bun -e "console.log(require('./package.json').version)")
+          if [ "v$version" != "$TAG" ]; then
+            echo "desktop/package.json is $version but the tag is $TAG: the release commit must run 'company version sync $TAG'" >&2
+            exit 1
+          fi
+
+      - name: Stage bundle, render icon
         working-directory: desktop
         run: |
-          bun run sync-version
           bun run stage -- --target ${{ matrix.targets }}
           bun run gen-icons
 

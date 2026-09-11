@@ -699,3 +699,57 @@ def test_install_js_compileall_is_non_fatal(install_js_src: str):
         "compileall call in install.js must be wrapped in a try/catch "
         "with a Warning log so it stays non-fatal"
     )
+
+
+# ---------------------------------------------------------------------------
+# Desktop release workflow — one draft per tag, drafted from the tag message
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def desktop_release_yml(root: Path) -> dict:
+    path = root / ".github" / "workflows" / "desktop-release.yml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_desktop_release_drafts_from_the_tag_before_the_matrix_builds(
+    desktop_release_yml: dict,
+):
+    """``prepare`` creates the one draft the three legs upload into, titled
+    and annotated from the tag message; ``finalize`` only undrafts it."""
+    jobs = desktop_release_yml["jobs"]
+    assert jobs["build"]["needs"] == "prepare"
+    assert jobs["finalize"]["needs"] == "build"
+
+    draft = next(
+        step for step in jobs["prepare"]["steps"] if "gh release create" in step.get("run", "")
+    )
+    assert draft["if"] == "github.event_name == 'push'"
+    for flag in ("--draft", "--verify-tag", "--notes-file"):
+        assert flag in draft["run"]
+    assert "git/tags/" in draft["run"]  # the notes are the tag object's message
+    assert "gh release view" in draft["run"]  # idempotent on a workflow re-run
+
+    undraft = next(
+        step for step in jobs["finalize"]["steps"] if "gh release edit" in step.get("run", "")
+    )
+    assert "--draft=false" in undraft["run"]
+
+
+def test_desktop_release_refuses_a_version_that_does_not_match_the_tag(
+    desktop_release_yml: dict,
+):
+    """The tag-triggered desktop build ships the committed desktop version
+    (``bun run sync-version`` copies the root package.json; nothing there
+    reads the tag), so a forgotten release bump must fail before any upload."""
+    steps = desktop_release_yml["jobs"]["build"]["steps"]
+    names = [step.get("name", "") for step in steps]
+    sync_index = names.index("Sync version")
+    guard_index = names.index("Version must match the tag")
+    dist_index = next(i for i, step in enumerate(steps) if "bun run dist" in step.get("run", ""))
+    assert sync_index < guard_index < dist_index
+
+    guard = steps[guard_index]
+    assert guard["if"] == "github.event_name == 'push'"
+    assert guard["shell"] == "bash"
+    assert "exit 1" in guard["run"]

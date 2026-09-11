@@ -40,7 +40,7 @@ The repo currently ships **three workflows** plus one composite action. A number
 | Predeploy | `.github/workflows/predeploy.yml` | `workflow_call` | build/lint + backend tests + CLI tests + cross-OS build/start smoke |
 | Release | `.github/workflows/release.yml` | `v*.*.*` tag, `workflow_dispatch` | predeploy gate → publish (npm + GitHub Packages) |
 | Desktop CI | `.github/workflows/desktop-ci.yml` | PR touching `desktop/**` or the backend host-contract files; push to main touching `desktop/**` | typecheck + unit + staged-tree invariants + `electron-vite build` + Playwright Electron smoke on ubuntu-22.04 (xvfb) and windows-latest |
-| Desktop release | `.github/workflows/desktop-release.yml` | `v*.*.*` tag, `workflow_dispatch` | 3-runner matrix (windows-latest x64, macos-14 arm64+x64, ubuntu-22.04 x64) builds installers with electron-builder into one **draft** GitHub Release; `finalize` undrafts once every leg is green. Artifacts-only on dispatch unless `publish` is ticked |
+| Desktop release | `.github/workflows/desktop-release.yml` | `v*.*.*` tag, `workflow_dispatch` | `prepare` drafts the GitHub Release from the annotated tag's message (first line = title, rest = notes); a 3-runner matrix (windows-latest x64, macos-14 arm64+x64, ubuntu-22.04 x64) checks the synced version against the tag, builds installers with electron-builder and uploads into that one **draft**; `finalize` undrafts once every leg is green. Artifacts-only on dispatch unless `publish` is ticked |
 | Setup | `.github/actions/setup/action.yml` | (composite) | bun 1.4 + Node 22 (CI-only: bun runs vite / vitest / eslint on it) + Python 3.12 + uv v8 + editable CLI install |
 
 ### Toolchain pin
@@ -132,7 +132,49 @@ publish-npm                    publish-github-packages
 Both registries use `@zeenie-ai/opencompany`, matching the npm and GitHub
 organization owned by the project.
 
-There is currently no audit gate, no PyPI publish, no SLSA `attest-build-provenance` step, and no `create-github-release` / test-install stage — see [Planned](#planned-not-yet-implemented).
+There is currently no audit gate, no PyPI publish, no SLSA `attest-build-provenance` step, no GitHub Release step in `release.yml` itself (the desktop workflow drafts the release from the tag message), and no test-install stage — see [Planned](#planned-not-yet-implemented).
+
+---
+
+## Cutting a release
+
+The tag is the version. Everything else is derived from it, and there is no
+CHANGELOG file: the annotated tag's message is the release notes (first line =
+release title, the rest = body), which `desktop-release.yml` copies onto the
+GitHub Release. Nothing publishes until a `v*.*.*` tag is pushed. Tag push is
+also the only trigger that works: a `workflow_dispatch` run has a shallow
+checkout with no tags for `company version sync` to read.
+
+1. **Pre-flight.** `main` green on CI. `NPM_TOKEN` unexpired: the
+   `bun pm whoami` preflight fails only the npmjs job, after the predeploy
+   gate, while GitHub Packages and the installers still publish, so a lapsed
+   token means a partial release (rotate the secret, then
+   `gh run rerun <id> --failed`). `bun publish --dry-run --access public`
+   packs cleanly from the checkout.
+2. **Bump.** `python -m cli version sync vX.Y.Z` writes the version into the
+   root, client and desktop `package.json`, `pyproject.toml` and
+   `cli/__init__.py` (never `server/pyproject.toml`, which `server/uv.lock`
+   records). Commit as `chore(release): vX.Y.Z`. This commit is load-bearing:
+   the desktop workflow ships the committed desktop version and refuses to
+   build when it differs from the tag, while the registry jobs re-run
+   `version sync` from the tag themselves. `cli/tests/test_version.py`
+   fails when the checked-in files disagree.
+3. **Tag.** `git tag -a vX.Y.Z -F notes.md` on that commit, the notes in the
+   shape of the previous tags (`git tag -l --format='%(contents)' v0.1.0`).
+4. **Push** the branch, then the tag. The tag starts `release.yml` (predeploy
+   gate, then npmjs + GitHub Packages) and `desktop-release.yml` (draft with
+   the notes, three installer legs, undraft) in parallel.
+5. **Verify.** `gh run watch`; the registry's `latest` dist-tag; the release
+   page shows the notes with the installers and the three `latest*.yml`
+   updater feeds; on a clean machine the install script finishes through
+   `company provision`.
+
+Semver in 0.x: a change that breaks the install or upgrade path bumps the
+minor (0.1 -> 0.2), everything else the patch. There is no un-publish:
+`npm deprecate` has no bun equivalent, so a bad release is followed by a
+patch release. If one desktop leg fails, the release stays a draft holding
+the notes and the successful legs' assets; re-run the failed job and
+`finalize` undrafts it.
 
 ---
 
@@ -209,7 +251,7 @@ conditions`.
 The following existed in earlier drafts of this doc but are **not present in the current repo**. Listed here so the intent is preserved without misrepresenting the shipped pipeline:
 
 - **`predeploy.yml` change-detection + aggregator** — a `plan` job (`dorny/paths-filter`) gating downstream jobs, a `pre-commit` job, pytest sharding by domain, and a `ci-passed` aggregator (`re-actors/alls-green`) as the single branch-protection target. Today every predeploy job runs unconditionally and there is no aggregator job.
-- **`release.yml` hardening** — `workflow_dispatch` dry-run default, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job. (An earlier draft also planned a blocking `pnpm audit`; bun has no audit-equivalent gate, so the top-level `overrides` block + Dependabot alerts are the vulnerability-remediation channel instead.)
+- **`release.yml` hardening** — `workflow_dispatch` dry-run default, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job for the registry publish (the desktop workflow's `prepare` job now drafts the GitHub Release from the tag message; `release.yml` itself still creates none). (An earlier draft also planned a blocking `pnpm audit`; bun has no audit-equivalent gate, so the top-level `overrides` block + Dependabot alerts are the vulnerability-remediation channel instead.)
 - **`publish-pypi.yml`** — reusable PyPI publish (OIDC trusted publishing, `uv build --no-sources`, `pypa/gh-action-pypi-publish`). No PyPI distribution is published today.
 - **`test-install.yml`** — cross-platform end-user install smoke (`bun add -g`, git clone, install script) across 3 OS.
 - **`rollback.yml`** — manual registry deprecate (`npm deprecate` has no bun equivalent, so this would be the one place the npm CLI reappears) + optional revert PR.

@@ -170,12 +170,17 @@ bundled Python. Then remove the macOS notify-only branch in
 
 ## CI
 
-- `desktop-release.yml` on `v*.*.*` tags (and manual dispatch): matrix
-  windows-latest / macos-14 / ubuntu-22.04; builds the client and sidecar
-  with the repo toolchain, stages, runs typecheck + unit + invariant tests,
-  `electron-builder --publish always` into one draft release; a `finalize`
-  job undrafts it once all legs pass. Separate from `release.yml` so the
+- `desktop-release.yml` on `v*.*.*` tags (and manual dispatch): a `prepare`
+  job drafts the GitHub Release from the annotated tag's message (title +
+  notes) so the three legs upload into one draft; the matrix
+  windows-latest / macos-14 / ubuntu-22.04 builds the client and sidecar
+  with the repo toolchain, syncs the version and refuses to continue when it
+  differs from the tag (the build ships the committed desktop version, not
+  the tag's), stages, runs typecheck + unit + invariant tests, then
+  `electron-builder --publish always` into that draft; a `finalize` job
+  undrafts it once all legs pass. Separate from `release.yml` so the
   registry publish (`bun publish`) is never blocked and its locked strings are untouched.
+  The step-by-step is in [ci_cd.md -> Cutting a release](./ci_cd.md#cutting-a-release).
 - `desktop-ci.yml` on PRs touching `desktop/**` or the backend contract
   files: typecheck, unit, invariants, build, and the Playwright Electron
   smoke (xvfb on Linux) against a `uv sync`ed checkout venv.
