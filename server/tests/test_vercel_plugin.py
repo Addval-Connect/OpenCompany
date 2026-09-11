@@ -200,7 +200,7 @@ async def test_custom_requires_command(monkeypatch, tmp_path):
 
 
 async def test_login_answers_within_budget_when_flow_stalls(monkeypatch):
-    """Regression: the first-ever login pays a cold `npm install vercel`
+    """Regression: the first-ever login pays a cold `bun add vercel`
     inside the handler, which blew past the frontend's 30s WS request
     timeout ("Request timeout: vercel_login") even though the login
     itself succeeded. The handler must answer within its response

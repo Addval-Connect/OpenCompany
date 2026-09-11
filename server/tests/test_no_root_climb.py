@@ -31,7 +31,12 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
 
 _EXCLUDED_DIRS = {".venv", "tests", "scripts", "skills", "__pycache__", "nodejs", "static"}
 
-_SANCTIONED = {"core/approot.py"}
+_SANCTIONED = {
+    "core/approot.py",
+    # Writes the shared packages tree's own manifest under DATA_DIR
+    # (a bun project file, unrelated to the app root's package.json).
+    "core/js_runtime.py",
+}
 
 # Literal path joins that encode the sibling layout; only approot may spell them.
 _LAYOUT_LITERALS = {("client", "dist"), (".env.template",), ("package.json",)}

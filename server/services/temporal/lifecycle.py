@@ -73,7 +73,7 @@ async def run_temporal_lifecycle(
     owned = owns_dev_server(settings.temporal_server_address)
     if owned:
         # Same BaseSupervisor singleton pattern as the WhatsApp and
-        # Node.js-executor runtimes; registering makes lifespan teardown
+        # JS-executor runtimes; registering makes lifespan teardown
         # (shutdown_all_supervisors) actually stop the child.
         from services._supervisor import register_supervisor
         from services.temporal._runtime import get_temporal_server_runtime

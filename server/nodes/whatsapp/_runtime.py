@@ -10,7 +10,7 @@ The binary itself is OpenCompany-managed under the shared OpenCompany
 npm tree at ``<DATA_DIR>/packages/`` (resolved by
 :func:`._install.edgymeow_binary_path` on first use). The install
 runs through ``asyncio.to_thread`` in ``_pre_spawn`` so the long
-``npm install`` (~30 s) doesn't block the asyncio event loop —
+``bun add`` (~30 s) doesn't block the asyncio event loop —
 otherwise the ``StatusBroadcaster._refresh_all_services`` startup
 fan-out monopolises the loop during boot and uvicorn can't bind
 the backend port.
@@ -113,7 +113,7 @@ class WhatsAppRuntime(BaseProcessSupervisor):
         enabled = (os.environ.get("WHATSAPP_RUNTIME_ENABLED") or "true").lower()
         if enabled not in ("1", "true", "yes"):
             raise RuntimeError("WhatsApp runtime disabled via WHATSAPP_RUNTIME_ENABLED")
-        # Run the (potentially long) ``npm install edgymeow`` off the
+        # Run the (potentially long) ``bun add edgymeow`` off the
         # asyncio event loop. ``edgymeow_binary_path`` is sync and
         # blocks on ``subprocess.run`` for the duration of the install;
         # without this offload the startup ``_refresh_all_services``
@@ -123,7 +123,7 @@ class WhatsAppRuntime(BaseProcessSupervisor):
         resolved = await asyncio.to_thread(edgymeow_binary_path)
         if resolved is None:
             raise RuntimeError(
-                "WhatsApp runtime install failed: npm not on PATH or `npm install edgymeow` "
+                "WhatsApp runtime install failed: bun not available or `bun add edgymeow` "
                 "did not produce the expected binary. See log for details."
             )
         self._write_config()

@@ -35,12 +35,13 @@ above (Wave 14):
 
   - ``<DATA_DIR>/claude/``           Claude Code auth state (CLAUDE_CONFIG_DIR)
   - ``<DATA_DIR>/packages/``         Single shared OpenCompany install
-    root. Holds one ``package.json`` + ``package-lock.json`` +
-    ``node_modules/`` covering every OpenCompany-managed npm package
-    (``@anthropic-ai/claude-code``, ``edgymeow``, ``agent-browser``).
-    Each plugin's ``_install.py`` runs
-    ``npm install <pkg> --prefix <packages_dir>`` to extend the tree
-    idempotently — npm itself manages the dep graph.
+    root. Holds one ``package.json`` + ``bun.lock`` + ``node_modules/``
+    covering every OpenCompany-managed npm-registry package
+    (``@anthropic-ai/claude-code``, ``edgymeow``, ``agent-browser``,
+    ``cf``, ``vercel``). Each plugin's ``_install.py`` calls
+    ``core.js_runtime.add_package`` (``bun add --cwd <packages_dir>``)
+    to extend the tree idempotently — bun manages the dep graph and
+    runs the bin shims on its own runtime; no Node or npm.
   - ``<DATA_DIR>/packages/stripe/``    Stripe CLI binary (non-npm)
   - ``<DATA_DIR>/packages/temporal/``  Temporal CLI binary (non-npm,
                                         pooch-managed)
@@ -61,8 +62,9 @@ under ``<DATA_DIR>/`` means a single ``mv ~/.opencompany /backup``
 carries the entire OpenCompany footprint.
 
 Out of scope: globally-installed binaries (Himalaya — system
-package manager) and npm `package.json` deps managed by bun (none
-remain after the WhatsApp migration).
+package manager) and the dev workspace's own `package.json` deps
+(none of the runtime packages remain there after the WhatsApp
+migration).
 
 Shipped example workflows live at ``<repo>/.opencompany/workflows/`` —
 git-tracked seed JSONs auto-imported on first launch by

@@ -1,6 +1,6 @@
 """Plugins for the 'code' palette group. See ../__init__.py for the package layout.
 
-The Node.js executor sidecar (JS/TS code nodes) is plugin-owned: the
+The JS executor sidecar (JS/TS code nodes, runs on bun) is plugin-owned: the
 supervisor in :mod:`._runtime` spawns it on demand and is registered
 here so ``shutdown_all_supervisors()`` reaches it at lifespan shutdown.
 """

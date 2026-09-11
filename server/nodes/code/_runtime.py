@@ -1,11 +1,12 @@
-"""Node.js executor runtime — supervises the Express/tsx sidecar.
+"""JS executor runtime — supervises the Express sidecar on bun.
 
-The JS/TS code-executor nodes dispatch to a persistent Node.js HTTP
-server (source tree at ``server/nodejs/``, esbuild-bundled to
-``dist/index.js`` by ``company build``). Historically only ``company
-serve`` spawned it as a CLI ServiceSpec, so JS/TS nodes were dead in
-``dev`` / ``start`` modes. It is now backend-owned like every other
-optional daemon: spawned on demand from the plugin's own
+The JS/TS code-executor nodes dispatch to a persistent HTTP server
+(source tree at ``server/nodejs/``, bundled by ``bun build`` into a
+self-contained ``dist/index.js`` by ``company build``) that runs on the
+bun runtime resolved through :mod:`core.js_runtime`. Historically only
+``company serve`` spawned it as a CLI ServiceSpec, so JS/TS nodes were
+dead in ``dev`` / ``start`` modes. It is now backend-owned like every
+other optional daemon: spawned on demand from the plugin's own
 :func:`ensure_started` (first JS/TS node execution), torn down by the
 lifespan's ``shutdown_all_supervisors()``.
 
@@ -24,10 +25,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import sys
 from pathlib import Path
 
+from core.js_runtime import ENV_BUN_BIN, INSTALL_HINT, bun_binary
 from services._supervisor import BaseProcessSupervisor
 
 # Sub-second per-attempt probe — a stalled sidecar fails health fast.
@@ -39,7 +40,8 @@ async def _probe_tcp_port(port: int, host: str = "localhost") -> bool:
     :data:`_PROBE_TIMEOUT_SECONDS`. Mirrors the Temporal runtime's
     loopback readiness check. ``localhost`` (not ``127.0.0.1``) so the
     probe resolves the same way the HTTP client and the sidecar's own
-    bind do — Node binds the IPv6 loopback ``[::1]`` on Windows."""
+    bind do — the sidecar listens on whatever ``localhost`` resolves to
+    for its runtime, which is the IPv6 loopback ``[::1]`` on Windows."""
     try:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
@@ -69,15 +71,6 @@ def _sidecar_dir() -> Path:
     return server_root() / "nodejs"
 
 
-def _node_binary() -> str | None:
-    """The ``node`` executable: ``OPENCOMPANY_NODE_BIN`` (set by the desktop
-    shell to its bundled runtime) else whatever is first on PATH."""
-    override = os.environ.get("OPENCOMPANY_NODE_BIN", "").strip()
-    if override and Path(override).is_file():
-        return override
-    return shutil.which("node")
-
-
 class NodeJSExecutorRuntime(BaseProcessSupervisor):
     name = "nodejs-executor"
 
@@ -88,19 +81,19 @@ class NodeJSExecutorRuntime(BaseProcessSupervisor):
     # ---- BaseProcessSupervisor overrides ---------------------------------
 
     async def _pre_spawn(self) -> None:
-        if _node_binary() is None:
+        if bun_binary() is None:
             raise RuntimeError(
-                "Node.js not found on PATH (or OPENCOMPANY_NODE_BIN) — the JS/TS executor sidecar "
-                "requires the same Node 18+ install as the rest of OpenCompany."
+                f"bun not found on PATH (or {ENV_BUN_BIN}) — the JS/TS executor sidecar "
+                f"runs on bun; {INSTALL_HINT}."
             )
         if not (_sidecar_dir() / "dist" / "index.js").is_file():
             raise RuntimeError(
-                "Node.js executor bundle missing (server/nodejs/dist/index.js). "
+                "JS executor bundle missing (server/nodejs/dist/index.js). "
                 "Run `company build` to produce it."
             )
 
     def binary_path(self) -> Path:
-        return Path(_node_binary() or "node")
+        return Path(bun_binary() or "bun")
 
     def argv(self) -> list[str]:
         return [str(self.binary_path()), str(_sidecar_dir() / "dist" / "index.js")]
@@ -132,7 +125,7 @@ class NodeJSExecutorRuntime(BaseProcessSupervisor):
                 return
             await asyncio.sleep(0.3)
         raise RuntimeError(
-            f"Node.js executor did not become ready on port {executor_port()}"
+            f"JS executor did not become ready on port {executor_port()}"
         )
 
     def _extra_status(self) -> dict:
@@ -141,5 +134,5 @@ class NodeJSExecutorRuntime(BaseProcessSupervisor):
 
 
 def get_nodejs_executor_runtime() -> NodeJSExecutorRuntime:
-    """Return the Node.js executor runtime singleton."""
+    """Return the JS executor runtime singleton."""
     return NodeJSExecutorRuntime.get_instance()

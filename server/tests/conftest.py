@@ -202,6 +202,19 @@ _make_submodule(
     },
 )
 
+# core.js_runtime — how the backend finds bun and extends the shared
+# packages tree. Stdlib + core.paths (the stub above), imported at module
+# load by the JS executor runtime and the npm-shipped CLI plugin
+# installers, so it must be resolvable under the stubbed package.
+_js_runtime_spec = _importlib_util.spec_from_file_location(
+    "core.js_runtime",
+    SERVER_DIR / "core" / "js_runtime.py",
+)
+_js_runtime_mod = _importlib_util.module_from_spec(_js_runtime_spec)
+sys.modules["core.js_runtime"] = _js_runtime_mod
+_js_runtime_spec.loader.exec_module(_js_runtime_mod)
+setattr(_core_pkg, "js_runtime", _js_runtime_mod)
+
 
 # services.pricing -- pre-stub the singleton so handler modules that do
 # `from services.pricing import get_pricing_service` at module load time

@@ -468,7 +468,7 @@ async def lifespan(app: FastAPI):
 
     # Stop every supervisor that registered itself via
     # services._supervisor.register_supervisor() (WhatsApp runtime,
-    # Node.js executor runtime, Temporal dev server).
+    # JS executor runtime, Temporal dev server).
     from services._supervisor import shutdown_all_supervisors
 
     await shutdown_all_supervisors()

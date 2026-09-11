@@ -334,7 +334,7 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     google_ai_api_key: Optional[str] = Field(default=None, env="GOOGLE_AI_API_KEY")
 
-    # Node.js executor settings live in the plugin: nodes/code/_runtime.py
+    # JS executor sidecar settings live in the plugin: nodes/code/_runtime.py
     # and _nodejs.py read the NODEJS_EXECUTOR_* env vars directly
     # (plugin-owned config, same as the WhatsApp runtime).
 

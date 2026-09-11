@@ -111,7 +111,7 @@ class AICliProvider(Protocol):
         ...
         # Resolve the CLI binary. Resolution chain (Composio pattern):
         #   1) shutil.which(<binary_name>)
-        #   2) `npx --yes <package_name>` shim path
+        #   2) `bun x <package_name>` (bun from core.js_runtime.bun_binary)
         # Raises FileNotFoundError if neither is available.
 
     def interactive_argv(self, task: Any, *, defaults: Dict[str, Any]) -> List[str]:
