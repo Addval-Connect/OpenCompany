@@ -1,7 +1,7 @@
 """F4.B: ``AgentWorkflow`` — Temporal child workflow for AI agent loops.
 
-Workflow-orchestrated alternative to the in-process ``_run_agent_loop``
-inside ``services/ai.py``: each LLM turn is an activity, each tool call
+Workflow-orchestrated alternative to the in-process ``run_native_agent_loop``
+in ``services/agent_runtime.py``: each LLM turn is an activity, each tool call
 is a per-type activity (registered via ``BaseNode.as_activity()``,
 F4.A), and memory persistence happens per turn so a workflow failure
 mid-loop doesn't lose progress.
@@ -29,7 +29,7 @@ User decisions baked in (plan §15):
 - Memory appends per turn (not on completion).
 - Tool activity failure (after retries) returns an error to the LLM as
   a ``ToolMessage`` and the agent continues — matches the in-process
-  ``_run_agent_loop`` behaviour.
+  ``run_native_agent_loop`` behaviour.
 
 Determinism:
 - ``sandboxed=False`` so we can import frozen registry dicts
@@ -2433,7 +2433,7 @@ def _serialise_tool_result(result: Any) -> str:
     """Return a string body for a ``ToolMessage``.
 
     Mirrors the in-process tool-call serialisation in
-    ``services/ai.py:_run_agent_loop``: feed the LLM the handler's raw
+    ``services/agent_runtime.py:run_native_agent_loop``: feed the LLM the handler's raw
     return value (``json.dumps(result, default=str)``), NOT the Temporal
     activity envelope. The F4.A per-type activity wraps the handler
     result as ``{"success": bool, "result": {...}, "node_id": ...,

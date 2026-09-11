@@ -692,7 +692,8 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
 
     Mirrors the prep half of ``services.ai.AIService.execute_agent``,
     minus the agent loop (which lives in ``AgentWorkflow.run`` for the
-    F4.B Temporal path and ``services.ai._run_agent_loop`` in-process):
+    F4.B Temporal path and ``services.agent_runtime.run_native_agent_loop``
+    in-process):
 
     1. Read node parameters from DB via ``database.get_node_parameters``.
     2. Walk edges via ``services.plugin.edge_walker.collect_agent_connections``

@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+test-temp*/
 
 # External design handoff bundle (reference-only; merged copy lives in docs-internal/design-system/)
 design_handoff_theme_system/

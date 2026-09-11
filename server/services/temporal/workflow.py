@@ -138,12 +138,12 @@ _SAFE_FROZEN_ROUTING = {
 # by the 2-minute heartbeat timeout (activities self-heartbeat every
 # 30s), not by lifetime caps.
 # Circuit breaker: a failed trigger-spawned run schedules the
-# workflow_control.pause_on_failure.v1 activity so the deployment pauses
+# workflow_control.pause_on_failure activity so the deployment pauses
 # (user fixes + resumes) instead of the trigger firing into the same
 # error indefinitely. The WORKFLOW_CONTROL_PAUSE_ON_FAILURE knob is
 # evaluated on the activity side, so flipping config never touches
-# recorded workflow commands; this patch only gates the activity
-# scheduling itself for replay compatibility with older histories.
+# recorded workflow commands. The scheduling itself is not behind a
+# workflow.patched guard.
 # start_to_close for node activities. Generous by
 # design: a single node step (agent turn batch, browser op, long shell
 # command) may run for hours; worker-death detection is the heartbeat

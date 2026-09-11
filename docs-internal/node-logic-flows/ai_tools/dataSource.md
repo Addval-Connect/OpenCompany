@@ -28,7 +28,7 @@ drags and the [`visionAnalyze`](./visionAnalyze.md) tool.
 |--------|-----------------|----------|---------|
 | `output-tool` (source, top, label "Data") | tools | yes (only way to use it) | Connect to an agent's `input-tools`; the agent calls `data(...)` |
 
-No `input-main`. uiHints: `isToolPanel`, `isDataPanel` (renders
+No `input-main`. uiHints: `isDataPanel` (renders
 `client/src/components/parameterPanel/DataPanel.tsx`), `hideInputSection`,
 `hideOutputSection`, `hideRunButton`; `isConfigNode` auto-derived from the
 `tool` group. A framework-side execution with only `Params` (no tool args)
