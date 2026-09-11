@@ -27,6 +27,23 @@ updates:
         applies-to: security-updates
         patterns: ["*"]
 
+  # bun - the desktop shell is a standalone bun package with its own
+  # bun.lock (deliberately not a root workspace member). Without this entry
+  # Dependabot routed the desktop's security alerts to its npm_and_yarn
+  # updater, which cannot read bun.lock and failed every run with
+  # "can't update vulnerable dependencies for projects without a lockfile
+  # or pinned version requirement" (the 2026-09-11 vitest alert). The same
+  # caveat as the root applies: alerts fire, remediation is a manual bump.
+  - package-ecosystem: bun
+    directory: /desktop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      desktop-bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
   # pip - the server runtime. Authoritative manifest: server/pyproject.toml;
   # the committed requirements.txt (a `uv export` of the transitive tree)
   # doubles as the pinned surface security updates can patch. (A former root

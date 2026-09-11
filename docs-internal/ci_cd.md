@@ -170,8 +170,9 @@ Dependabot raises **security PRs only**; routine version bumps are disabled
 updates only; security PRs are exempt from both the limit and the schedule
 and are grouped per ecosystem via `applies-to: security-updates`).
 
-Three entries cover the real surfaces: `bun /` (bun workspace spans root +
-`client/` + `server/nodejs/`), `pip /server` (authoritative
+Four entries cover the real surfaces: `bun /` (bun workspace spans root +
+`client/` + `server/nodejs/`), `bun /desktop` (the standalone desktop
+package with its own `bun.lock`), `pip /server` (authoritative
 `server/pyproject.toml`; the committed `requirements.txt` export is the
 transitive-pin surface security fixes patch), `github-actions /`. A former
 `pip: /` entry (duplicate churn against `server/requirements.txt`) and a
@@ -181,7 +182,15 @@ dead `npm: /server` entry were removed.
 updates only — it never raises security-update PRs, so the security-only
 posture above yields no automated PRs at all for the JS workspace. Alerts
 still fire; the remediation channel is the top-level `overrides` block in
-the root `package.json` (the ranged pins formerly under `pnpm.overrides`).
+the root `package.json` (the ranged pins formerly under `pnpm.overrides`)
+plus a hand bump of the affected range. Do not expect the "Dependabot
+Updates" workflow to do it: before `bun /desktop` existed, a desktop alert
+(vitest, 2026-09-11) was routed to the `npm_and_yarn` updater, which cannot
+read `bun.lock`, sees only the `^` range in `package.json`, and fails every
+run with "can't update vulnerable dependencies for projects without a
+lockfile or pinned version requirement". The fix was the bump itself
+(`bun add -d vitest@^4.1.11` in `desktop/`, `^4.1.11` in `client/`), which
+closes the alert and stops the job.
 
 Repo-level alerts + security updates must stay enabled — verify with
 `gh api repos/zeenie-ai/OpenCompany/vulnerability-alerts` (204 = enabled).
