@@ -26,7 +26,7 @@ npm install -g @zeenie-ai/opencompany
 company start
 ```
 
-Open http://localhost:5678 — `company start` is single-port (API +
+Open `http://localhost:$PYTHON_BACKEND_PORT` — `company start` is single-port (API +
 WebSocket + built SPA on the backend port).
 
 Notes for Linux servers:
@@ -170,7 +170,7 @@ When `VITE_AUTH_ENABLED=false` (the default):
 ## Troubleshooting
 
 ### Port already in use
-Change the port in `.env`:
+Change the port in `.env` (the values below are illustrative; the defaults live in `.env.template`):
 ```bash
 VITE_CLIENT_PORT=6679
 PYTHON_BACKEND_PORT=6678

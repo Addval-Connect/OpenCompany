@@ -63,11 +63,11 @@ print('ENC='+secrets.token_hex(24))"
    on **:3010**) plus an nginx reverse proxy on :80/:443 — it works on every release.
    **Releases after 0.0.95**: `company start` became single-port itself (uvicorn
    serves the SPA; no :3000 static server) AND the default ports moved to the
-   serial 5678 block (backend :5678, Temporal UI :5680, Temporal gRPC :5681,
-   Node.js executor :5682, WhatsApp :5683).
+   ports named in `.env.template`: `PYTHON_BACKEND_PORT` (backend), `TEMPORAL_UI_PORT`,
+   `TEMPORAL_FRONTEND_GRPC_PORT`, `NODEJS_EXECUTOR_PORT`, `WHATSAPP_RPC_PORT`.
    When upgrading a VM past 0.0.95, point EVERY nginx `proxy_pass` in step 2
    (`/api/`, `/ws/`, `/webhook/`, `/health`, and `location /`) at
-   `http://127.0.0.1:5678;` and reload nginx.
+   `http://127.0.0.1:$PYTHON_BACKEND_PORT;` and reload nginx.
 3. **Owner env seeding requires `>= 0.0.95`.** 0.0.88 ignored `MACHINA_OWNER_*`
    entirely. Since 0.0.95 the backend seeds the owner at startup from
    `OPENCOMPANY_OWNER_EMAIL` + `OPENCOMPANY_OWNER_PASSWORD` (>= 8 chars;

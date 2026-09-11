@@ -17,11 +17,11 @@ See [SETUP.md](docs-internal/SETUP.md) for environment setup and [SCRIPTS.md](do
 
 At a glance:
 
-- **132 workflow nodes** across 27 populated palette groups (live count: `len(services.node_registry.NODE_METADATA)` *after* importing `nodes` — a bare `server/nodes/**/__init__.py` glob both over-counts helper packages and under-counts groups that hold several node types in one package; group list: `server/nodes/groups.py`)
+- **148 workflow nodes** across 33 populated palette groups (34 registered in `server/nodes/groups.py`) (live count: `len(services.node_registry.NODE_METADATA)` *after* importing `nodes` — a bare `server/nodes/**/__init__.py` glob both over-counts helper packages and under-counts groups that hold several node types in one package)
 - **13 native LLM providers** (11 cloud providers plus Ollama and LM Studio; 12 standalone chat-model nodes because xAI is selected directly by agent nodes)
 - **Specialized AI agents** with the Agent Teams delegation pattern — SSOT is the `AI_AGENT_TYPES` frozenset in `server/constants.py`, which spans the base/specialized/team-lead agents plus the CLI-backed (`claude_code_agent`, `rlm_agent`) and Vertex-hosted (`vertex_managed_agent`) variants; `codex_agent` is a sibling CLI-agent plugin
 - **WebSocket-first API** replacing most REST endpoints (live handler count = `MESSAGE_HANDLERS` + plugin registries)
-- **73 built-in skills** across 18 folders, editable in-UI with SKILL.md defaults on disk (live count: glob `server/skills/**/SKILL.md`)
+- **78 built-in skills** across 18 folders, editable in-UI with SKILL.md defaults on disk (live count: `find server/skills -name SKILL.md | wc -l`)
 - **Two execution modes** with automatic fallback: Temporal distributed, sequential
 
 ## How Workflows Execute
@@ -141,7 +141,7 @@ uv run pytest          # run backend tests (from server/, uv-managed venv)
 
 - **No strict-peer-dependencies equivalent.** bun never errors on peer conflicts, so the check that kept client `typescript` inside typescript-eslint's peer range is gone from install time — the CLI test locking client `typescript` to `^5` (`cli/tests/test_release_pipeline_config.py`) is now the only guard.
 - **Dependabot's `bun` ecosystem does version updates only — no security-update PRs.** Alerts still fire; remediation goes through the top-level `overrides` block in the root `package.json` (the pins formerly under `pnpm.overrides`).
-- **`--bun` is not enabled anywhere.** Node 22 remains the runtime for vite/vitest/eslint/the sidecar. A trial of `--bun` for `vite dev` only is a documented follow-up once the package-manager migration proves stable — never for vitest/eslint (known bun-runtime breakage: oven-sh/bun#20762, #13346).
+- **`--bun` is not enabled anywhere.** Node (18+; CI builds on 22) remains the runtime for vite/vitest/eslint/the sidecar. A trial of `--bun` for `vite dev` only is a documented follow-up once the package-manager migration proves stable — never for vitest/eslint (known bun-runtime breakage: oven-sh/bun#20762, #13346).
 
 Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.md](docs-internal/SCRIPTS.md)
 
@@ -151,7 +151,7 @@ Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.
 |---|---|
 | [DESIGN.md](docs-internal/DESIGN.md) | Execution engine architecture, design patterns, execution modes |
 | [TEMPORAL_ARCHITECTURE.md](docs-internal/TEMPORAL_ARCHITECTURE.md) | Distributed execution via Temporal activities |
-| [workflow-schema.md](docs-internal/workflow-schema.md) | Workflow JSON schema and node catalog (live count = glob `server/nodes/**/__init__.py`) |
+| [workflow-schema.md](docs-internal/workflow-schema.md) | Workflow JSON schema and node catalog (live count = `len(services.node_registry.NODE_METADATA)` after importing `nodes`) |
 | [ROADMAP.md](docs-internal/ARCHIVE/ROADMAP.md) | *Archived* status snapshot; current state is in DESIGN.md and the Temporal docs |
 | [SETUP.md](docs-internal/SETUP.md) | Development environment setup |
 | [SCRIPTS.md](docs-internal/SCRIPTS.md) | bun/shell scripts and CLI verbs reference |

@@ -2,13 +2,13 @@
 # Usage: iwr -useb https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/install.ps1 | iex
 #
 # This script installs OpenCompany and its dependencies:
-# - Node.js 22+ (via winget/choco)
+# - Node.js 18+ (installs 22 LTS via winget/choco when absent)
 # - Python 3.12+ (via winget/choco)
 # - uv (Python package manager)
 
 $ErrorActionPreference = "Stop"
 
-$MIN_NODE_VERSION = 22
+$MIN_NODE_VERSION = 18
 $MIN_PYTHON_VERSION = "3.12"
 
 # Colors
@@ -65,7 +65,7 @@ function Check-Node {
 }
 
 function Install-Node {
-    Info "Installing Node.js $MIN_NODE_VERSION..."
+    Info "Installing Node.js LTS (need v$MIN_NODE_VERSION+)..."
     $pm = Get-PackageManager
 
     switch ($pm) {

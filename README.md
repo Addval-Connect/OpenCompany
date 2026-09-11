@@ -9,7 +9,7 @@
 
 **Your own AI workforce, running on your own machine.**
 
-OpenCompany is an open-source, self-hosted canvas for AI agent workflows — think n8n, built agent-first. Drag, drop, and connect AI agents to your email, calendar, messages, browser, phone, and 30 other services, with 146 nodes across 31 categories to build from. No code required. No subscription. No usage limits. Bring your own API keys, or run models locally with Ollama / LM Studio for free.
+OpenCompany is an open-source, self-hosted canvas for AI agent workflows — think n8n, built agent-first. Drag, drop, and connect AI agents to your email, calendar, messages, browser, phone, and 30 other services, with 148 nodes across 33 categories to build from. No code required. No subscription. No usage limits. Bring your own API keys, or run models locally with Ollama / LM Studio for free.
 
 **[Read the docs →](https://docs.opencompany.sh)**
 
@@ -22,7 +22,7 @@ npm install -g @zeenie-ai/opencompany
 company start
 ```
 
-Open http://localhost:5678 and click the key icon (**API Credentials**) in the toolbar to connect your first AI provider.
+Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`) and click the key icon (**API Credentials**) in the toolbar to connect your first AI provider.
 
 <details>
 <summary><b>Run from source (for contributors)</b></summary>
@@ -35,7 +35,7 @@ bun run build
 bun run dev
 ```
 
-The `dev` task starts the Vite client (with HMR) at http://localhost:5678 — the same URL as production — proxying API/WebSocket traffic to the Python backend on :5679; optional daemons (WhatsApp, Temporal) are spawned by the backend on demand. Every port is declared in `.env.template` and overridable in `.env`; nothing is hardcoded. See [SETUP.md](docs-internal/SETUP.md) and [SCRIPTS.md](docs-internal/SCRIPTS.md) for details, and [CONTRIBUTING.md](CONTRIBUTING.md) for the codebase map and contribution recipes.
+The `dev` task starts the Vite client (with HMR) at `http://localhost:$VITE_CLIENT_PORT` — the same URL as production — proxying API/WebSocket traffic to the Python backend on `$PYTHON_BACKEND_PORT` (re-pointed in `.env.dev` so the two can coexist); optional daemons (WhatsApp, Temporal) are spawned by the backend on demand. Every port is declared in `.env.template` and overridable in `.env`; nothing is hardcoded. See [SETUP.md](docs-internal/SETUP.md) and [SCRIPTS.md](docs-internal/SCRIPTS.md) for details, and [CONTRIBUTING.md](CONTRIBUTING.md) for the codebase map and contribution recipes.
 
 **Upgrading from MachinaOS?** Existing `~/.machina` and checkout-local `.machina` state is detected when the new `.opencompany` location does not yet exist, so databases and deployment state are not stranded. The `machina` command remains available as a deprecated legacy alias; new scripts should use `company`.
 
@@ -130,7 +130,7 @@ The Claude Code agent keeps warm interactive sessions in a pool (same session ac
 
 ### Skills you can edit yourself
 
-Skills are short markdown files that teach an agent how to do something well — when to use which tool, what arguments to pass, common mistakes to avoid. Edit them in the UI; changes apply immediately. 77 ship built in across 19 folders, covering Android control, Google Workspace, social messaging, web research, local data and vision, coding, terminal use (Bash, PowerShell, WSL, Nushell), payments, deployment, and more — and you can drop your own into `.opencompany/skills/`, where they override the built-ins of the same name.
+Skills are short markdown files that teach an agent how to do something well — when to use which tool, what arguments to pass, common mistakes to avoid. Edit them in the UI; changes apply immediately. 78 ship built in across 18 folders, covering Android control, Google Workspace, social messaging, web research, local data and vision, coding, terminal use (Bash, PowerShell, WSL, Nushell), payments, deployment, and more — and you can drop your own into `.opencompany/skills/`, where they override the built-ins of the same name.
 
 ### Conversations that survive, memory that scales
 
