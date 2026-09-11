@@ -7,9 +7,9 @@
 <a href="https://discord.gg/c9pCJ7d8Ce" target="_blank"><img src="https://img.shields.io/discord/1455977012308086895?logo=discord&logoColor=white&label=Discord" alt="Discord"></a>
 <a href="https://deepwiki.com/zeenie-ai/OpenCompany" target="_blank"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 
-**Your own AI workforce, running on your own machine.**
+**Self-improving AI employees, running on your own machine.**
 
-OpenCompany is an open-source, self-hosted canvas for AI agent workflows — think n8n, built agent-first. Drag, drop, and connect AI agents to your email, calendar, messages, browser, phone, and 30 other services, with 148 nodes across 33 categories to build from. No code required. No subscription. No usage limits. Bring your own API keys, or run models locally with Ollama / LM Studio for free.
+OpenCompany is an open-source, self-hosted platform for AI employees: agents you hire onto a canvas, connect to your email, calendar, messages, browser, phone, and 30 other services, and that get better at the job the longer they work. They remember what they learn, keep their working context across every firing, extend their own toolset mid-task, and take your feedback through a review loop — all of it visible on the canvas, nothing hidden in a model's weights. Under the hood it is an n8n-style workflow engine built agent-first, with 148 nodes across 33 categories to build from. No code required. No subscription. No usage limits. Bring your own API keys, or run models locally with Ollama / LM Studio for free.
 
 **[Read the docs →](https://docs.opencompany.sh)**
 
@@ -47,7 +47,7 @@ The `dev` task starts the Vite client (with HMR) at `http://localhost:$VITE_CLIE
 
 https://github.com/user-attachments/assets/a5a5583f-bb5f-4d27-a387-8522c556e89e
 
-**AI building itself for complex tasks ↓**
+**An employee extending its own toolset for a complex task ↓**
 
 https://github.com/user-attachments/assets/035a2293-0837-4969-8b9d-8d680e023b89
 
@@ -65,10 +65,22 @@ Pick nodes from the palette, drag them onto a canvas, connect them with lines, a
 
 Three example workflows load automatically on first launch. Open them on the canvas to see exactly how the pieces fit together, then edit any node and save your own version.
 
+## Employees That Get Better at the Job
+
+A one-shot agent forgets everything between runs. An OpenCompany employee does not. Each capability below is a node or tool you can see and inspect on the canvas:
+
+- **They remember.** The **Memory** tool gives an agent durable facts, preferences, and decisions it explicitly remembers, recalls, updates, and forgets — checked before it answers anything about you, and browsable from the node panel.
+- **They keep their place.** Connect a **Context** node and the conversation persists per workflow generation: every trigger firing (a new chat message, a completed delegated task, a scheduled tick) continues the same thread instead of starting cold. When the context window fills, the agent compacts it into a five-section summary — including *Important Discoveries* and *Next Steps* — and carries that forward.
+- **They extend themselves.** The **Agent Builder** tool lets an agent inspect its own canvas mid-execution and add tools, attach skills, recruit subagents, or create whole workflows to finish the task in front of it. The tool surface is rebound live; the new nodes stay on the canvas afterwards.
+- **They take feedback.** Hire an **AI Employee** or **Orchestrator** as a team lead and specialist agents as teammates. The lead assigns bounded work through its built-in Task Manager; every result comes back for review, and the lead can accept it, retry it, or reassign it. The Team Monitor shows the whole loop.
+- **You coach them.** Skills are short markdown playbooks — when to use which tool, what arguments to pass, what to avoid. Edit one in the UI and the change applies on the next turn; agents can also attach existing skills to themselves through Agent Builder.
+
+The improvement is structural, not statistical: OpenCompany never fine-tunes a model. What an employee learns lives in its memory, its context, its skills, and the tools wired onto its canvas — all of it editable and exportable.
+
 ## What You Can Build
 
-- **Personal AI assistants that remember.** A chat assistant that knows your calendar, reads your inbox, and follows up on tasks. Connect a Context node and the conversation durably persists across every trigger firing — inspect the agent's live context in real time from the canvas (formatted transcript or raw JSON). A durable Memory tool holds the facts, preferences, and decisions the agent explicitly remembers, with vector search for long-term recall.
-- **Durable agent teams.** Hire an **AI Employee** or Orchestrator as a team lead, connect specialist agents through `input-teammates`, and the lead assigns bounded work through its built-in Task Manager. Tasks are durably queued, run up to three descendants in parallel, require lead acceptance, and remain visible in the read-only Team Monitor.
+- **A personal AI employee that remembers.** A chat employee that knows your calendar, reads your inbox, follows up on tasks, and still knows who you are next week. Inspect its live context in real time from the canvas (formatted transcript or raw JSON) and browse what it has chosen to remember.
+- **Durable AI teams.** Hire an **AI Employee** or Orchestrator as a team lead, connect specialist agents through `input-teammates`, and the lead assigns bounded work through its built-in Task Manager. Tasks are durably queued, run up to three descendants in parallel, require lead acceptance, and remain visible in the read-only Team Monitor.
 - **Automations that run themselves.** Recurring jobs ("every weekday at 9 AM, summarize my unread emails"), event-driven replies ("when a customer texts on WhatsApp, draft a response"), and multi-step background pipelines. Any workflow can also expose a live `/webhook/{path}` HTTP endpoint that fires on GET, POST, PUT, DELETE, or PATCH.
 - **Email, calendar, and document workflows.** Send and search Gmail, manage Calendar, Drive, Sheets, Tasks, and Contacts; **Microsoft 365** mail and calendar over the Graph API. Read any inbox over IMAP (Gmail, Outlook, Yahoo, iCloud, ProtonMail, Fastmail, or custom servers) — including a polling trigger that fires a workflow on every new message.
 - **Messaging bots.** Send and receive on **WhatsApp** (personal — groups, contacts, newsletter channels), **WhatsApp Business** (official Meta Cloud API: templates, media, interactive messages, signed webhooks), **Telegram** (bots with owner detection), **Discord** (bot with gateway message triggers, slash commands, and OAuth2), and **Twitter/X** (post, reply, search). A unified social node normalizes incoming messages into one format so the same workflow handles them all.
@@ -86,9 +98,9 @@ Three example workflows load automatically on first launch. Open them on the can
 
 | Provider     | Notes                                                                    |
 |--------------|--------------------------------------------------------------------------|
-| OpenAI       | GPT-5.6 Sol / Terra / Luna (+ Pro variants), GPT-5.5, GPT-4.1            |
-| Anthropic    | Claude Opus 5, Fable 5, Sonnet 5, Opus 4.8 / 4.7 — with extended thinking |
-| Google       | Gemini 3.6 / 3.5 Flash, 3.1 Pro — with reasoning budgets                 |
+| OpenAI       | GPT-5.6 Sol / Terra / Luna (+ Pro variants), GPT-5.5 / 5.4, GPT-4.1      |
+| Anthropic    | Claude Opus 5, Fable 5.1 / 5, Sonnet 5, Opus 4.8 / 4.7 — with extended thinking |
+| Google       | Gemini 3.8 / 3.7 / 3.6 / 3.5 Flash, 3.1 Pro — with reasoning budgets     |
 | xAI          | Grok 4.20, 4.20 multi-agent, 4.3 — selectable from any agent             |
 | DeepSeek     | DeepSeek V4 Flash / Pro                                                  |
 | Kimi         | Kimi K3                                                                  |
@@ -130,7 +142,7 @@ The Claude Code agent keeps warm interactive sessions in a pool (same session ac
 
 ### Skills you can edit yourself
 
-Skills are short markdown files that teach an agent how to do something well — when to use which tool, what arguments to pass, common mistakes to avoid. Edit them in the UI; changes apply immediately. 78 ship built in across 18 folders, covering Android control, Google Workspace, social messaging, web research, local data and vision, coding, terminal use (Bash, PowerShell, WSL, Nushell), payments, deployment, and more — and you can drop your own into `.opencompany/skills/`, where they override the built-ins of the same name.
+Skills are short markdown files that teach an employee how to do something well — when to use which tool, what arguments to pass, common mistakes to avoid. Edit them in the UI; changes apply immediately. 78 ship built in across 18 folders, covering Android control, Google Workspace, social messaging, web research, local data and vision, coding, terminal use (Bash, PowerShell, WSL, Nushell), payments, deployment, and more — and you can drop your own into `.opencompany/skills/`, where they override the built-ins of the same name.
 
 ### Conversations that survive, memory that scales
 
@@ -142,13 +154,13 @@ Memory-connected agent runs calculate USD cost from provider-reported usage when
 
 ## Built Like Production Infrastructure
 
-- **Durable execution via Temporal.** Ordinary node and agent-support activities retry transient failures with bounded backoff; billed `AgentWorkflow` LLM-step activities run once to avoid automatic double billing after ambiguous failures. Cron schedules have a 24-hour catch-up window so missed ticks backfill, and per-queue worker pools scale horizontally. Falls back to a local executor when disabled.
+- **Durable execution via Temporal.** Node and agent-support activities retry transient failures with bounded backoff; `AgentWorkflow` LLM-step activities retry transient provider errors indefinitely with exponential backoff (5 s to 5 min), so a single rate-limit never kills a months-long deployment, while terminal provider errors fail fast. Cron schedules have a 24-hour catch-up window so missed ticks backfill, and per-queue worker pools scale horizontally. Falls back to a local executor when disabled.
 - **Credentials encrypted at rest.** API keys and OAuth tokens live in a separate `credentials.db`, encrypted with Fernet (AES-128-CBC + HMAC-SHA256) and a PBKDF2-SHA256 key at 600,000 iterations. Nothing leaves your machine.
 - **Login-gated by choice.** Runs open on localhost by default; flip on single-owner JWT auth (or multi-user mode) for shared and cloud deployments — `company deploy` enables it automatically.
 
 ## The Canvas
 
-- **12 visual themes** — light, dark, Renaissance, Greek, Edo, Steampunk, Atomic, Cyber, Wasteland, Rot, Plague, Surveillance — each with its own icon set, sound pack, and decorative ornaments. Animations honor `prefers-reduced-motion`.
+- **12 visual themes** — light, dark, Renaissance, Greek, Edo, Steampunk, Atomic, Cyber, Wasteland, Rot, Plague, Surveillance — the ten stylized themes each ship their own icon glyphs, sound pack, and decorative ornaments. Animations honor `prefers-reduced-motion`.
 - **Drag-to-map outputs** from one node's output directly onto another's input fields.
 - **Live execution animations** — nodes glow while running, AI agents show iteration counts, errors surface inline.
 - **Chat + Console panel** — a resizable bottom panel with a chat pane for talking to trigger nodes, plus Console and Terminal tabs for logs and live process output.
@@ -157,7 +169,7 @@ Memory-connected agent runs calculate USD cost from provider-reported usage when
 
 ## For Developers
 
-Want to add a node, LLM provider, skill, or integration? One Python file = one node. The backend owns all the schemas; the frontend renders from them automatically. No frontend code required for most extensions.
+Want to add a node, LLM provider, skill, or integration? One plugin folder = one node. The backend owns all the schemas; the frontend renders from them automatically. No frontend code required for most extensions.
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — codebase map, architecture diagrams, contribution recipes
 - **[server/nodes/README.md](server/nodes/README.md)** — 5-minute plugin recipe + folder map
