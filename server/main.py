@@ -516,7 +516,7 @@ _expose_docs = (
 # Create FastAPI app
 app = FastAPI(
     title="OpenCompany API",
-    version="3.0.0",
+    # version: set from package.json below, once _app_version() exists.
     description="OpenCompany workflow automation backend",
     lifespan=lifespan,
     docs_url="/docs" if _expose_docs else None,
@@ -665,6 +665,11 @@ def _app_version() -> str:
         return str(pkg.get("version") or "0.0.0")
     except (OSError, json.JSONDecodeError):
         return "0.0.0"
+
+
+# The OpenAPI document (/docs, /openapi.json) carries the package version
+# too; the FastAPI constructor runs before this helper exists.
+app.version = _app_version()
 
 
 @app.get("/health")
