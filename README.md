@@ -7,15 +7,13 @@
 <a href="https://discord.gg/c9pCJ7d8Ce" target="_blank"><img src="https://img.shields.io/discord/1455977012308086895?logo=discord&logoColor=white&label=Discord" alt="Discord"></a>
 <a href="https://deepwiki.com/zeenie-ai/OpenCompany" target="_blank"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 
-**The self-improving operating system for AI employees.**
+**Self-improving AI employees, running on your own computer.**
 
-OpenCompany is an open-source, self-hosted OS where AI employees do knowledge work: they read and answer your mail, keep your calendar, research the web, write and ship code, run your messaging front desk, handle payments, and file what they learn. You hire them onto a canvas, equip them with tools and skills, and press Start. From then on they run as durable background workers on your own machine, and they get better at the job the longer they work.
+OpenCompany is an open-source operating system for AI employees. You hire an employee for a job, a Builder, a Grower, a Chief of Staff, connect it to your email, calendar, messages, code, and the rest of your tools, and press Start. It works in the background, on your machine, for as long as you want. And it gets better at the job the longer it works.
 
-An operating system, because it gives every employee what a worker needs from a workplace: a brain (13 model providers, cloud or local), long-term memory, a persistent working context, a skill library, 148 tools across 33 categories, teammates it can delegate to, a private workspace on disk, an encrypted credential vault, and a scheduler that keeps it alive for months across restarts and crashes.
+An AI employee is not one chatbot. It is a small team: a lead who understands the job, and a few specialist agents who each do one part of it well. The lead hands out the work, checks the results, and reports back to you. You build the team by dragging the pieces onto a canvas and connecting them. No code.
 
-Self-improving, because what an employee learns is kept: facts go into its memory, progress stays in its context across every firing, the tools and teammates it wires up mid-task stay on the canvas, and the skills you edit apply on the next turn. Improvement is structural, never a fine-tuned weight: everything an employee knows is visible, editable, and exportable.
-
-No code required. No subscription. No usage limits. Bring your own API keys, or run models locally with Ollama / LM Studio for free.
+Bring your own API keys, or run models locally for free. No subscription. No usage limits.
 
 **[Read the docs →](https://docs.opencompany.sh)**
 
@@ -28,7 +26,7 @@ npm install -g @zeenie-ai/opencompany
 company start
 ```
 
-Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`) and click the key icon (**API Credentials**) in the toolbar to connect your first AI provider. Three example workflows load on first launch; the AI Employee one is a team lead with teammates already wired.
+Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`), click the key icon in the toolbar, and connect your first AI provider. Three example employees are already on the canvas; open one to see how it is put together.
 
 **Prefer a desktop app?** Installers for Windows (`.exe`), macOS (`.dmg`, Apple Silicon and Intel) and Linux (`.AppImage` / `.deb`) are attached to every [GitHub Release](https://github.com/zeenie-ai/OpenCompany/releases). They need no Python or Node on the machine: the app bundles them, sets up the backend on first launch (one-time download, a minute or two), and shares its data with a CLI install in `~/.opencompany`. The first releases are unsigned, so macOS asks you to allow the app under System Settings > Privacy & Security and Windows SmartScreen needs "More info > Run anyway". Details in [docs-internal/desktop_app.md](docs-internal/desktop_app.md).
 
@@ -55,11 +53,11 @@ The `dev` task starts the Vite client (with HMR) at `http://localhost:$VITE_CLIE
 
 https://github.com/user-attachments/assets/a5a5583f-bb5f-4d27-a387-8522c556e89e
 
-**An employee extending its own toolset for a complex task ↓**
+**An employee adding the tools it needs, mid-task ↓**
 
 https://github.com/user-attachments/assets/035a2293-0837-4969-8b9d-8d680e023b89
 
-**A team lead coordinating specialist employees ↓**
+**A lead running its team ↓**
 
 https://github.com/user-attachments/assets/3d25e9a3-f7b9-4760-8b9a-6de1e5a19cad
 
@@ -67,119 +65,62 @@ https://github.com/user-attachments/assets/3d25e9a3-f7b9-4760-8b9a-6de1e5a19cad
 
 [![How OpenCompany Works](docs/diagrams/how-it-works.svg)](https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/docs/diagrams/how-it-works.svg)
 
-1. **Hire.** Drag an agent onto the canvas and pick its model. Twenty agent types ship, from the general-purpose AI Agent to specialists for coding, research, phone control, payments, and team leadership.
-2. **Equip.** Connect tools, skills, a Memory tool, and a Context node to its input handles. Connect other agents as teammates if it should lead a team.
-3. **Deploy.** Press **Run** on a node to test it in place, or press **Start** to deploy the workflow as a durable background listener that waits for email, messages, webhooks, or a schedule.
-4. **Review.** Watch it work live on the canvas, read its context and memory from the node panels, accept or send back the tasks it delegates, and edit its skills when you want it to do something differently.
+1. **Hire.** Drop an AI Employee onto the canvas. That is the lead.
+2. **Build the team.** Connect a few specialist agents to it and give each one the tools for its part of the job: email, browser, code, messaging, payments, and so on.
+3. **Start.** The team runs in the background and wakes up when something happens: a new email, a customer message, a scheduled time.
+4. **Review.** Watch it work on the canvas, read what it remembers, and change how it does things by editing its skills in plain text.
 
 [![Default workflows that ship with OpenCompany](docs/diagrams/default-workflows.svg)](https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/docs/diagrams/default-workflows.svg)
 
-## What an Employee Is Made Of
+## The Employees
 
-| Part | On the canvas | What it gives the employee |
-|---|---|---|
-| Brain | A model node, or the agent's provider dropdown | One of 13 providers: OpenAI, Anthropic, Google, xAI, DeepSeek, Kimi, Mistral, Groq, Cerebras, Sarvam, OpenRouter, or a local Ollama / LM Studio model |
-| Memory | **Memory** tool | Durable facts, preferences, and decisions it explicitly remembers, recalls, updates, and forgets; it checks memory before answering anything about you |
-| Working context | **Context** node | The conversation itself, persisted per workflow generation, so every trigger firing continues the same thread |
-| Skills | **Master Skill** node or individual skill nodes | Short markdown playbooks: when to use which tool, what arguments to pass, what to avoid; 78 ship built in across 18 folders |
-| Tools | Any of the 148 nodes on its `input-tools` handle | Email, calendar, documents, browser, search, code, phone, messaging, payments, cloud CLIs, local data, vision |
-| Teammates | Other agents on `input-teammates` | Specialists a team lead delegates to through its built-in Task Manager |
-| Workspace | `~/.opencompany/workspaces/<workflow>/` | A private directory for files, downloads, code, and dev servers, browsable from the Gallery node |
-| Credentials | The encrypted vault | API keys and OAuth tokens, resolved at run time and never exposed to the model |
+Each of these is a team you can assemble from the pieces in the box. Rename them, swap the specialists, or invent your own.
 
-## How Employees Improve
+**Builder** — builds and ships things.
+Writes and runs code, keeps dev servers alive, opens pull requests, deploys, and manages your cloud. The team: a lead, a coder, and a release specialist with GitHub, Vercel, Cloudflare, and Google Cloud.
 
-- **They remember.** The Memory tool holds what an employee has chosen to keep. It is a real tool call, so you can read every entry from the node panel and correct or delete it.
-- **They keep their place.** With a Context node connected, a new chat message, a completed delegated task, or a scheduled tick continues the same conversation instead of starting cold. When the context window fills, the employee compacts it into a five-section summary, including *Important Discoveries* and *Next Steps*, and carries that into the next firing.
-- **They extend themselves.** The **Agent Builder** tool lets an employee inspect its own canvas mid-execution and add tools, attach skills, recruit subagents, or create whole workflows to finish the task in front of it. The tool surface is rebound live, and the new nodes stay on the canvas afterwards.
-- **They take feedback.** Hire an **AI Employee** or **Orchestrator** as a team lead. It assigns bounded work to teammates through its Task Manager; every result comes back for review, and the lead accepts it, retries it, or reassigns it. Up to three tasks run in parallel, and the Team Monitor shows the whole loop.
-- **You coach them.** Edit a skill in the UI and it applies on the next turn. Drop your own skills into `.opencompany/skills/` and they override the built-ins of the same name. Employees can attach existing skills to themselves through Agent Builder.
+**Grower** — grows the company.
+Publishes to your channels, keeps your community alive, and watches the market. The team: a lead, a publisher for X, WhatsApp channels, Telegram, and Discord, and an analyst with social-media data and web search. Runs on a schedule so the cadence holds without you.
 
-## Knowledge Work They Can Take On
+**Chief of Staff** — runs your day.
+Reads and answers mail, keeps the calendar, files, sheets, tasks, and contacts in order, and hands you a summary each morning. The team: a lead and workspace specialists for Google Workspace and Microsoft 365. Wakes on every new email.
 
-- **Inbox and calendar.** Send and search Gmail; manage Calendar, Drive, Sheets, Tasks, and Contacts; **Microsoft 365** mail and calendar over the Graph API. Read any inbox over IMAP (Gmail, Outlook, Yahoo, iCloud, ProtonMail, Fastmail, or a custom server), including a polling trigger that fires on every new message.
-- **The messaging front desk.** Send and receive on **WhatsApp** (personal: groups, contacts, newsletter channels), **WhatsApp Business** (official Meta Cloud API: templates, media, interactive messages, signed webhooks), **Telegram** (bots with owner detection), **Discord** (gateway message triggers, slash commands, OAuth2), and **Twitter/X**. A unified social node normalizes incoming messages so one workflow handles them all.
-- **Research.** An interactive browser with accessibility-tree navigation; an alpha harness that drives your real Chrome over CDP; scraping with Crawlee, Apify actors, and TikHub's roughly 1,000-endpoint social API; search via DuckDuckGo (free), Brave, Serper, and Perplexity; residential proxies with geo-targeting and rotation.
-- **Documents and a knowledge base.** Parse PDFs and HTML, chunk, embed locally or via OpenAI, store in ChromaDB / Qdrant / Pinecone, and query from any employee. Give employees typed, bounded access to workspace files and operator-approved external folders through the dataSource tool, and vision for every host model through visionAnalyze.
-- **Code and shipping.** Run Python / JavaScript / TypeScript in per-workflow sandboxed workspaces, keep dev servers alive with the Process Manager node, open and merge PRs with the **GitHub** node, ship with **Vercel**, manage DNS and analytics with **Cloudflare**, and drive Compute Engine / Cloud Run / Storage with **Google Cloud**. All four authenticate through their own CLIs, no token pasting. The **Claude Code** and **Codex** agents run the vendor CLIs as long-lived sessions for serious coding work.
-- **Automations.** Recurring jobs ("every weekday at 9 AM, summarize my unread email"), event-driven replies, and multi-step background pipelines. Any workflow can expose a live `/webhook/{path}` endpoint that fires on GET, POST, PUT, DELETE, or PATCH.
-- **Voice and language.** Provider-abstracted text-to-speech and speech-to-text (OpenAI, ElevenLabs, Deepgram, Groq, Sarvam), with audio flowing between nodes by reference, plus translate / transliterate / detect-language nodes (DeepL, Sarvam, or any connected model).
-- **Your phone.** Pair an Android phone by QR code and control it from any employee: battery and network status, app launching, WiFi / Bluetooth / airplane toggles, camera, sensors, media playback, across 16 device services.
-- **Payments.** A **Stripe** action node plus a signed-webhook receiver for reacting to payment events in real time.
+**Front Desk** — answers customers.
+Replies on WhatsApp, WhatsApp Business, Telegram, and Discord, in the customer's language and in voice if you like, and escalates what it cannot resolve. The team: a lead, a support specialist, and a language specialist.
 
-## The Operating System Underneath
+**Researcher** — finds things out.
+Browses, searches, scrapes, reads documents and images, and files what it learned into a knowledge base the whole company can ask. The team: a lead, a scout with a browser and search, and a librarian who indexes.
 
-- **A scheduler built for months, not minutes.** Workflows execute on Temporal. Deployments survive backend restarts, are never auto-terminated, and can be paused, resumed, and reset from the canvas. After a crash the OS recovers running work as paused so you consciously resume it, and a deployment whose runs keep failing pauses itself. Cron schedules backfill missed ticks within a 24-hour window, per-queue worker pools scale horizontally, and LLM steps retry transient provider errors with exponential backoff so a single rate limit never kills a long-running employee.
-- **Isolated workspaces.** Every workflow gets its own directory for files, downloads, and code; path containment is enforced, and media moves between nodes as references rather than blobs.
-- **A credential vault.** API keys and OAuth tokens live in a separate `credentials.db`, encrypted with Fernet (AES-128-CBC + HMAC-SHA256) under a PBKDF2-SHA256 key at 600,000 iterations. Nothing leaves your machine.
-- **Cost tracking.** Memory-connected runs record provider-reported token usage and USD cost; third-party API calls are metered per operation. See spend in the API Credentials panel and edit `pricing.json` for custom pricing.
-- **Login-gated by choice.** Runs open on localhost by default; switch on single-owner JWT auth or multi-user mode for shared and cloud deployments. `company deploy` provisions a login-gated VM on Google Cloud with one command.
-- **Native model layer.** Every provider talks to its vendor SDK directly. Extended thinking, reasoning budgets, and reasoning effort are configured per model, and local providers report their context length automatically.
+**Treasurer** — handles payments.
+Runs payment operations through Stripe and reacts the moment a payment event happens. The team: a lead and a payments specialist.
 
-## Model Providers
+## How They Get Better
 
-### 13 providers, 12 dedicated model nodes
+- **They remember.** An employee keeps facts, preferences, and decisions in a memory you can open and edit.
+- **They pick up where they left off.** Every new message, task, or scheduled run continues the same conversation instead of starting from zero. When the conversation gets long, the employee writes itself a summary and carries on from it.
+- **They add tools when they need them.** Mid-task, an employee can look at its own team, add a tool, attach a skill, or bring in another specialist, and the change stays.
+- **They check their own work.** The lead reviews every result from the team and sends it back if it is not right, before it ever reaches you.
+- **You coach them.** Skills are short plain-text playbooks. Edit one and the employee follows it on its next turn.
 
-| Provider     | Notes                                                                    |
-|--------------|--------------------------------------------------------------------------|
-| OpenAI       | GPT-5.6 Sol / Terra / Luna (+ Pro variants), GPT-5.5 / 5.4, GPT-4.1      |
-| Anthropic    | Claude Opus 5, Fable 5.1 / 5, Sonnet 5, Opus 4.8 / 4.7 — with extended thinking |
-| Google       | Gemini 3.8 / 3.7 / 3.6 / 3.5 Flash, 3.1 Pro — with reasoning budgets     |
-| xAI          | Grok 4.20, 4.20 multi-agent, 4.3 — selectable from any agent             |
-| DeepSeek     | DeepSeek V4 Flash / Pro                                                  |
-| Kimi         | Kimi K3                                                                  |
-| Mistral      | Mistral Large / Medium / Small, Codestral                                |
-| Groq         | GPT-OSS-120b and more (ultra-fast inference)                             |
-| Cerebras     | GPT-OSS-120b (custom AI hardware)                                        |
-| Sarvam       | Indic-first models (sarvam-105b, 128K context)                           |
-| OpenRouter   | 200+ models via one unified API                                          |
-| **Ollama**   | Run any local model on your machine — free, private, offline             |
-| **LM Studio**| Run any local model with a desktop app — free, private, offline          |
+Nothing here is a black box. What an employee learns lives in its memory, its notes, its skills, and the pieces on its canvas, and you can read or change all of it. OpenCompany never retrains a model.
 
-xAI is the one provider without a standalone model node; it is chosen from the agent's own provider dropdown, which is why there are 13 providers but 12 nodes. Local providers are first-class: context length is detected from your running server, and LM Studio additionally reports vision and tool-use capability.
+## What Is in the Box
 
-## Employee Types
-
-| Agent              | Specialized for                                                          |
-|--------------------|--------------------------------------------------------------------------|
-| **AI Agent** / **Chat Agent** | The general-purpose employees most workflows start from      |
-| **AI Employee** / **Orchestrator** | Team leads that brief, delegate to, and review other agents |
-| Android Agent      | Phone control                                                            |
-| Web Agent          | Browser automation, scraping, search                                     |
-| Coding Agent       | Writing and running code (Python / JS / TS)                              |
-| Productivity Agent | Gmail, Calendar, Drive, Sheets, Tasks, Contacts                          |
-| Social Agent       | WhatsApp, Telegram, Twitter messaging                                    |
-| Task Agent         | Scheduling, reminders, cron jobs                                         |
-| Travel Agent       | Maps, location lookup, planning                                          |
-| Payments Agent     | Stripe + financial workflows                                             |
-| Consumer Agent     | Customer support, order management                                       |
-| Claude Code Agent  | Anthropic's Claude Code CLI for advanced coding sessions                 |
-| Codex Agent        | OpenAI Codex CLI integration                                             |
-| RLM Agent          | Recursive Language Model — write code that calls itself recursively      |
-| Autonomous Agent   | Code-mode loops that reduce token usage 80-98%                           |
-| Tool Agent         | General-purpose tool orchestration                                       |
-| Vertex Agents      | Google Vertex managed agents, plus an admin node for their lifecycle     |
-
-The Claude Code agent keeps warm interactive sessions in a pool (same session across turns, automatic resume after a crash) and runs on interactive billing, so a Claude subscription login works instead of per-token API cost. The Codex agent sandboxes parallel tasks in git worktrees.
-
-## The Desktop
-
-- **12 visual themes** — light, dark, Renaissance, Greek, Edo, Steampunk, Atomic, Cyber, Wasteland, Rot, Plague, Surveillance — the ten stylized themes each ship their own icon glyphs, sound pack, and decorative ornaments. Animations honor `prefers-reduced-motion`.
-- **Live execution** — nodes glow while running, employees show their iteration count, errors surface inline, and the Context and Memory panels update as the employee works.
-- **Drag-to-map outputs** from one node's output directly onto another's input fields; drag files from the Gallery onto any parameter.
-- **Chat + Console panel** — a resizable bottom panel with a chat pane for talking to your employees, plus Console and Terminal tabs for logs and live process output.
-- **Canvas dock** — a docked display board where employees push files, screenshots, and notes for you to review.
-- **Component palette** with search, categories, and a Normal/Dev mode toggle that hides infrastructure nodes until you need them.
-- **4-step onboarding wizard** for first-time users, replayable any time from Settings.
+- **Connections** to Gmail, Google Calendar, Drive, Sheets, Tasks, Contacts, Microsoft 365, any email account, WhatsApp, WhatsApp Business, Telegram, Discord, X, Stripe, GitHub, Vercel, Cloudflare, Google Cloud, your Android phone, a browser, web search, scrapers, and a knowledge base: 148 tools in all.
+- **Models** from OpenAI, Anthropic, Google, xAI, DeepSeek, Kimi, Mistral, Groq, Cerebras, Sarvam, and OpenRouter, or run local models with Ollama and LM Studio for free.
+- **Speech and translation**, so employees can listen, talk, and work in other languages.
+- **78 skills** that ship ready to use, and a place to drop your own.
+- **Built to keep running.** Employees survive restarts, pause and resume from the canvas, and catch up on missed schedules. Your API keys are stored encrypted on your machine. Add a login for shared or cloud use; one command deploys to Google Cloud.
+- **A canvas you will want to look at**, with 12 visual themes.
 
 ## For Developers
 
-Want to add a tool, model provider, skill, or integration? One plugin folder = one node. The backend owns every schema; the frontend renders from them automatically. No frontend code required for most extensions.
+Adding a tool, a model provider, a skill, or an integration is one plugin folder on the backend; the interface renders it automatically.
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — codebase map, architecture diagrams, contribution recipes
-- **[server/nodes/README.md](server/nodes/README.md)** — 5-minute plugin recipe + folder map
-- **[docs-internal/](docs-internal/)** — deep-dive architecture docs (execution engine, Temporal, LLM layer, agent context, credentials, event system, performance, build pipeline)
-- **[CLAUDE.md](CLAUDE.md)** — comprehensive project memory (great for AI-assisted contributions)
+- **[server/nodes/README.md](server/nodes/README.md)** — 5-minute plugin recipe
+- **[docs-internal/](docs-internal/)** — architecture deep dives
+- **[CLAUDE.md](CLAUDE.md)** — project memory for AI-assisted contributions
 - **Hosted docs:** https://docs.opencompany.sh/
 - **DeepWiki:** https://deepwiki.com/zeenie-ai/OpenCompany
 
