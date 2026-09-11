@@ -1,0 +1,135 @@
+# Desktop installers for Windows, macOS and Linux, attached to the GitHub
+# Release for the tag. Kept separate from release.yml (npm publish) so a
+# desktop failure never blocks the npm release and the strings that
+# cli/tests/test_release_pipeline_config.py locks stay untouched.
+#
+# Unsigned first release: no certificates are read here. Signing is wired
+# later purely through secrets (CSC_LINK / CSC_KEY_PASSWORD for Windows,
+# APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID + a Developer ID
+# cert for macOS) plus flipping the mac flags in desktop/electron-builder.yml.
+#
+# Flow: build the client + sidecar with the repo toolchain -> stage the
+# app-root and fetch the pinned runtimes for the job's target -> invariant
+# test -> electron-builder publishes into one DRAFT release -> the finalize
+# job publishes the draft once every matrix leg is green.
+
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload to a draft GitHub Release (otherwise artifacts only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            targets: win-x64
+            builder_args: --win --x64
+          - name: macOS arm64 + x64
+            os: macos-14
+            targets: mac-arm64,mac-x64
+            builder_args: --mac --arm64 --x64
+          - name: Linux x64
+            os: ubuntu-22.04
+            targets: linux-x64
+            builder_args: --linux --x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build client and Node sidecar
+        # Targeted builds only: `bun run build` would also uv-sync a server
+        # venv and download the Temporal binary, neither of which ships.
+        run: |
+          bun run --filter react-flow-client build
+          bun run --filter opencompany-nodejs-executor build
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Restore runtime downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: desktop/vendor
+          key: desktop-runtimes-${{ runner.os }}-${{ hashFiles('desktop/runtimes.json') }}
+
+      - name: Sync version, stage bundle, render icon
+        working-directory: desktop
+        run: |
+          bun run sync-version
+          bun run stage -- --target ${{ matrix.targets }}
+          bun run gen-icons
+
+      - name: Typecheck and unit tests
+        working-directory: desktop
+        run: |
+          bun run typecheck
+          bun run test
+
+      - name: Staged-tree invariants
+        working-directory: desktop
+        run: bun run test:invariants
+
+      - name: Build installers
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned: never let electron-builder go looking for a cert.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          PUBLISH: ${{ (github.event_name == 'push' || inputs.publish) && 'always' || 'never' }}
+        run: bun run dist -- ${{ matrix.builder_args }} --publish $PUBLISH
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ matrix.targets }}
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.yml
+            desktop/release/*.blockmap
+          if-no-files-found: error
+
+  finalize:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Undraft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false

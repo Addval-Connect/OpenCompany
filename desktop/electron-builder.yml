@@ -1,0 +1,100 @@
+# electron-builder configuration for the OpenCompany desktop shell.
+#
+# What ships: the electron-vite output (asar) plus three resource trees
+# copied verbatim outside the asar, because Python needs real files:
+#   resources/app-root/   the backend sibling layout (server/, client/dist,
+#                         .env.template, package.json, .opencompany/workflows)
+#   resources/runtime/    uv, python, node for THIS os/arch
+# Both come from desktop/stage/ (scripts/stage.ts). The ${os}-${arch}
+# macro selects the per-target runtime dir so one config serves every
+# platform and both macOS architectures.
+#
+# Unsigned first release: mac identity null (skips signing; Electron's own
+# ad-hoc signature keeps the arm64 binary launchable), hardened runtime and
+# notarization off, no Windows certificate. Signing is added later purely
+# through CI secrets (CSC_LINK / CSC_KEY_PASSWORD, APPLE_ID / APPLE_APP_
+# SPECIFIC_PASSWORD / APPLE_TEAM_ID) plus flipping the three mac flags.
+
+appId: ai.zeenie.opencompany
+productName: OpenCompany
+copyright: Copyright (c) 2026 OpenCompany contributors
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+directories:
+  output: release
+  buildResources: build
+
+asar: true
+files:
+  - out/**
+  - package.json
+
+extraResources:
+  - from: stage/app-root/
+    to: app-root/
+  - from: stage/runtime/${os}-${arch}/
+    to: runtime/
+  - from: ../LICENSE
+    to: licenses/OpenCompany-LICENSE
+  - from: stage/runtime/${os}-${arch}/node/LICENSE
+    to: licenses/Node-LICENSE
+  - from: stage/runtime/${os}-${arch}/python/LICENSE.txt
+    to: licenses/Python-LICENSE.txt
+
+publish:
+  provider: github
+  owner: zeenie-ai
+  repo: OpenCompany
+  releaseType: draft
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  shortcutName: OpenCompany
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip # required by electron-updater (Squirrel.Mac reads zips, not dmgs)
+      arch: [arm64, x64]
+  icon: build/icon.png
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  notarize: false
+  darkModeSupport: true
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Office
+  maintainer: OpenCompany contributors
+  synopsis: Agent-first workflow automation, running locally
+  description: OpenCompany desktop app. Bundles uv, Python and Node; provisions the backend on first launch.
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
