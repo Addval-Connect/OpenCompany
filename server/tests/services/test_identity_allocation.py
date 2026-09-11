@@ -43,8 +43,8 @@ def test_node_ids_are_plugin_derived_repeatable_and_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_allocators_are_atomic_and_execution_ids_are_workflow_scoped():
-    path = Path.cwd() / f".identity-{uuid.uuid4().hex}.db"
+async def test_allocators_are_atomic_and_execution_ids_are_workflow_scoped(tmp_path: Path):
+    path = tmp_path / f"identity-{uuid.uuid4().hex}.db"
     database = _load_database(path)
     await database.startup()
     try:
