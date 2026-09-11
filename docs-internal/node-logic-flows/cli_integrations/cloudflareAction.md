@@ -163,7 +163,8 @@ flowchart TD
   session created by `cf auth login` lives in cf's own user-level config and
   is never read by OpenCompany; the modal badge is a synthetic `cli-managed`
   marker OAuth row written by `_handlers.py`.
-- **Services**: the `cf` CLI (Node >= 22, `npm` on PATH for the install);
+- **Services**: the `cf` CLI (declares `engines.node >= 22`, above OpenCompany's
+  18+ floor — the only node with that requirement; `npm` on PATH for the install);
   Cloudflare's dashboard OAuth for login (cf opens the browser itself and
   listens on a fixed loopback port it owns - see `_handlers.py` for the
   single-flight guard and the never-kill rule).

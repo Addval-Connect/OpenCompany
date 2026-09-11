@@ -155,7 +155,7 @@ code or doc should carry the numerals.
 
 | Dependency | Version | Install |
 |------------|---------|---------|
-| Node.js | 22+ | https://nodejs.org/ |
+| Node.js | 18+ (22 LTS recommended; CI and the desktop bundle use 22; only the Cloudflare node's `cf` CLI needs 22+) | https://nodejs.org/ |
 | Python | 3.12+ (CLI); server venv accepts 3.11–3.12 | https://python.org/ |
 | uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | bun | 1.4.x | official installer (https://bun.sh); root `packageManager` pin read by `oven-sh/setup-bun` in CI |

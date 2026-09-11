@@ -14,7 +14,7 @@ Settings are the ones validated on a live t3.micro in September 2026:
 | Credit mode | `standard` | Caps compute at the hourly rate under continuous CPU load. |
 | Root disk | 10 GiB gp3, deleted with the instance | A fresh install uses ~4.5 GiB. |
 | Image | Ubuntu 24.04 LTS (Canonical) | Python 3.12 inside the server's `<3.13` pin. |
-| Node | current LTS from NodeSource when none is present; an existing 18+ is kept | The published package may still require 22. |
+| Node | current LTS from NodeSource when none is present; an existing 18+ is kept | The published package runs on Node 18+; only the Cloudflare node's `cf` CLI needs 22+. |
 | Install | `install.sh` as `ubuntu`, no sudo | Root installs leave the venvs unusable by the login user (errors.md #16). |
 | Runtime | `company serve` under systemd as `ubuntu` on port 5678 | The server rejects ports below 1024; 80/443 stay free for a TLS front door. |
 | Security group | 22, 80, 443 and the app port from `allow_cidr` | Same shape as the gcp module. |

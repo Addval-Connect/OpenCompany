@@ -19,8 +19,10 @@ The dev workspace runs on **bun** (migrated from pnpm@9.15.0, 2026-08; pinned
 via `"packageManager": "bun@1.4.0"` — CI's `oven-sh/setup-bun` reads that pin).
 Facts that are load-bearing, each verified during the migration:
 
-- **Scope**: bun installs the workspace and runs scripts; **Node 22 stays the
-  runtime** (vite/vitest/eslint/the sidecar run on node via shebang — never
+- **Scope**: bun installs the workspace and runs scripts; **Node stays the
+  runtime** — the floor is Node 18+ (`engines.node`, `bin/cli.js`, the
+  installers); CI and the desktop bundle happen to use 22 LTS
+  (vite/vitest/eslint/the sidecar run on node via shebang — never
   pass `--bun`). Everything npm-facing is deliberately untouched: end-user
   `npm install -g @zeenie-ai/opencompany`, the backend's
   `npm install --prefix <DATA_DIR>/packages/` shared tree, the sidecar's

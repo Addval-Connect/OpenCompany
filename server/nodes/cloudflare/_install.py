@@ -19,8 +19,10 @@ terminal is visible to this pinned binary too.
 
 Pin ``_NPM_SPEC`` when bumping and re-verify every wrapped command via
 ``cf <cmd> --help-full`` (whatsapp precedent — ``@latest`` makes cold
-installs non-reproducible). cf requires Node >= 22, which is already
-OpenCompany's engines floor.
+installs non-reproducible). cf declares ``engines.node >= 22``, which is
+ABOVE OpenCompany's own floor of Node 18+ — so this plugin is the one place
+that needs a newer Node than the rest of the app, and its error text says
+so instead of implying the app requires 22.
 """
 
 from __future__ import annotations
@@ -68,7 +70,10 @@ def _npm_install() -> Path:
 
     npm_cmd = shutil.which("npm")
     if not npm_cmd:
-        raise RuntimeError("npm not on PATH — install Node.js 22+ (the cf CLI ships via npm)")
+        raise RuntimeError(
+            "npm not on PATH — the cf CLI ships via npm and needs Node.js 22+ "
+            "(OpenCompany itself runs on Node 18+; only this node needs 22)"
+        )
 
     logger.info("[Cloudflare] installing %s into shared tree %s", _NPM_SPEC, root)
     root.mkdir(parents=True, exist_ok=True)

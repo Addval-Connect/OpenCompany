@@ -12,7 +12,8 @@ runs:
   steps:
     # Reads the bun version from the root package.json "packageManager" pin.
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-    # Node 22 stays the runtime (vite, vitest, eslint, the sidecar run on
+    # Node stays the runtime; CI builds on 22 LTS while the published
+    # package's floor is 18+ (vite, vitest, eslint, the sidecar run on
     # node via shebang; bun is package manager + script runner only).
     - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:

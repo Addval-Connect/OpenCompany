@@ -13,7 +13,7 @@ grant** that makes the optional API token the only path to analytics.
 |---|---|
 | Node type | `cloudflareAction` (palette group `deployment`, dual-purpose AI tool `cloudflare`) |
 | Operations | `whoami` / `zones_list` / `dns_records_list` / `dns_record_create` / `dns_record_delete` / `graphql_query` / `custom` |
-| CLI pin | `cf@0.2.0` (`_NPM_SPEC` in `_install.py`), npm-installed into the shared `packages_dir()` tree, Node >= 22 |
+| CLI pin | `cf@0.2.0` (`_NPM_SPEC` in `_install.py`), npm-installed into the shared `packages_dir()` tree; cf declares `engines.node >= 22`, above OpenCompany's 18+ floor (this is the only node that needs 22) |
 | Auth | Dual-path: cf-owned OAuth login OR optional canonical `apiKey` field (stored under the provider id `cloudflare`) -> `CLOUDFLARE_API_TOKEN` env |
 | Task queue | `TaskQueue.REST_API` |
 | Output | `ui_hints = {"outputMode": "terminal"}`; `_shape` contract (parsed JSON -> `result`, text -> `stdout`, never both) + NDJSON recovery |
