@@ -1,7 +1,9 @@
 # `server/nodes/` — plugin cookbook
 
-**One file = one node.** Drop a Python file in the right subfolder and
-it auto-registers at import time. No other code needs to change.
+**One plugin = one folder** (`server/nodes/<group>/<name>/__init__.py`),
+or a single `.py` file inside a domain folder when the plugin ships no
+icon/meta of its own. Both auto-register at import time; no other code
+needs to change.
 
 Full reference: [docs-internal/plugin_system.md](../../docs-internal/plugin_system.md).
 
@@ -10,7 +12,7 @@ Full reference: [docs-internal/plugin_system.md](../../docs-internal/plugin_syst
 ## Five-minute recipe
 
 ```python
-# server/nodes/search/acme_search.py
+# server/nodes/search/acme_search/__init__.py
 from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Literal, Optional
 
@@ -19,8 +21,9 @@ from services.plugin import (
 )
 
 
-# 1. Credential — inline here (single-use) or move to
-#    server/nodes/search/_credentials.py if 2+ plugins will share it.
+# 1. Credential — inline here (single-use) or create a
+#    server/nodes/search/_credentials.py (the search folder does not
+#    ship one today) if 2+ plugins will share it.
 class AcmeCredential(ApiKeyCredential):
     id = "acme"
     display_name = "Acme Search"
@@ -177,9 +180,9 @@ these first before writing new code:
 | `google/` | `_base.build_google_service` / `track_google_usage` | 7 Google plugins (OAuth + API) |
 | `google/` | `_gmail.fetch_email_details` / `mark_email_as_read` | gmail + gmail_receive |
 | `twitter/` | `_base.call_with_retry` / `format_tweet` / `sync_search_recent` | 4 twitter plugins (XDK + refresh) |
-| `whatsapp/` | `_base.*` | whatsappSend / whatsappDb (RPC dispatch via `services/whatsapp_service.py`) |
+| `whatsapp/` | `_base.*` | whatsappSend / whatsappDb (RPC dispatch via `nodes/whatsapp/_service.py` — `RPCClient` + `whatsapp_rpc_call`) |
 | `social/` | `_base.*` | socialReceive / socialSend |
-| `proxy/` | `proxy_config.execute_proxy_config` | 10-operation matrix; called by both `ProxyConfigNode.dispatch` and `tools.py`'s AI-tool branch |
+| `proxy/` | `proxy_config/__init__.py::execute_proxy_config` | 10-operation matrix; called by both `ProxyConfigNode.dispatch` and `tools.py`'s AI-tool branch |
 
 Cross-domain infrastructure lives in `services/plugin/` (e.g.
 `edge_walker.py` for agent connection discovery, `routing.py` for
@@ -194,13 +197,13 @@ Credentials live **in each node folder's `_credentials.py`** — same
 the sibling file via relative path:
 
 ```python
-# inside server/nodes/google/gmail.py
+# inside server/nodes/google/gmail/__init__.py
 from ._credentials import GoogleCredential               # shared with 6 siblings
 
-# inside server/nodes/model/openai_chat_model.py
+# inside server/nodes/model/openai_chat_model/__init__.py
 from ._credentials import OpenAICredential               # one of 10 cloud LLM creds
 
-# inside server/nodes/twitter/twitter_send.py
+# inside server/nodes/twitter/twitter_send/__init__.py
 from ._credentials import TwitterCredential              # shared with 3 siblings
 ```
 
@@ -216,7 +219,7 @@ from ._credentials import TwitterCredential              # shared with 3 sibling
 | `nodes/search/` | `BraveSearch / Serper / Perplexity` inlined in each plugin file | single-use per plugin |
 
 Declare inline only when genuinely single-use (see
-`nodes/search/brave_search.py` for the inline pattern). Declare in
+`nodes/search/brave_search/__init__.py` for the inline pattern). Declare in
 `_credentials.py` when the folder has 2+ plugins that share auth.
 
 Auto-discovery is automatic — when the nodes walker imports a plugin
@@ -327,7 +330,7 @@ Four ideas worth stealing wholesale:
 See [Multi-credential nodes](../../docs-internal/plugin_system.md#multi-credential-nodes)
 for the `ctx.connection(id)` contract and the `routing=` trap that comes with it.
 
-### Seven generic registries to plug into
+### Generic registries to plug into (18 at time of writing; `grep -rn '^def register_' server/services server/core`)
 
 Telegram's `__init__.py` is the canonical wiring example. Adding any
 of these concerns to your plugin is one `register_*` call from your

@@ -687,37 +687,6 @@ If the download fails (no internet, GitHub down), the WS
 }
 ```
 
-## Installation
-
-The Stripe CLI must be installed and on `PATH`:
-
-```bash
-# macOS
-brew install stripe/stripe-cli/stripe
-
-# Windows (Scoop)
-scoop install stripe
-
-# Linux (apt)
-echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" \
-  | sudo tee /etc/apt/sources.list.d/stripe.list
-sudo apt update && sudo apt install stripe
-
-# Direct binary
-# https://github.com/stripe/stripe-cli/releases
-```
-
-`StripeListenSource.start()` resolves the binary via
-`shutil.which("stripe")`. If missing, the WS `stripe_connect`
-response is:
-
-```json
-{
-  "success": false,
-  "error": "'stripe' not on PATH. Install: https://stripe.com/docs/stripe-cli#install"
-}
-```
-
 ## Configuration
 
 No JSON config file. Everything plugin-configurable lives on the

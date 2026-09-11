@@ -104,7 +104,7 @@ branches in shared code; this is how we avoid needing any.
 ### D5 — First multi-credential node in the repo
 
 `credentials = (OpenAICredential, ElevenLabsCredential, …)` with `ctx.connection(params.provider)`.
-Already supported: `_make_connection_factory` ([`base.py:1134`](../server/services/plugin/base.py))
+Already supported: `_make_connection_factory` ([`base.py:_make_connection_factory`](../server/services/plugin/base.py))
 builds a dict over **all** declared credentials and raises only for undeclared ids. No node uses
 this today.
 

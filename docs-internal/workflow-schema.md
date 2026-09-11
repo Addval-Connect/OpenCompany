@@ -68,7 +68,7 @@ A workflow JSON document contains:
 
 ## Supported Node Types
 
-> Authoritative count = the plugin registry: one self-contained folder (or file) per node under `server/nodes/<group>/` — ~118 node types today; live total via `pytest --collect-only`. (A bare `server/nodes/**/__init__.py` glob overcounts — it also matches the 26 group packages.) The breakdown below is illustrative and grouped by category; do not rely on a hand-maintained total.
+> Authoritative count = the plugin registry: one self-contained folder (or file) per node under `server/nodes/<group>/` — 148 node types at time of writing (live total: `len(services.node_registry.NODE_METADATA)` after `import nodes`, or `uv run pytest --collect-only`); 34 palette groups registered in `server/nodes/groups.py`. A bare `server/nodes/**/__init__.py` glob overcounts because it also matches the group packages. The breakdown below is illustrative and grouped by category; do not rely on a hand-maintained total.
 
 > The canonical list of nodes lives in the backend plugin tree at `server/nodes/<category>/<node>/__init__.py`; this section is a human-readable index.
 
@@ -120,13 +120,17 @@ Pre-configured agents for specific domains. All inherit `AI_AGENT_PROPERTIES`. S
 - `rlm_agent` - Recursive Language Model (REPL-based, dedicated handler)
 - `claude_code_agent` - Claude Code SDK integration
 
-### AI Tool Nodes (4 dedicated)
+### AI Tool Nodes (9 dedicated)
 Connect to AI Agent's `input-tools` handle:
 - `masterSkill` - Aggregates multiple skills with enable/disable toggles
 - `calculatorTool` - Math operations
 - `currentTimeTool` - Current date/time with timezone
 - `duckduckgoSearch` - DuckDuckGo web search (free, no API key)
 - `taskManager` - Task creation and tracking tool
+- `canvas` - Pushed-content display board (paths / URLs / markdown notes)
+- `dataSource` - Raw local data over workspace paths and operator-approved mounts
+- `writeTodos` - Structured task-list planning with checklist rendering
+- `agentBuilder` - Spawns tools, agents, and skills onto the canvas mid-execution
 
 ### Search Nodes (3 dual-purpose)
 Work as both workflow nodes and AI tools. Defined in `searchNodes.ts`:
@@ -247,7 +251,7 @@ RAG pipeline nodes for document ingestion, processing, and vector storage:
 
 ```json
 {
-  "id": "workflow_1234567890",
+  "id": "1234567890",
   "name": "AI Agent with Start Node",
   "version": "1.0.0",
   "createdAt": "2025-01-06T12:00:00.000Z",
@@ -291,7 +295,7 @@ RAG pipeline nodes for document ingestion, processing, and vector storage:
 
 ```json
 {
-  "id": "workflow_1234567891",
+  "id": "1234567891",
   "name": "AI Agent with Memory",
   "version": "1.0.0",
   "createdAt": "2025-01-06T12:00:00.000Z",
