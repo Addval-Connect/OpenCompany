@@ -93,7 +93,7 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 
 | Provider | Key Models | Context | Max Output | Thinking | Temp Range |
 |----------|-----------|---------|-----------|----------|------------|
-| **OpenAI** | GPT-5.6 Sol/Terra/Luna (+ `-pro`; default `gpt-5.6-sol`), GPT-5.5/5.4 | 1.05M | 128K | effort | omitted for reasoning models |
+| **OpenAI** | GPT-6 Astra (+ `-pro`), GPT-5.6 Sol/Terra/Luna (+ `-pro`; default `gpt-5.6-sol`), GPT-5.5/5.4 | 1.05M | 128K | effort | omitted for reasoning models |
 | **OpenAI** | GPT-4.1 | ~1.05M | 32K | none | 0-2 |
 | **Anthropic** | Claude Opus 5 (default `claude-opus-5`), Fable 5.1 / 5, Sonnet 5 | 1M | 128K | adaptive | omitted (`temperature` / `top_p` / `top_k` rejected — `sampling_params_removed`) |
 | **Anthropic** | Claude Opus 4.8/4.7 | 1M | 128K | adaptive | omitted (`sampling_params_removed`) |
@@ -101,7 +101,7 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 | **Anthropic** | Claude Haiku 4.5 | 200K | 64K | budget | 0-1 |
 | **Google** | Gemini 3.8-flash (default), 3.7/3.6/3.5-flash, 3.5-flash-lite, 3.1-pro-preview/flash-lite, 3-flash-preview, 2.5-pro/flash/flash-lite | 1M | 64K | budget (`thinking_level` on 3.x when set explicitly) | 0-2 |
 | **xAI** | Grok 4.20/4.20-multi-agent, 4.5, 4.3, 3 | 131K-2M | 131K | model/provider dependent | 0-2 |
-| **DeepSeek** | deepseek-v4-flash, deepseek-v4-pro (deepseek-chat/reasoner legacy) | 1M | 64K | thinking modes | 0-2 |
+| **DeepSeek** | deepseek-v4-flash (default), deepseek-v4.1-flash, deepseek-v4-pro (deepseek-chat/reasoner legacy) | 1M | 64K | thinking modes | 0-2 |
 | **Kimi** | kimi-k3 (default), kimi-k2.6, kimi-k2.5, kimi-k2.7-code | 1M (K3); 256K (K2) | 131K (K3); 32K/96K (K2) | K2 provider default explicitly disabled unless requested | K2 fixed 0.6; K3 0-1 |
 | **Mistral** | mistral-large/medium/small-latest, codestral-latest | 256K | 131K | none | 0-1.5 |
 | **Groq** | GPT-OSS-120b/20b, Qwen3-32b, legacy Llama 3.x tiers | 131K | 32K-131K | effort (GPT-OSS), format (Qwen3) | 0-2 |

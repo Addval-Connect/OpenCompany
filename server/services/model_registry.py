@@ -42,7 +42,7 @@ THINKING_PATTERNS: List[Tuple[str, str, str]] = [
     ("anthropic", r"claude-(opus|sonnet|haiku)-(4|5|6)", "budget"),
     ("anthropic", r"claude-3[\.\-]5", "budget"),
     ("openai", r"^(o1|o3|o4)", "effort"),
-    ("openai", r"^gpt-5", "effort"),  # GPT-5 hybrid reasoning
+    ("openai", r"^gpt-(5|6)", "effort"),  # GPT-5 / GPT-6 hybrid reasoning
     ("gemini", r"gemini-(2\.5|3)", "budget"),
     ("groq", r"qwen3", "format"),
     ("cerebras", r"qwen", "budget"),
