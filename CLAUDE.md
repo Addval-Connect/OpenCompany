@@ -16,9 +16,9 @@ This is a React Flow-based workflow automation platform implementing n8n-inspire
 | **[Theme System](./docs-internal/theme_system.md)** | 12-way visual theme system — 2 base (light, dark) + 5 utopian (renaissance, greek, edo, steampunk, atomic) + 5 dystopian (cyber, wasteland, rot, plague, surveillance) — driven by `<html data-theme>` + per-theme CSS files in `client/src/themes/`. Token taxonomy (surface / fg / border / accent / typography / motion) in **hex + `color-mix()`**; `@theme inline` bridge maps `--color-X: var(--X)` (no `hsl()` wrapper); per-theme files own the colour hex, base.css owns the shared `--tint-*` alpha scale; action role tokens (incl. `-ink` readable text), **per-theme `--code-*` syntax tokens** (tier 6 — the code editor, console/output JSON viewers, and chat code blocks paint in each theme's own palette: keyword→trigger, string→success, number→agent, function→model, on an adaptive dark/light code surface; replaced the global dracula `--prism-*` block + dead `getPrismTokenCSS`; the `OutputPanel` JSON viewer reads the same vars), per-theme `--pulse-keyframe` animation system + `.opencompany-*` helpers in `animations.css`, decorative-layer wrappers (`.app-frame` / `.canvas-host` / `.modal-frame`), per-component decorative ornaments (panel textures + canvas decorations + node pseudo-element overlays + theme-specific keyframes), **canvas-node visual contract via `--node-color` CSS custom property** (no inline `background` / `border` on node components — base.css + per-theme CSS owns visuals; `NodeStyle` helper type at [types/NodeTypes.ts](./client/src/types/NodeTypes.ts) makes the inline custom-prop typecheck-clean), **`--node-pulse-color` separate from `--node-color`** so executing-node glow uses each theme's highest-contrast accent regardless of plugin accent (Cyber neon cyan, Surveillance REC red, Renaissance ultramarine, etc.), **`data-page-hidden` animation pause** (toggled by Dashboard's `visibilitychange` listener; base.css declares `html[data-page-hidden] *, *::before, *::after { animation-play-state: paused !important }` to prevent compositor stall on tab return), **per-theme icon glyph system** (290 inline SVG glyph strings across 29 keys × 10 themes via [themedGlyphs.ts](./client/src/assets/icons/themedGlyphs.ts) + theme-aware [NodeIcon.tsx](./client/src/assets/icons/NodeIcon.tsx)), **per-theme canvas-grid + custom cursors** via `--canvas-grid` / `--cursor-default` slots, **decorative HTML primitives** (`<SvgFilterDefs>` mounting `#ink-blot` / `#noise` / `#crt` filter IDs at app root, `<DropCap>` wrapper for Renaissance ornament rule), **parameter panel migrated to Tailwind tokens** (no `useAppTheme()` reads; section headers carry the display-typography triplet; raw `<Button>` swapped to `<ActionButton intent>`), **per-theme scrollbar webkit rules** in all 12 themes, 9-event WebAudio sound system (10 packs via `--sound-pack` token + `useSound()` hook + global hover delegate + sonner toast monkey-patch + `withSound()` HOC + `Sounds.unlock()` gesture-unlock for AudioContext autoplay-policy compliance), `@media (prefers-reduced-motion: reduce)` accessibility, 30 ms throttle on `type` / `hover`, migration recipe, anti-patterns. Read this before adding a new theme, migrating a component to the new contract, or adding a canvas-node component. |
 | **[Design System Bundle](./docs-internal/design-system/IMPLEMENTATION.md)** | Canonical, vendored design-system reference (extracted from this repo; see its `IMPLEMENTATION.md` for the contract). Tokens are **hex + `color-mix()`** (`tokens/{colors,typography,spacing,motion,fonts,base}.css`) — the format the live codebase standardizes on. Includes 34 reference components (`components/`, inline-style reference only — recreate in Tailwind/shadcn idioms), full-app UI kit (`ui_kits/opencompany/index.html`), 12-theme docs (`guidelines/THEMES.md`), **the merged handoff brief (`HANDOFF.md` — glow-ladder traps, step-edge contract, toolbar layout traps, canvas-layer asymmetries, plus the recorded product amendments)**, and **the panel×theme fidelity target (`reference-mockup/Panel Theme Matrix.dc.html` — 17 panels × 12 themes, open in a browser)**. `reference/themes/` no longer vendors CSS snapshots — it points at the authoritative [client/src/themes/](./client/src/themes/). Copy token values verbatim; do not re-derive by eye. Pairs with [Theme System](./docs-internal/theme_system.md). |
 | **[Schema Source of Truth RFC](./docs-internal/ARCHIVE/schema_source_of_truth_rfc.md)** | *Archived — shipped.* Backend is SSOT for node schemas, visual metadata, handlers, palette metadata, icons; `VITE_NODESPEC_BACKEND` defaults on and the frontend node definitions are gone. Plugin pattern: one `BaseNode` subclass in `server/nodes/<group>/<plugin>/__init__.py`. Wire format: `asset:<key>` / `<lib>:<brand>` / URL / emoji. Endpoint: `/api/schemas/nodes/{type}/spec.json`. Current reference: [Plugin System](./docs-internal/plugin_system.md). |
-| **[Plugin System (Wave 11)](./docs-internal/plugin_system.md)** | Class-based plugin-first architecture. `BaseNode` / `ActionNode` / `TriggerNode` / `ToolNode` + `@Operation` decorator. Pydantic `Params`/`Output`. Declarative `Routing` DSL + `Connection` facade (Nango pattern; `request()` supports `json` / `data` / `files` — the last for multipart uploads, threaded through the auth-retry rebuild). `Credential` subclasses live in each node folder's `_credentials.py` (or inline for single-use); live count via `len(services.plugin.credential.CREDENTIAL_REGISTRY)` — 34 at time of writing, do not hand-maintain. `TaskQueue` constants route to Temporal worker pools. Plugins live across 9 queues (live plugin count via `len(services.node_registry.NODE_METADATA)`; a bare `__init__.py` glob overcounts by also matching group packages); handler bodies fully inlined (`services/handlers/` shrank 12.8K → 1.1K LOC across 16 → 4 files; only cross-cutting orchestration remains: `tools.py` AI-tool dispatch + agent delegation, `triggers.py` generic trigger-node handler, `todo.py` writeTodos shim — `google_auth.py` was retired into `nodes/google/_auth_helper.py`). **Wave 11.H added "self-contained plugin folders"** — generic registries (18 at time of writing: `ws_handler_registry.{register_ws_handlers,register_router,register_option_loader,register_oauth_callback_path}`, `event_waiter.{register_filter_builder,register_trigger_precheck}`, `status_broadcaster.register_service_refresh`, `node_output_schemas.register_output_schema`, `edge_walker.{register_agent_context_builder,register_master_skill_expander}`, `register_webhook_source`, `register_canary_trigger_type`, `register_poll_coroutine_factory`, `register_social_send_handler`, `register_shutdown_hook`, `register_service_factory`, `register_log_source_tag`, `register_conversation_listener`; live list via `grep -rn '^def register_' server/services server/core`) so rich plugins like telegram own their entire surface area without core-services edits. |
+| **[Plugin System (Wave 11)](./docs-internal/plugin_system.md)** | Class-based plugin-first architecture. `BaseNode` / `ActionNode` / `TriggerNode` / `ToolNode` + `@Operation` decorator. Pydantic `Params`/`Output`. Declarative `Routing` DSL + `Connection` facade (Nango pattern; `request()` supports `json` / `data` / `files` — the last for multipart uploads, threaded through the auth-retry rebuild). `Credential` subclasses live in each node folder's `_credentials.py` (or inline for single-use); live count via `len(services.plugin.credential.CREDENTIAL_REGISTRY)` — 35 at time of writing, do not hand-maintain. `TaskQueue` constants route to Temporal worker pools. Plugins live across 9 queues (live plugin count via `len(services.node_registry.NODE_METADATA)`; a bare `__init__.py` glob overcounts by also matching group packages); handler bodies fully inlined (`services/handlers/` shrank 12.8K → 1.1K LOC across 16 → 4 files; only cross-cutting orchestration remains: `tools.py` AI-tool dispatch + agent delegation, `triggers.py` generic trigger-node handler, `todo.py` writeTodos shim — `google_auth.py` was retired into `nodes/google/_auth_helper.py`). **Wave 11.H added "self-contained plugin folders"** — generic registries (live list via `grep -rn '^def register_' server/services server/core`; the plugin-facing ones are `ws_handler_registry.{register_ws_handlers,register_router,register_option_loader,register_oauth_callback_path}`, `event_waiter.{register_filter_builder,register_trigger_precheck}`, `status_broadcaster.register_service_refresh`, `node_output_schemas.register_output_schema`, `edge_walker.{register_agent_context_builder,register_master_skill_expander}`, `register_webhook_source`, `register_canary_trigger_type`, `register_poll_coroutine_factory`, `register_social_send_handler`, `register_shutdown_hook`, `register_service_factory`, `register_log_source_tag`, `register_conversation_listener`) so rich plugins like telegram own their entire surface area without core-services edits. |
 | **[Nodes Cookbook](./server/nodes/README.md)** | 5-minute recipe + folder map + shared helpers (`_base.py` / `_inline.py` per domain) + shared credentials + **canonical folder-per-plugin shape (telegram is the reference implementation)** + contract invariants + common pitfalls. Lives next to the plugin files. |
-| **[Node Creation Guide](./docs-internal/node_creation.md)** | Canonical plugin recipe — one self-contained folder per plugin under `server/nodes/<group>/<plugin>/`, rooted at `__init__.py`. Multi-file split (`_service.py` / `_handlers.py` / etc.) when the plugin owns long-lived state. Zero frontend edits, zero core-services edits. Auto-registers via `BaseNode.__init_subclass__` + the generic `register_*` hooks (18 at time of writing; see the Plugin System row). Covers tool nodes, dual-purpose nodes (workflow + AI tool), and specialized agents as variations of the same recipe. |
+| **[Node Creation Guide](./docs-internal/node_creation.md)** | Canonical plugin recipe — one self-contained folder per plugin under `server/nodes/<group>/<plugin>/`, rooted at `__init__.py`. Multi-file split (`_service.py` / `_handlers.py` / etc.) when the plugin owns long-lived state. Zero frontend edits, zero core-services edits. Auto-registers via `BaseNode.__init_subclass__` + the generic `register_*` hooks (see the Plugin System row). Covers tool nodes, dual-purpose nodes (workflow + AI tool), and specialized agents as variations of the same recipe. |
 | **[Agent Architecture](./docs-internal/agent_architecture.md)** | How AI Agent and Chat Agent discover skills/tools, inject them into LLM prompts, and execute through the provider-neutral `run_native_agent_loop` |
 | **[Agent Delegation](./docs-internal/agent_delegation.md)** | How memory, parameters, and execution context flow when one AI agent delegates work to another agent connected as a tool |
 | **[Agent Teams](./docs-internal/agent_teams.md)** | Claude SDK Agent Teams pattern - AI Employee and Orchestrator nodes with input-teammates handle for multi-agent coordination |
@@ -91,7 +91,7 @@ Every plugin is a self-contained folder under `server/nodes/<group>/<plugin>/` r
 
 **Where to look:**
 - [server/nodes/README.md](./server/nodes/README.md) — 5-minute walkthrough with the canonical folder template
-- [docs-internal/plugin_system.md → Self-contained plugin folders](./docs-internal/plugin_system.md#self-contained-plugin-folders) — full reference, plus the **generic registries** plugins self-wire into (18 at time of writing; `grep -rn '^def register_' server/services server/core` for the live list)
+- [docs-internal/plugin_system.md → Self-contained plugin folders](./docs-internal/plugin_system.md#self-contained-plugin-folders) — full reference, plus the **generic registries** plugins self-wire into (`grep -rn '^def register_' server/services server/core` for the live list)
 - [docs-internal/node_creation.md](./docs-internal/node_creation.md) — decision tree for action / trigger / tool / dual-purpose / specialized-agent nodes
 - [server/nodes/telegram/](./server/nodes/telegram/) — reference implementation of the multi-file split (`_service.py` / `_handlers.py` / `_filters.py` / `_refresh.py` / `_credentials.py` / `_events.py` / two node files)
 
@@ -122,6 +122,8 @@ Every plugin is a self-contained folder under `server/nodes/<group>/<plugin>/` r
 ### Backend Service Architecture (n8n-inspired)
 The workflow backend follows modular architecture patterns from n8n, Temporal, and Conductor:
 
+(abbreviated: only the modules discussed in this file; see the directory for the full set)
+
 ```
 server/services/
 ├── workflow.py              # Facade (~840 lines) - thin coordinator
@@ -132,9 +134,6 @@ server/services/
 ├── pricing.py               # LLM and API cost calculation (loads config/pricing.json)
 ├── markdown_formatter.py    # GFM markdown to platform-specific formatting (Telegram HTML, WhatsApp, plain)
 ├── ws_handler_registry.py   # Plugin-owned WS commands self-register here (Wave 11.H)
-├── browser_service.py       # BrowserService singleton wrapping agent-browser CLI
-├── himalaya_service.py      # HimalayaService CLI wrapper for IMAP/SMTP (any email provider)
-├── email_service.py         # EmailService orchestrator (credential resolution, provider presets)
 ├── todo_service.py          # TodoService singleton for writeTodos tool (JSON per-session state)
 ├── media/                   # Media transport — vendor-neutral, kind-agnostic (see media_transport.md)
 │   ├── refs.py              # FileRef (base; FileKind = file|audio|image|video|document)
@@ -161,7 +160,7 @@ server/services/
 │                            #  nodes/agent/claude_code_agent/_oauth.py — CLAUDE_CONFIG_DIR=<DATA_DIR>/claude/)
 ├── tracked_http.py          # HTTPX event hooks for automatic API cost tracking
 ├── handlers/                # Cross-cutting orchestration only (Wave 11: 16 → 4 files, 12.8K → 1.1K LOC)
-│   ├── tools.py             # AI-tool dispatch + agent delegation (~821 LOC)
+│   ├── tools.py             # AI-tool dispatch + agent delegation (~1,020 LOC)
 │   ├── triggers.py          # Generic event-trigger handler
 │   ├── todo.py              # writeTodos execution shim (used by every agent)
 │   └── __init__.py          # Docstring only (google_auth.py retired into nodes/google/_auth_helper.py)
@@ -237,9 +236,8 @@ server/config/
 server/nodejs/                   # Persistent Node.js server for JS/TS execution
 ├── package.json                 # Dependencies: express, tsx
 ├── tsconfig.json                # TypeScript config (ES2024)
-├── src/
-│   └── index.ts                 # Express server (/execute, /health, /packages/*)
-└── user-packages/               # User-installed npm packages
+└── src/
+    └── index.ts                 # Express server (/execute, /health, /packages/*)
 ```
 
 ### Polyglot Server Integration (Optional)
@@ -270,10 +268,8 @@ Persistent Node.js server for JavaScript/TypeScript code execution, replacing su
 server/nodejs/
 ├── package.json              # Dependencies: express, tsx
 ├── tsconfig.json             # TypeScript config (ES2024)
-├── src/
-│   └── index.ts              # Express server with /execute, /health, /packages/*
-└── user-packages/            # User npm packages directory
-    └── package.json
+└── src/
+    └── index.ts              # Express server with /execute, /health, /packages/*
 
 server/services/
 
@@ -399,9 +395,8 @@ collapses to a ≤12-char tag via `_resolve_source_tag` in
 
 Plugins that genuinely want a different label from their folder name
 call `register_log_source_tag(prefix, tag)` from their package
-`__init__.py` — same self-registration pattern as the five plugin
-registries (`ws_handler`, `filter_builder`, `trigger_precheck`,
-`service_refresh`, `output_schema`).
+`__init__.py` — same self-registration pattern as the other generic
+plugin registries (see the Plugin System row at the top of this file).
 
 **RotatingFileHandler** swaps in when `LOG_FILE` is set — no
 unbounded log growth.
@@ -444,7 +439,7 @@ locked by `server/tests/test_output_contract.py`.
 
 **Always use the existing design and theme systems.** Tribal styling reintroduced anywhere defeats the migration. The following rules are non-negotiable for any new or edited frontend file:
 
-1. **Compose shadcn primitives** from [client/src/components/ui/](./client/src/components/ui/) — `Button`, `Badge`, `Alert`, `AlertDialog`, `Dialog`, `DropdownMenu`, `Select`, `Popover`, `Tooltip`, `Tabs`, `Card`, `Input`, `Textarea`, `Switch`, `Checkbox`, `Slider`, `Label`, `Form`, `Collapsible`, `Accordion`, `Skeleton`, `Sonner`. **Do not hand-roll** modals, dropdowns, menus, toasts, dialogs, or buttons when a primitive exists. Add `npx shadcn@latest add <name>` if the primitive is missing.
+1. **Compose shadcn primitives** from [client/src/components/ui/](./client/src/components/ui/) — `Button`, `Badge`, `Alert`, `AlertDialog`, `Dialog`, `DropdownMenu`, `Select`, `Progress`, `Tooltip`, `Tabs`, `Card`, `Input`, `Textarea`, `Switch`, `Checkbox`, `Slider`, `Label`, `Form`, `Collapsible`, `Accordion`, `Skeleton`, `Sonner`. **Do not hand-roll** modals, dropdowns, menus, toasts, dialogs, or buttons when a primitive exists. Add `npx shadcn@latest add <name>` if the primitive is missing.
 2. **Action buttons → `<ActionButton intent="...">`** ([client/src/components/ui/action-button.tsx](./client/src/components/ui/action-button.tsx)). The `intent` prop is a semantic role (`run | stop | save | config | secret | tools`), never a palette color. Never re-introduce the `actionButtonStyle()` / hand-built colored buttons.
 3. **Style with Tailwind classes**, not `style={{...}}`. Inline `style` is allowed only for genuinely dynamic values (React Flow `<Handle>` positioning, runtime-computed coordinates, dynamic per-definition `nodeColor` on canvas nodes).
 4. **Use the token tier table** in [docs-internal/frontend_architecture.md](./docs-internal/frontend_architecture.md#tokens--theming):
@@ -481,14 +476,14 @@ Do not invent kebab-case or PascalCase variants for any of the rows above. The e
 The cache system follows n8n's pattern with automatic fallback:
 
 ```
-Production (Docker):  Redis → SQLite → Memory
-Local Development:    SQLite → Memory (Redis disabled)
+Opt-in (REDIS_ENABLED=true): Redis → SQLite → Memory
+Default (shipped):           SQLite → Memory
 ```
 
 **Configuration** (`server/.env`):
 ```bash
 REDIS_ENABLED=false           # Local dev: use SQLite
-REDIS_URL=redis://redis:6379  # Production: Docker Redis
+REDIS_URL=redis://redis:6379  # Read only when REDIS_ENABLED=true; the `redis:` host is from the retired Compose topology (see deployment_legacy.md)
 ```
 
 **CacheService** (`server/core/cache.py`):
@@ -518,8 +513,8 @@ class CacheEntry(SQLModel, table=True):
     __tablename__ = "cache_entries"
     key: str = Field(primary_key=True)
     value: str
-    expires_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[float] = Field(default=None, index=True)  # Unix timestamp
+    created_at: float = Field(default_factory=time.time)
 ```
 
 **Key Methods** (`server/core/database.py`):
@@ -565,7 +560,7 @@ The frontend uses a layered cache + slice-subscription model so cold refreshes a
 
 ### Catalogue invalidation is debounced
 - `invalidateCatalogue(queryClient)` in [`hooks/useCatalogueQuery.ts`](./client/src/hooks/useCatalogueQuery.ts) wraps `queryClient.invalidateQueries({ queryKey: CATALOGUE_QUERY_KEY })` with a 300 ms trailing-edge debounce via a single shared module-scope timer. **Always go through it** from broadcast handlers — direct `invalidateQueries` calls were the old pattern.
-- All 8 broadcast handlers in `WebSocketContext.tsx` (`api_key_status`, `whatsapp_status`, `twitter_oauth_complete`, `google_oauth_complete`, `google_status`, `telegram_status`, `credential_catalogue_updated`, `initial_status`) now route through it. An OAuth burst or multi-service reconnect collapses to one refetch instead of N back-to-back round-trips.
+- The broadcast handlers in `WebSocketContext.tsx` that touch the catalogue (`initial_status` / `full_status`, `api_key_status`, `credential_catalogue_updated`, `plugin_connection_status`, `twitter_oauth_complete`, `google_oauth_complete`, `google_status`) all route through it. An OAuth burst or multi-service reconnect collapses to one refetch instead of N back-to-back round-trips.
 
 ### React.memo every canvas node component ([client/src/components/nodeMemoEquality.ts](./client/src/components/nodeMemoEquality.ts))
 - React Flow's documented requirement. Use the shared `nodePropsEqual` comparator -- it skips drag-state props (`xPos` / `yPos` / `dragging`) so the memo isn't defeated during drag.
@@ -609,7 +604,7 @@ authoring model.
 - `src/services/executionService.ts` - Node execution routed through the backend WebSocket layer
 
 ### Assets
-- `src/assets/icons/google/` - Official Google service SVG icons (Gmail, Calendar, Drive, Sheets, Tasks, Contacts) using n8n pattern with data URI exports
+- `src/assets/icons/index.ts` - Icon resolver (`lib:brand` / URL / emoji / `asset:<key>` dispatch); `src/assets/icons/themedGlyphs.ts` - per-theme SVG glyph registry read by `NodeIcon.tsx`. Brand marks (Google services included) are served from the backend plugin folders via `GET /api/schemas/nodes/<type>/icon`; there is no client-side `google/` icon folder
 
 ### UI Components
 - `src/components/ParameterRenderer.tsx` - Universal parameter renderer (also handles AI-specific control rendering; the former `AIParameterRenderer.tsx` was absorbed here)
@@ -626,7 +621,7 @@ AI model nodes route through `SquareNode` via `Dashboard.tsx`'s `COMPONENT_BY_KI
 ### Specialized UI
 - `src/components/maps/GoogleMapsPicker.tsx` - Interactive location picker (click / drag marker); wrapped by `maps/MapsPreviewPanel.tsx` and rendered through `parameterPanel/MapsSection.tsx` for `gmaps_create`. Uses Google's default map styling.
 - `src/components/output/OutputPanel.tsx` - Execution result display (the active renderer; the legacy `ui/OutputDisplayPanel.tsx` was deleted)
-- `src/components/ui/ComponentPalette.tsx` - Searchable component library with emoji icons and dracula-themed category colors. Categories: Workflow, Triggers, AI Agents, AI Models, AI Skills, AI Abilities, AI Tools, Google Maps, Social Media Platforms (merged WhatsApp + Social), Android, Chat, Code Executors
+- `src/components/ui/ComponentPalette.tsx` - Searchable component library with emoji icons and dracula-themed category colors. Categories come from the backend node-groups index (`server/nodes/groups.py`); the palette renders them verbatim.
 - `src/components/ui/ComponentItem.tsx` - Draggable node items with hover effects and icon rendering
 - `src/components/ui/CodeEditor.tsx` - Syntax-highlighted code editor (react-simple-code-editor + prismjs). Token colours come from the per-theme `--code-*` tokens (see [Theme System](./docs-internal/theme_system.md) tier 6) — the code editor, console/output JSON viewers, and chat code blocks all paint in the active theme's syntax palette, not a global dracula scheme. (Retired the old `--prism-*` block + dead `getPrismTokenCSS()`.)
 
@@ -819,7 +814,7 @@ See **[Scripts Reference](./docs-internal/SCRIPTS.md)** for full documentation.
 - **Drag-and-Drop**: Map outputs from connected nodes to parameters
 - **Validation**: Required field checking and type constraints
 - **Conditional Display**: Dynamic parameter visibility using displayOptions.show pattern
-  - Implemented in `MiddleSection.tsx` with `shouldShowParameter()` function
+  - Implemented by `shouldShowParameter()` in `client/src/utils/parameterVisibility.ts` (imported by `MiddleSection.tsx`)
   - Supports array-based conditions (e.g., `messageType: ['text']`)
   - Filters parameters before rendering based on other parameter values
 
@@ -846,31 +841,30 @@ Global State (useAppStore)          Node Components
 - **`client/src/store/useAppStore.ts`** - Global rename state (`renamingNodeId`, `setRenamingNodeId`)
 - **`client/src/components/ui/NodeContextMenu.tsx`** - Right-click menu with Rename, Copy, Delete
 - **`client/src/Dashboard.tsx`** - Context menu handler, F2 keyboard handler
-- **`client/src/components/SquareNode.tsx`** - Inline rename for square nodes (Android, WhatsApp)
-- **`client/src/components/TriggerNode.tsx`** - Inline rename for trigger nodes
-- **`client/src/components/StartNode.tsx`** - Inline rename with label support (was hardcoded "Start")
+- **`client/src/components/ui/EditableNodeLabel.tsx`** - the single inline-rename component; every canvas node renders it.
 
-#### Key Pattern (shared by all node components)
+#### Key Pattern (EditableNodeLabel.tsx)
 ```typescript
-// Sync with global renaming state
+// Sync with global rename state.
 useEffect(() => {
-  if (renamingNodeId === id) {
+  if (renamingNodeId === nodeId) {
     setIsRenaming(true);
-    setEditLabel(data?.label || definition?.displayName || type || '');
+    setEditLabel(label || defaultLabel);
   } else {
     setIsRenaming(false);
   }
-}, [renamingNodeId, id, data?.label, definition?.displayName, type]);
+}, [renamingNodeId, nodeId, label, defaultLabel]);
 
 // Handle save - only save if changed and non-empty
-const handleSaveRename = useCallback(() => {
+const handleSave = useCallback(() => {
   const newLabel = editLabel.trim();
-  if (newLabel && newLabel !== originalLabel) {
-    updateNodeData(id, { ...data, label: newLabel });
+  const original = label || defaultLabel;
+  if (newLabel && newLabel !== original) {
+    onLabelChange(newLabel);
   }
   setIsRenaming(false);
   setRenamingNodeId(null);
-}, [...]);
+}, [editLabel, label, defaultLabel, onLabelChange, setRenamingNodeId]);
 ```
 
 #### NodeContextMenu Features
@@ -879,7 +873,7 @@ const handleSaveRename = useCallback(() => {
 - Uses existing `onNodesDelete` for Delete
 - Keyboard navigation (Arrow keys, Enter)
 - Click outside to close
-- Dracula-themed styling
+- Tailwind semantic tokens (no palette names)
 
 ### UI State Persistence
 The application persists UI state to localStorage for a consistent user experience across sessions:
@@ -926,7 +920,7 @@ The toolbar includes a mode toggle that filters the Component Palette for differ
 
 | Mode | Description | Visible Categories |
 |------|-------------|-------------------|
-| **Normal** (default) | Simplified view for AI-focused workflows | AI Agents, AI Models, AI Skills, AI Abilities, AI Tools |
+| **Normal** (default) | Simplified view for AI-focused workflows | AI Agents, AI Models, AI Skills, AI Tools, Android, WhatsApp Business (every group whose `groups.py` `visibility` is `normal` or `all`) |
 | **Dev** | Full access to all node types | All categories |
 
 #### Implementation
@@ -968,17 +962,21 @@ When multiple chatTrigger or console nodes exist in the workflow, dropdowns appe
 
 **Implementation** (`client/src/components/ui/ConsolePanel.tsx`):
 ```typescript
-// Node type constants for filtering
-const CHAT_TRIGGER_TYPES = ['chatTrigger'];
-const CONSOLE_NODE_TYPES = ['console'];
-
-// Filter workflow nodes
+// Workflow nodes that participate in this panel -- uiHint first, type-string fallback.
 const chatTriggerNodes = useMemo(() =>
-  nodes.filter(n => CHAT_TRIGGER_TYPES.includes(n.type || '')),
+  nodes.filter(n => {
+    const def = n.type ? resolveNodeDescription(n.type) : undefined;
+    return def?.uiHints?.isChatTrigger
+      ?? (n.type ? ['chatTrigger'].includes(n.type) : false);
+  }),
   [nodes]
 );
 const consoleNodes = useMemo(() =>
-  nodes.filter(n => CONSOLE_NODE_TYPES.includes(n.type || '')),
+  nodes.filter(n => {
+    const def = n.type ? resolveNodeDescription(n.type) : undefined;
+    return def?.uiHints?.isConsoleSink
+      ?? (n.type ? ['console'].includes(n.type) : false);
+  }),
   [nodes]
 );
 
@@ -1071,7 +1069,7 @@ The workflow record carries three identity fields with strict separation:
 | `Workflow.name` | free-form display ("AI Assistant") | mutable | sidebar, parameter panel, exported JSON |
 | `Workflow.slug` | `<Sanitized_Name>_<N>` (`AI_Assistant_1`) | mutable, recomputed on rename | `~/.opencompany/workspaces/<slug>/`, Temporal workflow IDs (visible in Temporal Web UI), cron Schedule IDs, export filenames |
 
-Single source of truth: [`server/services/workflow_naming.py`](./server/services/workflow_naming.py) — `slugify_name` (via `python-slugify` for Unicode transliteration, emoji strip, case preservation, length cap), `next_available_slug(name, database, *, exclude_id=None)` (fill-gap counter; pass `exclude_id=workflow_id` on rename so the row doesn't bump itself), `new_workflow_id()` (bare hex UUID), `node_label_slug(node)` (sandbox-safe stdlib slug from `node.data.label` or `node.type`, used inside Temporal `@workflow.defn` modules where `python-slugify` can't import safely).
+Single source of truth: [`server/services/workflow_naming.py`](./server/services/workflow_naming.py) — `slugify_name` (via `python-slugify` for Unicode transliteration, emoji strip, case preservation, length cap), `next_available_slug(name, database, *, exclude_id=None)` (fill-gap counter; pass `exclude_id=workflow_id` on rename so the row doesn't bump itself), `canonicalize_node_ids(workflow_id, nodes, edges)` (pure, idempotent: gives node instances stable `<workflow_id>:<type>:<ordinal>`-style ids derived from plugin type + per-type ordinal, returning the rewritten nodes/edges plus the old-to-new mapping), `node_label_slug(node)` (sandbox-safe stdlib slug from `node.data.label` or `node.type`, used inside Temporal `@workflow.defn` modules where `python-slugify` can't import safely).
 
 **Temporal workflow ID convention** — uniform `<workflow_slug>-<node_label>` shape across every workflow type. The Temporal Web UI's "Workflow Type" column already distinguishes the kind (TriggerListenerWorkflow / PollingTriggerWorkflow / CronTriggerWorkflow / AgentWorkflow / MachinaWorkflow), so no middle `-trigger-` / `-agent-` tag in the id.
 
@@ -1089,7 +1087,7 @@ Single source of truth: [`server/services/workflow_naming.py`](./server/services
 
 **Rename path** — there is NO dedicated rename endpoint. The frontend's auto-save chain (`TopToolbar` inline edit → `updateWorkflow({name})` → debounced save → REST `POST /api/database/workflows` → `services.workflow_storage.handlers.handle_save_workflow`) IS the rename path. When `name` changes between saves, the handler (1) allocates a fresh slug via `next_available_slug`, (2) `database.rename_workflow` updates name + slug atomically (id UUID stays put), (3) renames the on-disk workspace dir via `Path.rename()`, (4) broadcasts a CloudEvents `workflow.renamed` envelope (`broadcaster.broadcast_workflow_lifecycle("renamed", workflow_id=..., name=..., slug=..., old_slug=...)`) so other tabs invalidate their workflows query.
 
-**Invariants** (locked by `tests/services/test_workflow_naming.py` + `test_workflow_rename.py` — 42 tests):
+**Invariants** (locked by `tests/services/test_workflow_naming.py` + `test_workflow_rename.py` — 39 tests):
 - First creation always gets `_1` suffix (no bare-base slugs).
 - Fill-gap: deleted `AI_Assistant_2` slot is reused on next "AI Assistant" creation.
 - Renaming `AI Assistant` → `AI Assistant!` (same slug base) keeps `_1` via `exclude_id` (no self-bump).
@@ -1138,13 +1136,13 @@ deploy_workflow() -> Sets up triggers, returns immediately
 
 ### AI Chat Model System (5-Layer Architecture)
 
-Chat-model nodes (`openaiChatModel`, `anthropicChatModel`, ...) render through `SquareNode` from the backend NodeSpec. Direct chat and every new agent execution route through the native SDK facade (`ChatUnifier` in `services/llm/`); the 13-provider surface is 11 cloud providers plus Ollama and LM Studio. Twelve providers have standalone chat-model nodes under `server/nodes/model/`, while xAI is selected directly from agent parameters. Model params (max output, context length, thinking type, temperature range) come from `ModelRegistryService`. The provider architecture, proxy/local-LLM routing, and the per-provider model + thinking/reasoning matrix (budget / effort / format) all live in **[Native LLM SDK](./docs-internal/native_llm_sdk.md)**. A Temporal history recorded before the native cutover carries no `llm_engine` marker and messages in a retired wire format; `agent.execute_llm_step` refuses it with a non-retryable `InvalidAgentLLMEngine` rather than misreading it, and the deployment must be Reset. The runtime output schema (`thinking` field for downstream nodes) is backend-served via `register_output_schema` (see [Plugin System](./docs-internal/plugin_system.md)).
+Chat-model nodes (`openaiChatModel`, `anthropicChatModel`, ...) render through `SquareNode` from the backend NodeSpec. Direct chat and every new agent execution route through the native SDK facade (`ChatUnifier` in `services/llm/`); the 13-provider surface is 11 cloud providers plus Ollama and LM Studio. Twelve providers have standalone chat-model nodes under `server/nodes/model/`, while xAI is selected directly from agent parameters. Model params (max output, context length, thinking type, temperature range) come from `ModelRegistryService`. The provider architecture, proxy/local-LLM routing, and the per-provider model + thinking/reasoning matrix (budget / effort / format) all live in **[Native LLM SDK](./docs-internal/native_llm_sdk.md)**. There is one wire standard (`MessageWire`) and no `llm_engine` / `message_wire_version` discriminator: the cutover-era markers and the `InvalidAgentLLMEngine` refusal path were purged (`tests/llm/test_single_wire_standard.py` fails the build if they reappear), and pre-cutover deployments are handled by Reset. The runtime output schema (`thinking` field for downstream nodes) is backend-served via `register_output_schema` (see [Plugin System](./docs-internal/plugin_system.md)).
 
 ## AI Agent Node Architecture
 
-AI Agent (`aiAgent`) and Chat Agent / Zeenie (`chatAgent`) both use the plain-async `run_native_agent_loop` in `server/services/agent_runtime.py` and support memory / skills / tools / task input. `AIService.execute_agent()` and `execute_chat_agent()` prepare the same canonical native messages and `AgentToolSpec` values, then the loop appends each lossless assistant message before executing its tool calls, hot-rebinds the tool surface after canvas mutations, and stops when the model returns no tool calls (with `max_iterations` as a safety cap). Connection collection is `collect_agent_connections` in `server/services/plugin/edge_walker.py` (5-tuple: context, skill, tool, input, task); the pre-Wave-11 `handle_ai_agent`/`handle_chat_agent` handlers are gone (dispatch is per-plugin `execute_op` under `server/nodes/agent/<plugin>/__init__.py`). The legacy `_run_agent_loop` is deleted; pre-cutover Temporal histories are refused with `InvalidAgentLLMEngine` and must be Reset.
+AI Agent (`aiAgent`) and Chat Agent / Zeenie (`chatAgent`) both use the plain-async `run_native_agent_loop` in `server/services/agent_runtime.py` and support memory / skills / tools / task input. `AIService.execute_agent()` and `execute_chat_agent()` prepare the same canonical native messages and `AgentToolSpec` values, then the loop appends each lossless assistant message before executing its tool calls, hot-rebinds the tool surface after canvas mutations, and stops when the model returns no tool calls (with `max_iterations` as a safety cap). Connection collection is `collect_agent_connections` in `server/services/plugin/edge_walker.py` (5-tuple: context, skill, tool, input, task); the pre-Wave-11 `handle_ai_agent`/`handle_chat_agent` handlers are gone (dispatch is per-plugin `execute_op` under `server/nodes/agent/<plugin>/__init__.py`). The legacy `_run_agent_loop` is deleted, as are the cutover-era `llm_engine` markers and the `InvalidAgentLLMEngine` refusal path; pre-cutover deployments are handled by Reset.
 
-**`max_iterations` precedence differs by runtime. Temporal (`prepare_agent_payload`, highest->lowest): per-node `parameters.max_iterations` > `UserSettings.agent_recursion_limit` > env `AGENT_RECURSION_LIMIT` (default 200) > `llm_defaults.json:agent.recursion_limit`. In-process (`execute_agent` / `execute_chat_agent`): `UserSettings.agent_recursion_limit` > `llm_defaults.json:agent.recursion_limit` only; the per-node tier is never read there, and no agent plugin currently declares a `max_iterations` Params field.**
+**`max_iterations` precedence differs by runtime. Temporal (`prepare_agent_payload`, highest->lowest): per-node `parameters.max_iterations` > `UserSettings.agent_recursion_limit` > env `AGENT_RECURSION_LIMIT` (default 200), with a hardcoded 200 if `Settings` cannot instantiate; it never reads `llm_defaults.json`. In-process (`execute_agent` / `execute_chat_agent`): `UserSettings.agent_recursion_limit` > `get_model_registry().get_agent_defaults()`, where env `AGENT_RECURSION_LIMIT` wins and `llm_defaults.json:agent.recursion_limit` is the last resort; the per-node tier is never read there, and no agent plugin currently declares a `max_iterations` Params field.**
 
 Full reference — agent loop, skill injection, tool building, input/auto-prompt fallback (message>text>content>str), handle topology, spec-driven `AIAgentNode`, durable Task Manager delegation (Temporal child workflows plus the legacy bridge), and specialized-agent routing — in [docs-internal/agent_architecture.md](./docs-internal/agent_architecture.md); low-level compatibility mechanics in [agent_delegation.md](./docs-internal/agent_delegation.md), and the authoritative team-lead contract in [agent_teams.md](./docs-internal/agent_teams.md).
 
@@ -1249,9 +1247,9 @@ Example workflows are pre-built workflow templates that auto-load on first use. 
 ### Architecture
 ```
 <repo>/.opencompany/workflows/        # Shipped seed JSONs (git-tracked)
-├── AI Assistant_example_workflow-*.json
-├── AI Employee_example_workflow-*.json
-└── Claude Assistant_example_workflow-*.json
+├── AI_Assistant.json
+├── AI_Employee.json
+└── Claude_Assistant.json
 
 server/services/
 └── example_loader.py             # Loads and imports examples via core.paths.example_workflows_dir()
@@ -1524,18 +1522,18 @@ Tool nodes display execution status via the standard node status system:
 ### Implemented Tools
 | Tool | Schema | Handler | Description |
 |------|--------|---------|-------------|
-| calculatorTool | CalculatorSchema | `_execute_calculator()` | Math operations |
-| currentTimeTool | CurrentTimeSchema | `_execute_current_time()` | Date/time with timezone |
-| duckduckgoSearch | DuckDuckGoSearchSchema | `_execute_duckduckgo_search()` | DuckDuckGo web search (free) |
+| calculatorTool | `CalculatorParams` | `CalculatorToolNode.calculate` (`nodes/tool/calculator_tool/`) | Math operations |
+| currentTimeTool | `CurrentTimeParams` | `CurrentTimeToolNode.now` (`nodes/tool/current_time_tool/`) | Date/time with timezone |
+| duckduckgoSearch | `DuckDuckGoSearchParams` | `DuckDuckGoSearchNode.search` (`nodes/search/duckduckgo_search/`) | DuckDuckGo web search (free) |
 | taskManager | `TaskManagerParams` | `_execute_task_manager()` | Intrinsic durable team assignment; returns queued through detached Temporal runner, preserves cross-run history, review, retry/reassignment, cancellation, acceptance, timestamps, elapsed time, and token usage |
-| writeTodos | WriteTodosSchema | `execute_write_todos()` / `handle_write_todos()` | Structured task list planning with checklist rendering |
-| braveSearch | BraveSearchSchema | `handle_brave_search()` | Brave Search API web results |
-| serperSearch | SerperSearchSchema | `handle_serper_search()` | Google SERP via Serper API |
-| perplexitySearch | PerplexitySearchSchema | `handle_perplexity_search()` | AI-powered search with citations |
-| Android service nodes | Per-service schema | `_execute_android_service()` | Direct Android service tools (see below) |
+| writeTodos | `WriteTodosParams` | `execute_write_todos()` / `handle_write_todos()` | Structured task list planning with checklist rendering |
+| braveSearch | `BraveSearchParams` | `BraveSearchNode.search` (`nodes/search/brave_search/`) | Brave Search API web results |
+| serperSearch | `SerperSearchParams` | `SerperSearchNode.search` (`nodes/search/serper_search/`) | Google SERP via Serper API |
+| perplexitySearch | `PerplexitySearchParams` | `PerplexitySearchNode.search` (`nodes/search/perplexity_search/`) | AI-powered search with citations |
+| Android service nodes | Per-service schema | `execute_android_service_tool()` (`nodes/android/_base.py`) | Direct Android service tools (see below) |
 
 ### Direct Android Service Tools
-Android service nodes (batteryMonitor, wifiAutomation, etc.) connect directly to any agent's `input-tools` handle — this is the only Android tool path (the former `androidTool` aggregator was retired; legacy graphs are migrated on load by `workflow_migrations.normalize_legacy_android_toolkit`). The `execute_tool()` function detects these via `ANDROID_SERVICE_NODE_TYPES` and routes to `_execute_android_service()`.
+Android service nodes (batteryMonitor, wifiAutomation, etc.) connect directly to any agent's `input-tools` handle — this is the only Android tool path (the former `androidTool` aggregator was retired; legacy graphs are migrated on load by `workflow_migrations.normalize_legacy_android_toolkit`). The `execute_tool()` function detects these via `ANDROID_SERVICE_NODE_TYPES` and routes to `execute_android_service_tool()` (`server/nodes/android/_base.py`).
 
 **Service ID Mapping** (camelCase node type -> snake_case service ID):
 ```python
@@ -1634,7 +1632,7 @@ Dedicated plugins under `server/nodes/search/` (`brave_search` / `serper_search`
 - **Serper**: `POST https://google.serper.dev/search` with `X-API-KEY` header. Supports web/news/images/places search types. Returns `{query, results, result_count, search_type, provider}` with optional `knowledge_graph`.
 - **Perplexity Sonar**: `POST https://api.perplexity.ai/chat/completions` with Bearer token. Returns `{query, answer (markdown), citations: [url], results: [{url}], model, provider}` with optional `images` and `related_questions`.
 
-All handlers fetch API keys via `auth_service.get_api_key()` and track usage via `_track_search_usage()` for cost calculation.
+All handlers fetch API keys via `auth_service.get_api_key()`; usage is tracked declaratively through the `cost={...}` argument on each node's `@Operation("search", ...)`.
 
 ## Config Node Architecture
 
@@ -1674,7 +1672,7 @@ When viewing Simple Memory's parameters:
 ```
 
 ### Filtering Logic
-Located in `InputSection.tsx` and `OutputPanel.tsx`:
+Located in `InputSection.tsx`:
 1. **Parent nodes** (AI Agent): Skip showing config node connections as inputs
 2. **Config nodes** (Memory): Inherit parent's main input connections with "(via Parent)" label
 
@@ -1683,7 +1681,10 @@ Located in `InputSection.tsx` and `OutputPanel.tsx`:
 // Check if handle is for config nodes (not main data flow)
 const isConfigHandle = (handle: string | null | undefined): boolean => {
   if (!handle) return false;
-  return handle.startsWith('input-') && handle !== 'input-main';
+  if (handle.startsWith('input-') && handle !== 'input-main' && handle !== 'input-chat' && handle !== 'input-task' && handle !== 'input-teammates') {
+    return true;
+  }
+  return false;
 };
 
 // Check if node is a config/auxiliary node — reads the backend-derived
@@ -1759,7 +1760,7 @@ Android device connection is configured via the **Credentials Modal** (Android p
 - `android_relay_reconnect` - Reconnect to relay server
 
 ### Android Relay Client
-Located in `server/services/android/`:
+Located in `server/nodes/android/_relay/`:
 
 **Key Components:**
 - `client.py` - RelayWebSocketClient manages persistent connection
@@ -1805,14 +1806,14 @@ The Android relay system uses a **two-state model** for connection status:
 
 **Status Broadcasting Architecture:**
 ```
-server/services/android/
+server/nodes/android/_relay/
 ├── client.py        # RelayWebSocketClient - manages WebSocket connection
 ├── broadcaster.py   # Status broadcast functions
 ├── manager.py       # Global client instance management
 └── protocol.py      # JSON-RPC 2.0 message handling
 ```
 
-**Broadcast Functions** (`server/services/android/broadcaster.py`):
+**Broadcast Functions** (`server/nodes/android/_relay/broadcaster.py`):
 ```python
 # Device connected and paired
 await broadcast_connected(device_id, device_name)
@@ -1821,14 +1822,13 @@ await broadcast_connected(device_id, device_name)
 await broadcast_device_disconnected(
     relay_connected=True,
     qr_data=qr_data,
-    session_token=session_token
 )
 
 # Relay connection fully closed
 await broadcast_relay_disconnected()
 
 # QR code available for pairing
-await broadcast_qr_code(qr_data, session_token)
+await broadcast_qr_code(qr_data)
 ```
 
 **Frontend Status Indicator** (`client/src/components/SquareNode.tsx`):
@@ -1864,7 +1864,7 @@ WhatsApp nodes use square design with integrated QR code viewing and proper erro
 
 ### Architecture
 ```
-Frontend (WhatsAppNode.tsx) → Python Backend (/api/whatsapp/*) → WhatsApp RPC Service (localhost:${WHATSAPP_RPC_PORT})
+Frontend (useWhatsApp / WebSocket) -> Python backend WS handlers (nodes/whatsapp/_handlers.py) -> WhatsApp RPC service (localhost:${WHATSAPP_RPC_PORT})
 ```
 
 ### Key Features
@@ -1878,34 +1878,31 @@ Frontend (WhatsAppNode.tsx) → Python Backend (/api/whatsapp/*) → WhatsApp RP
 
 Wave 11 renamed `routers/whatsapp.py` (misnamed — never an APIRouter) to `services/whatsapp_service.py`; Wave 11.I then moved it into the plugin folder as `nodes/whatsapp/_service.py`. Provides RPC proxy helpers consumed by `nodes/whatsapp/*` plugins and the WhatsApp WebSocket handlers.
 
-#### `/api/whatsapp/status` - Get Connection Status
+#### `whatsapp_status` - Get Connection Status
 - Returns WhatsApp connection status from Flask service
 - Handles ConnectError, TimeoutException with 503/504 status codes
 - Safe JSON parsing with error handling
 
-#### `/api/whatsapp/qr` - Get QR Code
+#### `whatsapp_qr` - Get QR Code
 - Checks connection status first
 - Returns QR code data if not connected
 - Returns "Already connected" message if connected
 - Handles errors gracefully without crashing
 
-#### `/api/whatsapp/start` - Start Connection
+#### `whatsapp_start` - Start Connection
 - Proxies start request to Flask service
 - Safe JSON parsing and error handling
 - Returns proper HTTP errors on failure
 
-#### `/api/whatsapp/send` - Send Message
+#### `whatsapp_send` - Send Message
 - Enhanced messaging endpoint
 - Comprehensive error handling with specific exception catches
 - Never crashes on service unavailability
 
-### Frontend Component (`client/src/components/WhatsAppNode.tsx`)
-- **Node Type**: Square (80x80px, borderRadius: 8px)
-- **Status Indicators**: Top-right corner indicator (green/yellow/red)
-- **Connect Button**: Bottom-left corner for opening modal
-- **QR Code Display**: Fetches QR via `fetchQRCode()` from Python backend
-- **Connection Details**: Shows device ID, status, session, service, pairing, timestamp
-- **Action Buttons**: Start, Restart, Refresh Status, Close (always visible)
+### Frontend (SquareNode.tsx via NodeSpec component_kind; QR panel under components/credentials/)
+- **Canvas node**: `client/src/components/SquareNode.tsx` renders the WhatsApp plugins from their backend NodeSpec (`component_kind = "square"`; `whatsappReceive` is `"trigger"`) and reads live connection state through `useWhatsAppStatus()` -- there is no WhatsApp-specific node component
+- **QR / connection panel**: `client/src/components/credentials/panels/QrPairingPanel.tsx` (mounted by `PanelRenderer.tsx`) -- Start / Restart / Refresh actions call `useWhatsApp()`'s `startConnection` / `restartConnection` / `getStatus`, which send `whatsapp_start` / `whatsapp_restart` / `whatsapp_status`; the QR image comes from `whatsapp_qr`
+- **Requests**: every call is a WebSocket `sendRequest` (see `WebSocketContext.tsx`); no `/api/whatsapp/*` REST routes exist
 
 ### Critical Bug Fixes
 
@@ -2049,36 +2046,38 @@ class TriggerConfig:
     display_name: str
 
 TRIGGER_REGISTRY: Dict[str, TriggerConfig] = {
-    'whatsappReceive': TriggerConfig('whatsappReceive', 'whatsapp_message_received', 'WhatsApp Message'),
-    'webhookTrigger': TriggerConfig('webhookTrigger', 'webhook_received', 'Webhook Request'),
-    'chatTrigger': TriggerConfig('chatTrigger', 'chat_message_received', 'Chat Message'),
-    'taskTrigger': TriggerConfig('taskTrigger', 'task_completed', 'Task Completed'),
-    'telegramReceive': TriggerConfig('telegramReceive', 'telegram_message_received', 'Telegram Message'),
-    # Future: 'emailTrigger', 'mqttTrigger', etc.
+    # Framework-level triggers — not owned by any plugin domain.
+    "start": TriggerConfig(node_type="start", event_type="deploy_triggered", display_name="Deploy Start"),
+    "webhookTrigger": TriggerConfig(node_type="webhookTrigger", event_type="webhook_received", display_name="Webhook Request"),
+    "chatTrigger": TriggerConfig(node_type="chatTrigger", event_type="chat_message_received", display_name="Chat Message"),
+    "taskTrigger": TriggerConfig(node_type="taskTrigger", event_type="task_completed", display_name="Task Completed"),
+    # plugin-owned entries are backfilled by _auto_populate_from_plugins()
 }
 
 @dataclass
 class Waiter:
-    id: str
-    node_id: str
-    node_type: str
-    event_type: str
-    filter_fn: Callable[[Dict], bool]
-    future: asyncio.Future
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    node_id: str = ""
+    node_type: str = ""
+    event_type: str = ""
+    filter_fn: Callable[[Dict], bool] = field(default_factory=lambda: lambda x: True)
+    future: Optional[asyncio.Future] = None
+    cancelled: bool = False
+    created_at: float = field(default_factory=time.time)
 
 # Key functions:
-def register(node_type: str, node_id: str, params: Dict) -> Waiter
+async def register(node_type: str, node_id: str, params: Dict) -> Waiter
 def dispatch(event_type: str, data: Dict) -> int  # Returns count resolved
 def cancel(waiter_id: str) -> bool
 def cancel_for_node(node_id: str) -> int
 def get_active_waiters() -> List[Dict]
 ```
 
-#### Trigger Node Execution (`server/services/workflow.py`)
+#### Trigger Node Execution (`server/services/handlers/triggers.py`)
 ```python
-async def _execute_trigger_node(self, node_id: str, node_type: str, parameters: Dict) -> Dict:
+async def handle_trigger_node(node_id: str, node_type: str, parameters: Dict, context: Dict) -> Dict:
     config = event_waiter.get_trigger_config(node_type)
-    waiter = event_waiter.register(node_type, node_id, parameters)
+    waiter = await event_waiter.register(node_type, node_id, parameters)
 
     # Broadcast waiting status
     await broadcaster.update_node_status(node_id, "waiting", {
@@ -2253,7 +2252,7 @@ await broadcaster.send_custom_event('task_completed', {
    event_waiter.dispatch('email_received', email_data)
    ```
 
-### Polling Triggers (Gmail, Twitter)
+### Polling Triggers (Gmail, Outlook, IMAP, Twitter)
 
 Some triggers require active API polling instead of waiting for externally dispatched events. These use `setup_polling_trigger` in `TriggerManager` instead of `setup_event_trigger`.
 
@@ -2274,13 +2273,13 @@ setup_polling_trigger() → broadcasts "waiting" status
 
 **Routing** (`server/services/deployment/manager.py`):
 ```python
-if node_type in POLLING_TRIGGER_TYPES:  # gmailReceive, twitterReceive
+if node_type in POLLING_TRIGGER_TYPES:  # googleGmailReceive, twitterReceive, emailReceive, msMailReceive
     poll_coroutine = self._create_poll_coroutine(node_type, node_id, params)
     await trigger_manager.setup_polling_trigger(...)
 ```
 
 **Constants** (`server/constants.py`):
-- `POLLING_TRIGGER_TYPES`: `frozenset(['gmailReceive', 'twitterReceive'])`
+- `POLLING_TRIGGER_TYPES`: `frozenset({'googleGmailReceive', 'twitterReceive', 'emailReceive', 'msMailReceive'})`
 - These are also in `WORKFLOW_TRIGGER_TYPES` for trigger node detection
 
 ### Key Design Decisions
@@ -2316,10 +2315,28 @@ class StatusBroadcaster:
     def __init__(self):
         self._connections: Set[WebSocket] = set()
         self._status: Dict[str, Any] = {
-            "android": {"connected": False, "device_id": None, "connected_devices": [], "connection_type": None},
-            "nodes": {},
-            "variables": {},
-            "workflow": {"executing": False, "current_node": None}
+            "android": {
+                "connected": False,
+                "paired": False,
+                "device_id": None,
+                "device_name": None,
+                "connected_devices": [],
+                "connection_type": None,
+                "qr_data": None,
+                "session_token": None,
+            },
+            # No "whatsapp" seed: the plugin owns its slot outright
+            # (nodes/whatsapp/_events.py writes the full dict) and the FE
+            # guards on key presence — absent means disconnected.
+            "twitter": {"connected": False, "username": None, "user_id": None, "name": None, "profile_image_url": None},
+            "google": {"connected": False, "email": None, "name": None},
+            "telegram": {"connected": False, "bot_id": None, "bot_username": None, "bot_name": None},
+            "api_keys": {},  # provider -> validation status
+            "nodes": {},  # node_id -> node status
+            "variables": {},  # variable_name -> value
+            "workflow": {"executing": False, "current_node": None},
+            "workflow_lock": {"locked": False, "workflow_id": None, "locked_at": None, "reason": None},
+            "deployment": {"isRunning": False, "activeRuns": 0, "status": "idle", "workflow_id": None},
         }
 
     async def connect(self, websocket: WebSocket): ...
@@ -2396,7 +2413,7 @@ const isAndroidConnected = isAndroidNode && androidStatus.paired;
 ```
 
 ### Android Status Broadcasting
-The Android relay client (`server/services/android/client.py`) broadcasts status changes via dedicated functions in `broadcaster.py`:
+The Android relay client (`server/nodes/android/_relay/client.py`) broadcasts status changes via dedicated functions in `broadcaster.py`:
 
 ```python
 # When device pairs successfully
@@ -2406,7 +2423,6 @@ await broadcast_connected(device_id, device_name)
 await broadcast_device_disconnected(
     relay_connected=self.is_connected(),
     qr_data=self.qr_data,
-    session_token=self.session_token
 )
 
 # When relay WebSocket closes unexpectedly
@@ -2457,17 +2473,15 @@ Updated `client_left` and presence handlers use `has_real_android_devices()` ins
 | **Deployment** | `deploy_workflow`, `cancel_deployment`, `get_deployment_status`, `get_workflow_lock`, `update_deployment_settings` |
 | **AI Operations** | `execute_ai_node`, `get_ai_models` |
 | **API Keys** | `validate_api_key`, `get_stored_api_key`, `save_api_key`, `delete_api_key` |
-| **Claude OAuth** | `claude_oauth_login`, `claude_oauth_status` |
+| **CLI agent auth** | `claude_code_login`, `claude_code_logout`, `codex_cli_login`, `codex_cli_logout` |
 | **Twitter OAuth** | `twitter_oauth_login`, `twitter_oauth_status`, `twitter_logout` |
 | **Google OAuth** | `google_oauth_login`, `google_oauth_status`, `google_logout` |
-| **AI Proxy** | `test_ai_proxy` |
+| **Discord / Microsoft OAuth** | `discord_oauth_login`, `discord_oauth_status`, `discord_logout`, `microsoft_oauth_login`, `microsoft_oauth_status`, `microsoft_logout` (all minted by `services.events.oauth_lifecycle.make_oauth_lifecycle_handlers`) |
 | **Android** | `get_android_devices`, `execute_android_action`, `android_relay_connect`, `android_relay_disconnect`, `android_relay_reconnect` |
-| **Maps** | `validate_maps_key` |
-| **Apify** | `validate_apify_key` |
 | **WhatsApp** | `whatsapp_status`, `whatsapp_connected_phone`, `whatsapp_qr`, `whatsapp_send`, `whatsapp_start`, `whatsapp_restart`, `whatsapp_groups`, `whatsapp_group_info`, `whatsapp_chat_history`, `whatsapp_newsletters`, `whatsapp_rate_limit_get`, `whatsapp_rate_limit_set`, `whatsapp_rate_limit_stats`, `whatsapp_rate_limit_unpause`, `whatsapp_mark_read`, `whatsapp_typing`, `whatsapp_presence`, `whatsapp_stop`, `whatsapp_diagnostics` |
 | **Telegram** | `telegram_connect`, `telegram_disconnect`, `telegram_status`, `telegram_send`, `telegram_reconnect`, `telegram_get_me`, `telegram_get_chat` |
 | **Workflow Storage** | `save_workflow`, `get_workflow`, `get_all_workflows`, `delete_workflow` |
-| **Chat Messages** | `send_chat_message`, `get_chat_messages`, `clear_chat_messages`, `save_chat_message`, `get_chat_sessions` |
+| **Chat Messages** | `send_chat_message`, `get_chat_messages`, `clear_chat_messages`, `save_chat_message` |
 | **Console/Terminal** | `get_console_logs`, `clear_console_logs`, `get_terminal_logs`, `clear_terminal_logs` |
 | **User Skills** | `get_user_skills`, `get_user_skill`, `create_user_skill`, `update_user_skill`, `delete_user_skill` |
 | **Built-in Skills** | `get_skill_content`, `save_skill_content`, `scan_skill_folder`, `list_skill_folders` |
@@ -2532,7 +2546,7 @@ const { parameters, saveParameters, loadParameters, isDirty } = useParameterPane
 ```
 
 ### Conditional Parameter Display Implementation
-Located in `client/src/components/parameterPanel/MiddleSection.tsx`:
+Located in `client/src/utils/parameterVisibility.ts` (imported by `client/src/components/parameterPanel/MiddleSection.tsx`):
 
 ```typescript
 const shouldShowParameter = (param: INodeProperties, allParameters: Record<string, any>): boolean => {
@@ -2580,8 +2594,6 @@ This function:
 **Planned Architecture:**
 
 1. **Defer Node Status Checks Until Workflow Selected**
-   - Remove eager `getStatus()` calls from WhatsAppNode mount (lines 44-48)
-   - Remove eager `checkConfiguration()` from SquareNode mount (lines 46-92)
    - Status should only fetch when workflow containing those nodes is selected
    - Use cached status from WebSocket context instead of per-node fetching
 
@@ -2614,7 +2626,6 @@ This function:
    - `Dashboard`: Pass `workflow_id` to all execution calls
 
 **Files to Modify:**
-- `client/src/components/WhatsAppNode.tsx` - Remove mount status fetch
 - `client/src/components/SquareNode.tsx` - Remove mount config check
 - `client/src/contexts/WebSocketContext.tsx` - Add workflow filtering
 - `client/src/store/useAppStore.ts` - Track running workflows
@@ -2688,8 +2699,8 @@ This function:
   - `server/routers/webhook.py` - Dynamic webhook router using broadcaster.send_custom_event()
   - Output panel shows clean summaries (method, path, body for webhooks; status code for HTTP)
 - **n8n-Pattern Cache System**: Automatic fallback hierarchy for different environments
-  - Production (Docker): Redis → SQLite → Memory
-  - Local Development: SQLite → Memory (Redis disabled via `REDIS_ENABLED=false`)
+  - Opt-in (`REDIS_ENABLED=true`; no shipped configuration sets it): Redis → SQLite → Memory
+  - Default: SQLite → Memory
   - `server/core/cache.py` - CacheService with fallback logic
   - `server/models/cache.py` - CacheEntry SQLModel for SQLite persistence
   - `server/core/database.py` - Cache CRUD methods (get/set/delete/cleanup)
@@ -2732,20 +2743,20 @@ This function:
 - **`clear_node_status` idle reset**: `StatusBroadcaster.clear_node_status(node_id)` resets the slot to `{status: "idle", data: {}, cleared: true}` instead of `del`'ing it. Deleting created a race window where the in-flight execution's `success` broadcast re-created the entry and stuck the UI on "completed" for a cancelled node. Idle reset preserves entry identity so subsequent broadcasts update normally; the `cleared: true` flag distinguishes "never ran" from "explicitly cleared."
 - **`get_node_output` race**: in-memory `_outputs` cache re-population after a DB-fallback `await` previously overwrote a fresh in-memory write with a stale DB value. Fix uses nested `dict.setdefault` (atomic at the CPython GIL level -- no lock needed). `store_node_output` and `clear_all_outputs` had no real race because asyncio coroutines do not preempt at synchronous statements. Reference for the Python concurrency model: https://docs.python.org/3/library/asyncio-task.html#asyncio-await
 - **`NodeUserError` (services.plugin)**: typed exception for user/LLM-correctable failures (string not found, command not found, bad cwd, missing required field, operator-only Twitter query, Python sandbox `import`, Node.js sidecar down). `BaseNode.execute()` catches it specifically: single WARN line in the operator log (no traceback) + structured `{success: False, error_type: "NodeUserError", error: ...}` envelope. Genuine bugs still flow through the generic `except Exception` branch and keep their full stacktrace via `logger.exception`. Adopted across `fileRead` / `fileModify` / `fsSearch` / `gallery` / `process_manager` / `pythonExecutor` / `javascriptExecutor` / `typescriptExecutor`. **Plugin WS handlers that can fail user-correctably must use `@ws_response` (from `services.plugin.ws`), not `@ws_handler`** — the latter logs every exception at ERROR with a full traceback, which breaks the one-WARN-line `NodeUserError` contract. `gallery/_handlers.py` is the reference. Reach for it whenever the LLM (or user) can fix the input and retry — never for actual server bugs.
-- **Process manager Windows shim resolution**: `process_service.start()` resolves `argv[0]` via `shutil.which()` before `asyncio.create_subprocess_exec`. On Windows, `shutil.which` honours `PATHEXT` and returns the absolute `.cmd` path (e.g. `C:\...\npm.cmd`); `CreateProcessW` then launches it directly. No `cmd /c` wrap — same canonical idiom used by `browser_service`, `claude_code_service`, `claude_oauth`, `himalaya_service`. Without this, bare `argv[0]="npm"` raises `WinError 2` because `CreateProcessW` does NOT apply `PATHEXT` to bare names. Missing binary → early `Command not found: '<bin>'. Check spelling or ensure the binary is on PATH.` envelope (no traceback).
+- **Process manager Windows shim resolution**: `process_service.start()` resolves `argv[0]` via `shutil.which()` before `asyncio.create_subprocess_exec`. On Windows, `shutil.which` honours `PATHEXT` and returns the absolute `.cmd` path (e.g. `C:\...\npm.cmd`); `CreateProcessW` then launches it directly. No `cmd /c` wrap — same canonical idiom used by `nodes/browser/`, `nodes/agent/claude_code_agent/_pool.py`, `nodes/agent/claude_code_agent/_oauth.py`, `nodes/email/_himalaya.py`. Without this, bare `argv[0]="npm"` raises `WinError 2` because `CreateProcessW` does NOT apply `PATHEXT` to bare names. Missing binary → early `Command not found: '<bin>'. Check spelling or ensure the binary is on PATH.` envelope (no traceback).
 - **Gallery — the workspace file explorer (`gallery`, `nodes/filesystem/gallery/`)**: sibling of the process-manager pattern below — the `isGalleryPanel` uiHint gives it a full-height MiddleSection panel (breadcrumbs, grid/list, image thumbnails, search, preview, upload) instead of the plain params list. It pairs the hint with `hideInputSection` but **keeps** the Output section, because unlike `processManager` it produces output worth seeing and dragging. Four rules worth knowing before touching it: (1) **The panel edits the node's own params** — navigating writes `path`, pinning writes `selection` — so what you browse is what the node emits, rather than a second copy of that state free to drift. (2) **The backend decides; the panel renders.** Each listing row arrives with a finished `ref` (a serialized `FileRef`, `null` for directories) and a `preview` verdict from `services/media/preview.py`; breadcrumbs arrive as `crumbs`; a search term is turned into a glob by `search_to_pattern` server-side. Re-deriving any of these client-side would be a second copy of a server rule — and for `preview` specifically, a second copy of a *security* decision. (3) **Drag uses its own `workspaceFile` discriminator, never the existing `nodeOutput`** — that branch calls `onChange(value)` unconditionally, so reusing it would mean dropping a file into a half-written prompt destroys the prompt. `ParameterRenderer.handleDrop` therefore branches: a `file` param takes the ref whole, everything else appends the path with smart spacing. (4) **`isFileRef` accepts every `FileKind`, not just `audio`** — the gallery emits `kind: "file"` even for a `.wav`, because `kind: "audio"` asserts `inspect_audio` probed the container and a fabricated duration would mis-bill a per-second provider downstream; narrowing the check back would render a dropped file as raw JSON. Listing rides the WebSocket (`list_workspace_files`) because the consumer already holds an authenticated socket with request correlation; `GET /api/workspace/{id}/files/{path}` stays the *content* channel (preview, download, Range). Frontend: [GalleryPanel.tsx](./client/src/components/parameterPanel/GalleryPanel.tsx) + `parameterPanel/gallery/`, [useDragWorkspaceFile.ts](./client/src/hooks/useDragWorkspaceFile.ts), [types/workspaceFiles.ts](./client/src/types/workspaceFiles.ts).
 - **Canvas — the pushed-content display board (`canvas`, `nodes/tool/canvas/`)**: the third full-height-panel sibling (gallery / processManager / canvas), and the first with a SECOND host — a docked resizable right sidebar ([CanvasDock.tsx](./client/src/components/ui/CanvasDock.tsx) + [canvasDockStore.ts](./client/src/stores/canvasDockStore.ts)) that auto-opens on push and serves ephemeral click-to-preview from the gallery dialog. Both hosts render one shared component ([parameterPanel/canvas/CanvasContent.tsx](./client/src/components/parameterPanel/canvas/CanvasContent.tsx)). Rules worth knowing before touching it: (1) **The broadcast is identity-only** — `canvas_updated` carries `{workflow_id, node_id, revision}`; content flows solely through the authorized `canvas_list` handler (simple_memory security preamble: external socket + owner + graph-ownership, exactly-one-node-of-type check). (2) **The board stores references, never bytes** — `display(paths=…)` builds refs via `resolve_media` + stat (never `coerce_file_param`; don't read content to make a pointer), notes cap at 64KB with a visible marker, the board FIFO-caps at 200, and the op's Output is ids+counts only. (3) **Iframe sandboxes are test-locked security decisions**: external URLs get exactly `sandbox="allow-scripts allow-forms"` + `no-referrer`; workspace HTML renders ONLY as `srcDoc` + `sandbox="allow-scripts"` (opaque origin, no cookies — `NEVER_INLINE` respected, not worked around); PDF is a plain same-origin iframe enabled by the `INLINE_EXACT` exact-match set in `preview.py`. (4) **Never `addEventListener('canvas_updated')`** — the WebSocketContext switch case shadows the default-case fan-out. (5) The `tool` group auto-derives `isConfigNode: True`; canvas declares it `False` because `input-main` is real dataflow. (6) `hooks/useWorkspaceText.ts` is the repo's first client-side file-content fetch (streamed, cancelled at 512KB, key self-busts on `size_bytes`+`modified_at`) — attachment disposition doesn't block `fetch()`. Browser screenshots became its feedstock: both browser plugins persist shots as workspace FileRefs via the tolerant, containment-checked [nodes/browser/_screenshots.py](./server/nodes/browser/_screenshots.py). Full reference: [docs-internal/canvas_node.md](./docs-internal/canvas_node.md).
 - **Process manager port admission + middle panel**: server commands declare listener `ports` (with compatibility inference for `--port`, `-p`, `PORT`, and `*_PORT`). `ProcessService.start()` serializes admission, checks managed reservations plus OS TCP listeners, and returns structured `PORT_IN_USE` without killing the owner or allowing framework auto-port fallback. Explicit ports/environment survive restart. The `isProcessManagerPanel` UI hint gives only `processManager` a full-height workflow-scoped process table with PID/ports/timestamps/elapsed/output and stop/restart controls. See [docs-internal/process_manager.md](./docs-internal/process_manager.md).
 - **Telegram message auto-split + caption spill**: the Bot API caps `sendMessage.text` at 4096 and media captions at 1024 (constants `_TG_TEXT_LIMIT` / `_TG_CAPTION_LIMIT` in `nodes/telegram/_service.py`; per https://core.telegram.org/bots/api). **Both limits are measured in UTF-16 code units, not characters** — an emoji costs 2 — so length goes through `_tg_len`, never `len()`. `_split_head` cuts one chunk at the cleanest paragraph → line → sentence → space boundary past the halfway mark, else hard-cuts; `_split_text` loops it. `send_message` chunks long text and threads each part under the previous (`reply_to_message_id` cascade), returning the first message's metadata + `parts` + `message_ids[]`. `_send_captioned_media` (used by `send_photo` / `send_document`) truncates an over-long caption at the cap and sends the remainder as a threaded reply with `disable_notification=True`, reporting `caption_truncated` + `follow_up_message_ids` — previously the whole send just failed with `BadRequest("Message caption is too long")`. **Ordering invariant: split the RAW body before `_resolve_body` runs markdown→HTML.** Splitting after conversion can separate a `<b>` from its closing tag, which Telegram rejects with "can't find end of the entity"; Telegram measures the cap against entity-parsed text, so truncating raw markdown is conservative. Locked by `tests/nodes/test_telegram_service.py`.
 - **Telegram inbound content types**: `_format_message` extracts detail dicts for all 11 types via the `_CONTENT_PROBES` / `_DETAIL_EXTRACTORS` tables, plus a normalized `media` block (`kind` / `file_id` / `mime_type` / `file_name` / …) that downstream nodes read instead of branching per type; MIME and filename are synthesised where Telegram omits them. **Probe order is load-bearing**: Telegram sets `message.document` on animation messages too, so `animation` and `video_note` must be probed before `document` and `video` or every GIF classifies as a document. The trigger never downloads — media travels as a `file_id`, never bytes or base64, because node results are persisted, broadcast, and replayed into the LLM conversation every turn.
-- **Google OAuth scope expansion**: Google's authorisation server legitimately returns a wider scope set than requested when the OAuth Client's "Data Access" page lists extra scopes (commonly `cloud-platform`) or when `include_granted_scopes` replays a previously-granted scope. `oauthlib` does strict set-equality and aborts with `Warning: Scope has changed`. As of 2026 (`google-auth-oauthlib` 1.2.4, `oauthlib` upstream issue #562 still open), no constructor flag, context manager, or `expected_scopes` argument exists — the documented relief is the env var. `services/google_oauth.py` sets `OAUTHLIB_RELAX_TOKEN_SCOPE=1` via `os.environ.setdefault` BEFORE the `google_auth_oauthlib.flow` import (oauthlib reads it once at parameters-module import; request-time setting races under uvicorn workers), paired with `warnings.filterwarnings(message=r"Scope has changed.*")` to keep the operator log clean. Long-term root cause: audit the Cloud Console Data Access page and remove `cloud-platform` if no handler uses it.
+- **Google OAuth scope expansion**: Google's authorisation server legitimately returns a wider scope set than requested when the OAuth Client's "Data Access" page lists extra scopes (commonly `cloud-platform`) or when `include_granted_scopes` replays a previously-granted scope. `oauthlib` does strict set-equality and aborts with `Warning: Scope has changed`. As of 2026 (`google-auth-oauthlib` 1.2.4, `oauthlib` upstream issue #562 still open), no constructor flag, context manager, or `expected_scopes` argument exists — the documented relief is the env var. `server/nodes/google/_oauth.py` sets `OAUTHLIB_RELAX_TOKEN_SCOPE=1` via `os.environ.setdefault` BEFORE the `google_auth_oauthlib.flow` import (oauthlib reads it once at parameters-module import; request-time setting races under uvicorn workers), paired with `warnings.filterwarnings(message=r"Scope has changed.*")` to keep the operator log clean. Long-term root cause: audit the Cloud Console Data Access page and remove `cloud-platform` if no handler uses it.
 - **Code-executor error mapping** (`pythonExecutor` / `javascriptExecutor` / `typescriptExecutor`): wrap user-code execution and sidecar calls in `try/except`. Python: detect `ImportError("__import__ not found")` (the LLM tried `import X` against the sandboxed builtins) and surface the pre-injected names list (`math, json, datetime, timedelta, re, random, Counter, defaultdict`) plus the suggestion to use `process_manager` for unsupported modules; other exceptions get formatted as `<ErrorName> at line N: <message>` (line N walked from `<string>` frame in the traceback) plus any captured stdout. JS/TS: detect `aiohttp.ClientConnectorError` and surface "JavaScript executor not running on NODEJS_EXECUTOR_PORT. Start the dev runner or fall back to python_executor." All raise `NodeUserError` so the framework logs one WARN line — no aiohttp/CreateProcessW noise in the operator log.
 - **Workflow-scoped chat + console history**: chat messages persist with `chat_messages.session_id == <workflow_id>` (or `"default"` when no workflow is open); console logs persist with `console_logs.workflow_id`. Backend `database.get_console_logs(limit, workflow_id=None)` and `clear_console_logs(workflow_id=None)` filter by workflow when given. `handle_clear_console_logs` broadcasts `console_logs_cleared` carrying the `workflow_id` so the existing frontend filter in `WebSocketContext` keeps other workflows' panels intact. Frontend reads `currentWorkflow.id` via the documented Zustand escape hatch (`useAppStore.getState().currentWorkflow?.id`) at call time for `clearChatMessages` / `clearConsoleLogs` / `sendChatMessage` so the callbacks don't re-create on every workflow switch. A dedicated `useEffect([currentWorkflowId, isReady])` resets local `chatMessages` / `consoleLogs` and refetches both when the user opens / switches workflow. Incoming `console_log` broadcasts are filtered by `currentWorkflow.id` so a parallel run on another workflow never bleeds into the active panel. Legacy logs without `workflow_id` still surface (transition guard).
-- **Auto-derived `isConfigNode` uiHint**: `_derive_auto_ui_hints(group)` in `services/plugin/base.py` automatically sets `uiHints.isConfigNode: True` on any plugin whose `group` tuple contains `memory` or `tool` (centralized as `_CONFIG_NODE_GROUPS = frozenset({"memory", "tool"})`). Explicit `cls.ui_hints` always wins (merge order: auto first, then `dict.update`). Frontend `InputSection.tsx` and `OutputPanel.tsx` consume the flag via `definition?.uiHints?.isConfigNode === true` — the old `groups.includes('memory') || groups.includes('tool')` heuristic is gone. Pytest invariant `test_ui_hints_only_carry_known_flags` locks the flag name. Adding a new auxiliary node type costs zero per-plugin code; opting out costs one line (`ui_hints = {"isConfigNode": False}`).
-- **`isMasterSkillEditor` uiHint replaces `node.type === 'masterSkill'` checks**: 6 frontend callsites (`Dashboard.tsx:98` component dispatch, `useAutoSkillEdges.ts` constant + edge filter, `MiddleSection.tsx` × 3) now read `getCachedNodeSpec(type)?.uiHints?.isMasterSkillEditor === true` instead of comparing the type string. The `MasterSkillNode` plugin already declared the hint — no backend change. Renaming the plugin's `type` is now a single backend edit followed by a NodeSpec deploy; the frontend never needs to know the string.
+- **Auto-derived `isConfigNode` uiHint**: `_derive_auto_ui_hints(group)` in `services/plugin/base.py` automatically sets `uiHints.isConfigNode: True` on any plugin whose `group` tuple contains `memory` or `tool` (centralized as `_CONFIG_NODE_GROUPS = frozenset({"memory", "tool"})`). Explicit `cls.ui_hints` always wins (merge order: auto first, then `dict.update`). Frontend `InputSection.tsx` consumes the flag via `definition?.uiHints?.isConfigNode === true` — the old `groups.includes('memory') || groups.includes('tool')` heuristic is gone. Pytest invariant `test_ui_hints_only_carry_known_flags` locks the flag name. Adding a new auxiliary node type costs zero per-plugin code; opting out costs one line (`ui_hints = {"isConfigNode": False}`).
+- **`isMasterSkillEditor` uiHint replaces `node.type === 'masterSkill'` checks**: 6 frontend callsites (`Dashboard.tsx:139` component dispatch, `useAutoSkillEdges.ts` constant + edge filter, `MiddleSection.tsx` × 3) now read `getCachedNodeSpec(type)?.uiHints?.isMasterSkillEditor === true` instead of comparing the type string. The `MasterSkillNode` plugin already declared the hint — no backend change. Renaming the plugin's `type` is now a single backend edit followed by a NodeSpec deploy; the frontend never needs to know the string.
 - **`outputMode: "terminal"` uiHint — spec-driven CLI output rendering**: the output panel (`components/output/OutputPanel.tsx`, the active renderer — `ui/OutputDisplayPanel.tsx` is legacy/unimported) renders string responses through ReactMarkdown by default, which whitespace-collapses CLI text. CLI-wrapper plugins (`githubAction`, `vercelAction`, `shell`) declare `ui_hints = {"outputMode": "terminal"}`; the panel resolves the spec via `useNodeSpec(selectedNode?.type)` and renders their text in a `<pre>` on the per-theme `--code-*` surface, routes wholly-JSON strings to the JSON tree via the shared `tryParseJson` (`utils/formatters.ts`), and surfaces object/array `result` payloads (server-side-parsed CLI JSON; arrays survive `unwrap` un-peeled) in the Response section. Pair with the `_shape` convention: parsed JSON in `result` OR text in `stdout` — never both — empty keys omitted. Locked by `client/src/components/__tests__/OutputPanel.test.tsx` (render tests: real `\n`/`\t` preserved) + the uiHints known-set in `test_node_spec.py`. Cache note: nodeSpecs are session-sticky (`staleTime: FOREVER`, revision-busted at page load) — after a backend restart a hard browser reload is needed before new uiHints reach an open canvas.
 - **`--action-X-hover` triplet + ActionButton zero-arithmetic**: each of the 6 action roles (`run`/`stop`/`save`/`config`/`secret`/`tools`) now exposes a `-hover` variant (0.25 alpha) alongside the existing `-soft` (0.15) and `-border` (0.6). ActionButton's CVA reads `hover:bg-action-X-hover` directly; disabled state is the shadcn-idiomatic `disabled:opacity-50` on the base class. No per-token `/25`, `/40`, `/10` opacity arithmetic at any call site. Credential-modal panels (`OAuthConnect`, `EmailPanel`, `QrPairingPanel`) and the skill editor (`MasterSkillEditor`) consume `<ActionButton intent="...">` directly. `ActionDef` carries an `intent` key; the catalogue adapter maps server-sent `theme_color` palette strings to intents via `SERVER_COLOR_TO_INTENT`.
-- **Credentials: DB as single source of truth + symmetric broadcasts + cache dedup**: `CredentialsDatabase` (encrypted SQLite) is canonical; every other layer is a derived cache with explicit invalidation. Backend `AuthService._memory_cache + _models_cache` collapsed into one `_api_key_cache: Dict[str, ApiKeyCacheEntry]` dataclass — single write/evict site. Per RFC 9700 (OAuth 2.0 BCP, 2024) the `_oauth_cache` no longer carries `refresh_token`; new `get_oauth_refresh_token(provider, customer)` reads from the encrypted DB on every call. `validate_api_key`, `save_api_key`, `delete_api_key`, `twitter_logout`, `google_logout` now broadcast symmetrically: `update_api_key_status` (in-memory map) + `broadcast_credential_event(...)` (refetch signal) wrapping `WorkflowEvent` (CloudEvents v1.0 from `services/events/envelope.py`, the same envelope the Wave 12 EventSource framework uses). The dead-letter `credential_catalogue_updated` event is finally emitted by the backend. Frontend retired the 200-LOC `client/src/components/credentials/providers.tsx` static fallback — `useCatalogueQuery` is the only source; cold-boot renders `<Skeleton>`, server-unreachable shows an explicit error state. `ApiKeyStatus.hasKey` mirror dropped (duplicated catalogue's `provider.stored`); two new selector hooks (`useProviderStored`, `useStoredProviderCount`) read the catalogue. Pytest invariant `test_credential_broadcasts.py` (14 tests) locks the broadcast contract via `inspect.getsource` introspection + the CloudEvents v1.0 envelope shape + AuthService DB-write-then-cache-update ordering + the no-refresh-token-in-cache rule.
+- **Credentials: DB as single source of truth + symmetric broadcasts + cache dedup**: `CredentialsDatabase` (encrypted SQLite) is canonical; every other layer is a derived cache with explicit invalidation. Backend `AuthService._memory_cache + _models_cache` collapsed into one `_api_key_cache: Dict[str, ApiKeyCacheEntry]` dataclass — single write/evict site. Per RFC 9700 (OAuth 2.0 BCP, 2024) the `_oauth_cache` no longer carries `refresh_token`; new `get_oauth_refresh_token(provider, customer)` reads from the encrypted DB on every call. `validate_api_key`, `save_api_key`, `delete_api_key`, `twitter_logout`, `google_logout` now broadcast symmetrically: `update_api_key_status` (in-memory map) + `broadcast_credential_event(...)` (refetch signal) wrapping `WorkflowEvent` (CloudEvents v1.0 from `services/events/envelope.py`, the same envelope the Wave 12 EventSource framework uses). The dead-letter `credential_catalogue_updated` event is finally emitted by the backend. Frontend retired the 200-LOC `client/src/components/credentials/providers.tsx` static fallback — `useCatalogueQuery` is the only source; cold-boot renders `<Skeleton>`, server-unreachable shows an explicit error state. `ApiKeyStatus.hasKey` mirror dropped (duplicated catalogue's `provider.stored`); two new selector hooks (`useProviderStored`, `useStoredProviderCount`) read the catalogue. Pytest invariant `test_credential_broadcasts.py` (17 tests) locks the broadcast contract via `inspect.getsource` introspection + the CloudEvents v1.0 envelope shape + AuthService DB-write-then-cache-update ordering + the no-refresh-token-in-cache rule.
 - **Local-LLM provider routing + per-model context**: Ollama and LM Studio are first-class providers (12 total for agents: 10 cloud + 2 local). Provider detection is driven by `detect_ai_provider` in `server/constants.py` plus the `provider` Literal in `nodes/agent/{ai_agent,chat_agent,_specialized}.py` — both MUST list `ollama` / `lmstudio` or chat-model nodes / agent dropdowns silently fall through to `'openai'` and `execute_chat` calls api.openai.com with the placeholder key. The validator at `nodes/model/_local_validator.py` probes via the official SDKs (`ollama.AsyncClient.ps()` for typed `ProcessResponse.Model`, `lmstudio.AsyncClient.llm.list_loaded()` for typed `LlmInstanceInfo`) — reads only typed fields (`context_length`, `max_context_length`, `vision`, `trained_for_tool_use`, `architecture`, `params_string`, `format`, plus Ollama's `details.{family,parameter_size,quantization_level}`). No regex, no Modelfile-parameters parsing, no `/api/show` modelinfo dict-key hunting. Per-model params persist in `EncryptedAPIKey.models["model_params"]` (via `save_api_key(model_params=...)`) AND in `model_registry.json` via `register_local_model()` — sync `get_context_length()` / `get_max_output_tokens()` find real values without async DB lookups, and entries survive process restart. `is_model_valid_for_provider` returns `True` for open-world providers (`openrouter` / `ollama` / `lmstudio`) so local model names like `qwen/qwen3.6-27b` aren't rejected by the cloud-style pattern check. Runtime path uses `OpenAIProvider(base_url={user_proxy_url}, api_key="ollama")` — traffic stays on `localhost`.
 - **Typed SDK error → `LLMError` → `NodeUserError`**: Native providers normalize SDK failures into structured `LLMError` values carrying category, retryability, HTTP status, provider code, request ID, and retry-after metadata. `ChatUnifier` translates them at the execution boundary into a user-safe `NodeUserError`; `BaseNode.execute()` logs that at WARN with one line and no stack trace. Unexpected exceptions retain the full-traceback path. In-process agent turns retry only errors marked retryable, while Temporal owns activity retries and disables the inner retry loop.
 - **Plugin extraction (Wave 11.I)**: every plugin's WS handlers, OAuth client, FastAPI router, and lifecycle service live entirely under `nodes/<plugin>/`. Eight plugin domains migrated this round (whatsapp / twitter / google-workspace / android / browser / email / code / credential-validation-scaffold for maps+apify+ollama+lmstudio) follow the telegram pattern. `routers/websocket.py` shrunk from ~3,785 to ~2,977 LOC (-808). Three plugin routers (`routers/twitter.py`, `routers/google.py`, `routers/android.py`) moved into `nodes/<plugin>/_router.py` and mount via the plugin-router loop in `main.py`; the explicit `app.include_router(<plugin>.router)` calls and `from routers import <plugin>` imports in `main.py` are gone. **`register_router(router, name=...)` is the new sibling helper to `register_ws_handlers` (same file: `services/ws_handler_registry.py`)** — the generic registry set has since grown to 18 (see the Plugin System row at the top of this file). **`Credential.validate(data) -> dict` + `Credential._probe(api_key) -> ProbeResult` is the new shared validator scaffold** in `services/plugin/credential.py` — replaces the per-router `_SPECIAL_PROVIDER_VALIDATORS` dict; one `_LLMApiKey._probe` method serves all 10 cloud LLM providers, dedicated `_probe` overrides handle Maps + Apify, `_LocalLLM.validate` overrides for Ollama / LM Studio's 2-storage edge case. **`tests/test_plugin_self_containment.py` locks the contract** with 10 invariant classes (forbidden-imports / no-router-outside-nodes / per-plugin self-registration / registry-API sanity / stale-paths-absent / main.py-does-not-mount / WS_HANDLERS-non-empty / plugin-folder-has-node-file / typed-event-factories / package-imports-cleanly); same `inspect.getsource` introspection style as `test_credential_broadcasts.py`. Wire format unchanged — frontend WS message-type strings (`whatsapp_status`, `twitter_oauth_login`, `google_oauth_status`, `android_relay_connect`, etc.) and HTTP route paths (`/api/twitter/callback`, `/api/google/callback`, `/api/android/*`) are byte-identical post-migration.
@@ -2759,15 +2770,15 @@ This function:
 - **`company clean` preserves `.opencompany/{workflows,deploy,packages}/`**: `cli/commands/clean.py` iterates the canonical `<repo>/.opencompany/` and pre-rebrand `<repo>/.machina/` roots and skips anything in `_OPENCOMPANY_KEEP = frozenset({"workflows", "deploy", "packages"})`. Wipes `claude/`, `workspaces/`, `*.db` as before. `workflows/` holds the shipped seed JSONs (git-tracked); `deploy/` holds Terraform state for LIVE cloud resources (only `company deploy destroy` removes it); `packages/` holds the OpenCompany-managed binaries (Temporal CLI ~114 MB, Stripe CLI, shared npm tree) — re-fetchable but expensive, so clean+build cycles stay offline-safe cache hits. Test `cli/tests/test_clean.py::test_opencompany_keep_preserves_workflows_deploy_and_packages` locks the keep-list.
 - **No raw `print()` outside three sanctioned helpers**: `main._startup_log` (pre-logger boot markers), `core.container._clog` (DI-bootstrap markers), and `nodes.code.python_executor.captured_print` (the sandbox builtin handed to user code). Everything else goes through `logger = get_logger(__name__)`. The supervisor prefixes every aggregated line with `[HH:MM:SS.fff]` so no inner `TimeStamper` is needed; structlog console mode is deliberately timestamp-less. Test `server/tests/test_no_raw_prints.py` AST-walks the tree and flags any unsanctioned `print(...)` call.
 - **`configure_logging(settings)` must run BEFORE plugin self-registration imports**: in `main.py`, `Settings()` + `configure_logging(settings)` + `init_tracing()` + `get_logger(__name__)` happen ahead of `from core.container import container` and `from routers import …`. Otherwise plugin folders that register on import call `logger.debug(...)` while structlog is still on its default processor chain (which includes `TimeStamper` + no `filter_by_level`) — symptom is double timestamps + debug records leaking despite `LOG_LEVEL=INFO`.
-- **Plugin-identifier shape validator (`services/plugin/identifiers.py`)** (`7700f87`): `NODE_TYPE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"` + `is_valid_node_type(value)`. Single source of truth used by FastAPI URL routes (`Path(pattern=NODE_TYPE_PATTERN)` in `routers/schemas.py`) AND internal helpers (`nodes/_visuals.py::get_plugin_meta` / `get_plugin_icon_path`). Hardens the icon-resolution endpoints: the registry lookup `get_node_class(node_type)` already gates the taint in practice, but CodeQL can't follow registry-mediated sanitization, so `fullmatch` at the function boundary states the constraint explicitly. **It does NOT close the CodeQL `py/path-injection` alerts, despite what this line used to claim.** Verified against the live SARIF (2026-07-26): `_visuals.py:191`, `_visuals.py:196` and `schemas.py:144` are still reported on every scan and were closed by *manual dismissal*, not by the regex. The reason is structural and worth knowing before you attempt a fix: the flagged sink is the path-construction/`resolve()` call itself, so no guard placed after it can clear the taint, and an interprocedural `fullmatch` in a helper is not treated as a barrier either. **`py/path-injection` on a containment helper is dismissed here, not coded around** — see `nodes/filesystem/_backend.py::resolve_within` and alerts #29-33, #39, #140, #142, #154-157. Contract test (`tests/services/test_identifiers.py`, 47 cases) locks the regex against `../etc/passwd`, `..\windows\system32`, `foo\x00bar`, `%2e%2e%2fetc`, `foo;bar`, `${HOME}`, `` foo`bar ``, CRLF, and non-string input.
+- **Plugin-identifier shape validator (`services/plugin/identifiers.py`)** (`7700f87`): `NODE_TYPE_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"` + `is_valid_node_type(value)`. Single source of truth used by FastAPI URL routes (`Path(pattern=NODE_TYPE_PATTERN)` in `routers/schemas.py`) AND internal helpers (`nodes/_visuals.py::get_plugin_meta` / `get_plugin_icon_path`). Hardens the icon-resolution endpoints: the registry lookup `get_node_class(node_type)` already gates the taint in practice, but CodeQL can't follow registry-mediated sanitization, so `fullmatch` at the function boundary states the constraint explicitly. **It does NOT close the CodeQL `py/path-injection` alerts, despite what this line used to claim.** Verified against the live SARIF (2026-07-26): `_visuals.py:217`, `_visuals.py:239` and `schemas.py:144` are still reported on every scan and were closed by *manual dismissal*, not by the regex. The reason is structural and worth knowing before you attempt a fix: the flagged sink is the path-construction/`resolve()` call itself, so no guard placed after it can clear the taint, and an interprocedural `fullmatch` in a helper is not treated as a barrier either. **`py/path-injection` on a containment helper is dismissed here, not coded around** — see `nodes/filesystem/_backend.py::resolve_within` and alerts #29-33, #39, #140, #142, #154-157. Contract test (`tests/services/test_identifiers.py`, 47 cases) locks the regex against `../etc/passwd`, `..\windows\system32`, `foo\x00bar`, `%2e%2e%2fetc`, `foo;bar`, `${HOME}`, `` foo`bar ``, CRLF, and non-string input.
 - **CLI recovery-resilience invariants** (May 2026): `python -m cli clean` must run end-to-end on a system Python with no third-party deps. Achieved by: (a) every verb in [`cli/cli.py`](./cli/cli.py) is a lazy stub that imports its impl inside the function body — `import cli.cli` does NOT pull in `anyio` / `psutil` / `cli.supervisor` / sibling verb modules (300 → 131 modules at boot). (b) [`cli/_common.py`](./cli/_common.py) defers `cli.supervisor` imports inside `build_backend_spec` so importing `cli._common` (and therefore `clean.py`) doesn't drag in rich. (c) [`cli/platform_.py`](./cli/platform_.py) lazy-imports `platformdirs` inside the four `user_*_dir` helpers — module loads without the wheel. (d) [`cli/commands/clean.py`](./cli/commands/clean.py) uses stdlib `print()` (no rich) + lazy `cli.ports` import inside `_kill_running_processes` wrapped in `try/except ImportError` (skip-with-warning if psutil is missing). (e)+(f) retired July 2026: the CLI no longer supervises Temporal at all — the backend lifespan owns the dev server via `services.temporal._runtime.ensure_started()` (`cli/commands/_temporal_specs.py` and the `_supervised_runtime.py` shim were deleted; long-running specs spawn the server venv interpreter directly via `cli.platform_.server_venv_python`, no resident `uv run` parents). (g) `daemon` is now a verb-per-file package ([`cli/commands/daemon/`](./cli/commands/daemon/) — `_state.py` + `start.py` + `stop.py` + `status.py` + `restart.py`) following pdm's `commands/venv/` shape; PID-file resolution is a function (`pid_dir()`) not a module-level attribute so platformdirs only loads at call time.
 - **Wave 13 canary fixes** — six load-bearing corrections to the Wave 12 event framework. See [docs-internal/event_framework.md → Wave 13 fixes](./docs-internal/event_framework.md#wave-13-fixes) for the full breakdown. Key invariants to remember when working on canary triggers: (1) `register_canary_trigger_type(node_type, cloudevent_type)` requires the CloudEvents reverse-DNS string as second arg — must match the producer's `WorkflowEvent.type` exactly or the deployment manager's `EventType` SA won't match `dispatch.emit`'s Visibility query (silent firing failure). Diverging re-registration raises `ValueError` so plugin upgrades surface loudly. (2) Plugin `_events.py` for canary-registered triggers is canary-only — no `event_waiter.dispatch` / `send_custom_event` calls (those have zero consumers in canary-on mode). `dispatch.emit(envelope, wire_routing_key=...)` handles BOTH Temporal Signal fan-out AND in-process WS broadcast. (3) `TriggerListenerWorkflow` + `PollingTriggerWorkflow` call `broadcast_trigger_status_activity` before/after each child spawn for firing-pulse UX (matches legacy `triggers.py` collector/processor). (4) `PollingTriggerNode.as_poll_activity` returns `seen_ids: list(current)` — NOT `list(prior_seen | current)` (the latter grows unboundedly; Gmail at ~100/day hit ~36K entries in a year). The legacy `_build_poll_coroutine` does `seen = set(current)` at end of cycle for the same reason. Visibility-filtered providers (Gmail-unread) re-emit on re-surface, which is correct. (5) Canary trigger output persistence: `MachinaWorkflow.run`'s pre-executed loop schedules `store_node_output_activity` for every firing trigger so `ParameterResolver` can resolve `{{triggerNode.field}}` in downstream nodes (the legacy `_execute_from_trigger` did this via `_store_output(trigger_node_id, "output_0", ...)`; canary skipped it pre-fix). Skips non-firing siblings (`_trigger_output={"not_triggered": True}`). (6) `DeploymentManager.cancel` sweeps stuck node statuses via `_clear_stuck_node_statuses(workflow_id, include_waiting=True)` + emits terminal `update_workflow_status(executing=False, workflow_id=...)`. Without these the FE leaves downstream nodes glowing forever after deployment cancel and the toolbar Start/Stop indicator stays at `executing=True`. The delegation guard inside `_clear_stuck_node_statuses` still protects in-flight fire-and-forget child agents.
 - **Deployment reconcile snapshot on WS connect** (de8df87): a stale FE `deploymentStatus.isRunning=true` used to survive a backend restart because the in-memory `DeploymentManager._deployments` dict was wiped (no recovery wiring — the `RecoverySweeper.set_recovery_callback` extension point exists but is intentionally unwired; see the "workflow status not properly recognized" investigation). The Start button therefore stayed showing "Stop" forever. Fix: new `WorkflowEvent.deployment_snapshot(running_workflow_ids)` typed factory (`source = opencompany://services/workflow`, `type = workflow.deployment.snapshot`) + `broadcaster._send_deployment_snapshot(websocket)` that runs at the tail of `broadcaster.connect()` (single-target, NOT fan-out — only the just-connecting client needs to reconcile). FE `case 'deployment_snapshot'` in `WebSocketContext.tsx` iterates `useAppStore.workflowUIStates` and clears `isExecuting=true` on any workflow NOT in the snapshot's running set (empty list is meaningful — this is the load-bearing reset). Also reconciles `deploymentStatus.isRunning` for the active workflow. Distinct from `workflow_lifecycle("deployment.started")` (state-transition edge event) — the snapshot is an idempotent state dump tied to client connect, not a transition.
 - **Agent progress badge — defensive status invariant** (15b8d9d): `AIAgentNode`'s "N / max" iteration badge is gated on `isExecuting && typeof iteration === 'number' && typeof maxIterations === 'number'` where `isExecuting = nodeStatus?.status === 'executing'`. The `agent_progress` handler USED to only set `data.iteration` / `data.max_iterations`, relying on a prior `node_status='executing'` broadcast to have already stamped the status. If agent_progress arrived first (race, single-step agent completion, out-of-order Temporal activity delivery), `status` stayed undefined and the badge was hidden even though the iteration data was populated. Fix: the agent_progress handler now defensively sets `status='executing'` on the slot — but preserves `'success'` / `'error'` if a later terminal broadcast already flipped the slot (terminal states win over the resurrection).
-- **Temporal Worker tuner exclusivity** (Wave 16.4, 190c896): `Worker.__init__` rejects `tuner` alongside ANY of `max_concurrent_workflow_tasks` / `max_concurrent_activities` / `max_concurrent_local_activities` / `max_concurrent_nexus_tasks` — the tuner OWNS every slot supplier via its `WorkerTuner.create_composite(workflow_supplier, activity_supplier, local_activity_supplier, nexus_supplier)` and cannot coexist with the individual max-count kwargs. In `TemporalWorkerPool.start`, ALL FOUR max-count kwargs must be pulled from the base `worker_kwargs` when `tuner=` is added; the ai-heavy / browser queues use the tuner and preserve their 10-workflow-slot ceiling via `_tuner_for -> FixedSizeSlotSupplier(10)` on the workflow_supplier slot. The framework worker at `worker.py:188` does NOT use a tuner, so it keeps the plain `max_concurrent_workflow_tasks=10` + `max_concurrent_activities=self.pool_size` kwargs directly. `TEMPORAL_WORKER_POOL_ENABLED` defaulted to True in the same commit (`test_task_queue_coverage.py::TestWorkerPoolDefaultOn` locks the default via source-introspection so the flip survives a hasty revert).
+- **Temporal Worker tuner exclusivity** (Wave 16.4, 190c896): `Worker.__init__` rejects `tuner` alongside ANY of `max_concurrent_workflow_tasks` / `max_concurrent_activities` / `max_concurrent_local_activities` / `max_concurrent_nexus_tasks` — the tuner OWNS every slot supplier via its `WorkerTuner.create_composite(workflow_supplier, activity_supplier, local_activity_supplier, nexus_supplier)` and cannot coexist with the individual max-count kwargs. In `TemporalWorkerPool.start`, ALL FOUR max-count kwargs must be pulled from the base `worker_kwargs` when `tuner=` is added; the ai-heavy / browser queues use the tuner and preserve their 10-workflow-slot ceiling via `_tuner_for -> FixedSizeSlotSupplier(10)` on the workflow_supplier slot. The framework worker at `worker.py:282` does NOT use a tuner, so it keeps the plain `max_concurrent_workflow_tasks=10` + `max_concurrent_activities=self.pool_size` kwargs directly. `TEMPORAL_WORKER_POOL_ENABLED` defaulted to True in the same commit (`test_task_queue_coverage.py::TestWorkerPoolDefaultOn` locks the default via source-introspection so the flip survives a hasty revert).
 - **No hardcoded port numbers in code or docs**: `.env.template` is the single place port numbers live (`.env` overrides, process env wins). Python resolves via `core.env_defaults.env_value/env_int` (raises loudly when unconfigured — never a numeric fallback literal); the Vite config and the Node executor sidecar require their env vars the same way; scripts/CI/installers parse the template. Docs reference env var names (`PYTHON_BACKEND_PORT`, `TEMPORAL_UI_PORT`, ...) instead of numerals; user-facing quickstarts may show the default app URL once. See `docs-internal/cli_services_integration.md` for the plugin-daemon recipe.
 - **Multi-vendor nodes: one node, a `provider` dropdown, two registries.** `nodes/speech/` is the reference and the first multi-credential plugin in the repo (`credentials = (A, B, C)`; `ctx.connection(id)` is a dict lookup over that tuple). Four load-bearing rules. (1) **Imperative `@Operation` only** — the declarative `routing=` path resolves `credentials[0]` (`base.py:769`), so a routed op authenticates every provider with the first key in the tuple and `test_plugin_contract.py` would not catch it. (2) **Registry membership IS the capability** — one registry per direction, the node's provider enum literally *is* `tts_providers()`, so a synthesis-only vendor cannot be selected for transcription and there is no `supports_x` flag to keep honest. (3) **Capabilities live in JSON** (`server/config/speech_defaults.json`), per-model overrides resolved exact -> longest-prefix -> `_default`, boolean flags defaulting **permissive**; no shared code branches on a vendor name. (4) **Vendor divergence stays in the vendor module** — auth scheme, query-vs-body, response shape. The v1 set diverges on all three axes and three of those divergences fail *silently* (ElevenLabs ignores a body-placed `output_format`, Deepgram ignores body options entirely, Sarvam returns a base64 array), so each has a test asserting the outgoing request rather than the parsed result. Full reference: **[Speech Provider RFC](./docs-internal/speech_provider_rfc.md)** + [plugin_system.md -> Multi-credential nodes](./docs-internal/plugin_system.md#multi-credential-nodes).
-- **Never name a Params field `model` or `api_key` on a node that also has a `provider` field.** An effect at [`ParameterRenderer.tsx:866`](./client/src/components/ParameterRenderer.tsx#L866) keys on those two literal names: with a sibling `provider` field present it overwrites `model` with the *chat-model* list and clears `api_key` — and it never validates that the provider is an LLM provider, so `provider: "elevenlabs"` still triggers it and the field is wiped the moment the user picks a vendor. Line 930 also writes options onto the literal string `'model'`, not `parameter.name`. Prefix instead (`tts_model` / `stt_model`), locked by a test in `tests/nodes/test_speech.py`. Other reserved sibling names with name-based magic in that file: `parameters`, `message_type`, `group_id`, `group_name`, `channel_jid`, `sender_number`, `sender_name`, `session_id`, `service_id`, `action`.
+- **Never name a Params field `model` or `api_key` on a node that also has a `provider` field.** An effect at [`ParameterRenderer.tsx:893`](./client/src/components/ParameterRenderer.tsx#L893) keys on those two literal names: with a sibling `provider` field present it overwrites `model` with the *chat-model* list and clears `api_key` — and it never validates that the provider is an LLM provider, so `provider: "elevenlabs"` still triggers it and the field is wiped the moment the user picks a vendor. L982 / L1198 also write options onto the literal string `'model'`, not `parameter.name`. Prefix instead (`tts_model` / `stt_model`), locked by a test in `tests/nodes/test_speech.py`. Other reserved sibling names with name-based magic in that file: `parameters`, `message_type`, `group_id`, `group_name`, `channel_jid`, `sender_number`, `sender_name`, `session_id`, `service_id`, `action`.
 - **`usable_as_tool = True` auto-hides both canvas handles.** `base.py:243` (inside `__init_subclass__`) sets `hide_input_handle` / `hide_output_handle` to `True` unless the class declares them, so a dual-purpose node that must stay wirable has to declare both `False` explicitly. Symptom: the node works fine as an AI tool but cannot be connected to anything on the canvas.
 - **Temporal LLM tool calls carry unmerged `tool_args`, and ToolNodes take `execute_as_tool`.** The AgentWorkflow schedules each tool call as the tool's own per-type activity; the payload carries BOTH the merged `node_data` (legacy/dual-purpose contract) AND the model's raw arguments as `tool_args`, forwarded through `as_activity`'s extras into the legacy handler, which routes ToolNodes through `execute_as_tool` for real `ToolInput` validation. Without this, the merged dict validated against `Params` (`extra="ignore"`) and a split-schema tool's model arguments were silently DROPPED — every Simple Memory `remember` degraded to a harmless `list`, reported success, and stored nothing. Dual-purpose ActionNodes deliberately keep their documented merged-params behavior. Locked by `tests/nodes/test_tool_call_dispatch.py` (including an end-to-end store assertion). Related guard: a function-local `import` makes its name local for the WHOLE function, so any use above it raises `UnboundLocalError` at runtime that `py_compile` cannot catch — a mid-function `import json` below the conversation size guard failed every Context-connected run this way (AST-locked in `test_agent_workflow.py`).
 - **Inspection panels opt out of the global `refetchOnMount: false`.** The QueryClient default ("trust the cache; the broadcast bridge keeps it in sync") assumes an active observer exists when the invalidation lands — but Context/Memory data mutates while those panels are CLOSED, so the broadcast invalidates a query nobody observes and a later mount renders stale cache until a manual Refresh. `ContextPanel` and `MemoryToolPanel` therefore declare `refetchOnMount: 'always', staleTime: 0`; the `context.updated` / `memory.updated` broadcasts cover the panel-open case. Apply the same override to any future panel whose data is written by agent runs rather than by the panel itself.
