@@ -9,7 +9,7 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -118,12 +118,40 @@ export function tarBinary(): string {
 
 export function extractArchive(archive: string, dest: string, strip: number): void {
   mkdirSync(dest, { recursive: true });
+  if (archive.toLowerCase().endsWith(".zip") && process.platform !== "win32") {
+    extractZipPosix(archive, dest, strip);
+    return;
+  }
   // Relative archive path from the destination so no argument carries a
   // drive colon (GNU tar would read it as host:path).
   const rel = relative(dest, archive);
   const args = ["-xf", rel];
   if (strip > 0) args.push(`--strip-components=${strip}`);
   run(tarBinary(), args, { cwd: dest });
+}
+
+/**
+ * Zip extraction for Linux and macOS. GNU tar (Ubuntu runners) cannot read
+ * zip archives at all, and bun's releases are zips on every platform, unlike
+ * the Node dist they replaced. `unzip` ships on both POSIX runner images.
+ * It has no --strip-components, so the archive is unpacked into a scratch
+ * dir inside `dest` and the requested number of single-entry levels is
+ * collapsed by moving their contents up. Exported for the unit test.
+ */
+export function extractZipPosix(archive: string, dest: string, strip: number): void {
+  const scratch = mkdtempSync(join(dest, ".unzip-"));
+  run("unzip", ["-q", "-o", archive, "-d", scratch], { cwd: dest });
+  let root = scratch;
+  for (let level = 0; level < strip; level++) {
+    const entries = readdirSync(root);
+    if (entries.length !== 1) {
+      rmSync(scratch, { recursive: true, force: true });
+      throw new Error(`cannot strip ${strip} component(s) from ${archive}: ${entries.length} entries at depth ${level}`);
+    }
+    root = join(root, entries[0]!);
+  }
+  for (const entry of readdirSync(root)) renameSync(join(root, entry), join(dest, entry));
+  rmSync(scratch, { recursive: true, force: true });
 }
 
 export function fileSizeMb(path: string): string {
