@@ -37,9 +37,9 @@ mkdir -p /var/lib/${instance_name}
 chown $APP_USER:$APP_USER /var/lib/${instance_name}
 
 echo "[${instance_name}] installing systemd service..."
-# The shim lives under the user's npm global prefix (install.sh points it at
-# ~/.npm-global when the system prefix is not writable).
-OPENCOMPANY_BIN="$(sudo -u $APP_USER -H npm prefix -g)/bin/company"
+# The shim lives under the user's bun global bin dir (install.sh installs bun
+# for the login user; BUN_INSTALL defaults to ~/.bun).
+OPENCOMPANY_BIN="$APP_HOME/.bun/bin/company"
 test -x "$OPENCOMPANY_BIN"
 cat > /etc/systemd/system/${instance_name}.service <<SERVICE_EOF
 [Unit]
@@ -51,6 +51,7 @@ Wants=network-online.target
 Type=simple
 User=$APP_USER
 WorkingDirectory=$APP_HOME
+Environment=PATH=$APP_HOME/.bun/bin:$APP_HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/etc/${instance_name}/opencompany.env
 ExecStart=$OPENCOMPANY_BIN serve
 Restart=on-failure

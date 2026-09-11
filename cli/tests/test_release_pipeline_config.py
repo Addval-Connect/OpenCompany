@@ -101,71 +101,58 @@ def preinstall_js_src(root: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Node.js sidecar — package.json & .gitignore
+# JS executor sidecar (runs on bun) — package.json & .gitignore
 # ---------------------------------------------------------------------------
 
 
-def test_sidecar_start_runs_compiled_bundle(sidecar_pkg: dict):
-    """``npm start`` runs the esbuild-bundled output, not interpreted
-    TypeScript via tsx. tsx adds ~500ms-1s of interpreter startup that
-    the bundle eliminates.
+def test_sidecar_start_runs_compiled_bundle_on_bun(sidecar_pkg: dict):
+    """``start`` runs the ``bun build`` output on bun, not interpreted
+    TypeScript. The bundle is what ``nodes/code/_runtime.py`` spawns
+    (``[bun, dist/index.js]``); the runtime is bun, never node.
     """
     start = sidecar_pkg["scripts"]["start"]
-    assert (
-        start == "node dist/index.js"
-    ), f"sidecar start must be `node dist/index.js`, got {start!r}"
-    assert "tsx" not in start
+    assert start == "bun dist/index.js", f"sidecar start must be `bun dist/index.js`, got {start!r}"
+    assert "node " not in start and "tsx" not in start
 
 
-def test_sidecar_dev_keeps_tsx_for_hot_reload(sidecar_pkg: dict):
-    """``npm run dev`` keeps tsx watch — the bundle workflow is too slow
-    for local iteration. Only production ``start`` uses the bundle.
-    """
+def test_sidecar_dev_uses_bun_watch(sidecar_pkg: dict):
+    """``dev`` runs the TS source directly under ``bun --watch`` — bun
+    executes TypeScript natively, so no loader (tsx) is needed."""
     dev = sidecar_pkg["scripts"]["dev"]
-    assert "tsx" in dev and "watch" in dev
+    assert dev.startswith("bun --watch") and "src/index.ts" in dev
+    assert "tsx" not in dev
 
 
 @pytest.mark.parametrize(
     "flag",
     [
-        "esbuild",
+        "bun build",
         "src/index.ts",
-        "--bundle",
-        "--platform=node",
-        "--target=node18",
-        "--format=esm",
-        "--packages=external",
+        "--target=bun",
         "--outfile=dist/index.js",
     ],
 )
-def test_sidecar_build_script_carries_required_esbuild_flag(
-    sidecar_pkg: dict, flag: str
-):
-    """Each esbuild flag in the sidecar build script is load-bearing.
+def test_sidecar_build_script_carries_required_bun_build_flag(sidecar_pkg: dict, flag: str):
+    """Each part of the sidecar build script is load-bearing.
 
-    - ``--bundle`` — concat the executor's own TS into one file.
-    - ``--platform=node`` — preserve Node built-in resolution.
-    - ``--target=node18`` — match ``engines.node`` in the same file.
-    - ``--format=esm`` — package.json ``type=module`` requires ESM.
-    - ``--packages=external`` — keep Express in node_modules; only the
-      executor's own TS is concatenated, so patch flow stays intact.
+    - ``bun build`` — bun's bundler; no esbuild dependency.
+    - ``--target=bun`` — self-contained bundle with express INLINED, so
+      the desktop stage copies one file and no ``node_modules`` (bun's
+      isolated linker would otherwise ship a dangling express symlink).
     - ``--outfile=dist/index.js`` — ``start`` and ``main`` read this
       exact path; mismatch breaks the runtime.
     """
     cmd = sidecar_pkg["scripts"]["build"]
     assert flag in cmd, f"sidecar build script missing {flag!r}: {cmd}"
+    assert "esbuild" not in cmd and "--packages=external" not in cmd
 
 
-def test_sidecar_engines_match_esbuild_target(sidecar_pkg: dict):
-    """``--target=node18`` and ``engines.node`` must agree. Bumping one
-    without the other would silently produce code that runs on a Node
-    version the package claims it doesn't support (or vice versa).
-    """
-    engines_node = sidecar_pkg.get("engines", {}).get("node", "")
-    assert "18" in engines_node, (
-        f"engines.node must declare ≥18 to match esbuild --target=node18, "
-        f"got {engines_node!r}"
-    )
+def test_sidecar_engines_declare_bun_not_node(sidecar_pkg: dict):
+    """The sidecar's runtime is bun; ``engines`` must say so and must not
+    reintroduce a Node floor."""
+    engines = sidecar_pkg.get("engines", {})
+    assert "bun" in engines, f"engines must declare bun, got {engines!r}"
+    assert "node" not in engines
 
 
 def test_sidecar_main_field_points_at_compiled_output(sidecar_pkg: dict):
@@ -175,12 +162,11 @@ def test_sidecar_main_field_points_at_compiled_output(sidecar_pkg: dict):
     assert sidecar_pkg.get("main") == "dist/index.js"
 
 
-def test_sidecar_esbuild_is_dev_only(sidecar_pkg: dict):
-    """esbuild builds the bundle; the runtime never touches it. It must
-    be a devDependency so a ``--omit=dev`` install doesn't ship it.
-    """
-    assert "esbuild" in sidecar_pkg.get("devDependencies", {})
-    assert "esbuild" not in sidecar_pkg.get("dependencies", {})
+def test_sidecar_has_no_node_toolchain_dependencies(sidecar_pkg: dict):
+    """bun bundles and runs the sidecar; esbuild and tsx are gone."""
+    deps = {**sidecar_pkg.get("dependencies", {}), **sidecar_pkg.get("devDependencies", {})}
+    assert "esbuild" not in deps
+    assert "tsx" not in deps
 
 
 def test_sidecar_dist_is_gitignored(sidecar_dir: Path):
@@ -459,26 +445,28 @@ def test_root_package_uses_canonical_github_urls(root_pkg: dict):
 def test_npm_release_authenticates_before_publish(
     release_yml: dict,
 ):
+    """``bun pm whoami`` proves the token before ``bun publish`` runs, both
+    reading the same ``~/.npmrc`` the auth step wrote from NPM_TOKEN."""
     steps = _run_steps(release_yml["jobs"]["publish-npm"])
-    preflight_index = next(
-        i for i, step in enumerate(steps) if "npm whoami" in step["run"]
-    )
-    publish_index = next(
-        i for i, step in enumerate(steps) if "npm publish" in step["run"]
-    )
-    preflight = steps[preflight_index]
+    auth_index = next(i for i, step in enumerate(steps) if "_authToken" in step["run"])
+    preflight_index = next(i for i, step in enumerate(steps) if "bun pm whoami" in step["run"])
+    publish_index = next(i for i, step in enumerate(steps) if "bun publish" in step["run"])
 
-    assert preflight["run"] == "npm whoami"
-    assert preflight["env"]["NODE_AUTH_TOKEN"] == "${{ secrets.NPM_TOKEN }}"
-    assert preflight_index < publish_index
+    assert steps[auth_index]["env"]["NPM_TOKEN"] == "${{ secrets.NPM_TOKEN }}"
+    assert "registry.npmjs.org" in steps[auth_index]["run"]
+    assert steps[preflight_index]["run"] == "bun pm whoami"
+    assert auth_index < preflight_index < publish_index
 
 
-def test_npm_release_publishes_public_package_with_provenance(release_yml: dict):
+def test_npm_release_publishes_public_package_with_bun(release_yml: dict):
+    """The registry tarball is published by bun; no npm CLI anywhere in the
+    release path (npm's provenance attestation went with it)."""
     steps = _run_steps(release_yml["jobs"]["publish-npm"])
-    publish = next(step for step in steps if "npm publish" in step["run"])
+    publish = next(step for step in steps if "bun publish" in step["run"])
 
-    assert publish["run"] == "npm publish --access public --provenance"
-    assert publish["env"]["NODE_AUTH_TOKEN"] == "${{ secrets.NPM_TOKEN }}"
+    assert publish["run"] == "bun publish --access public"
+    assert not any(step["run"].startswith("npm ") for step in steps)
+    assert not any("setup-node" in str(step.get("uses", "")) for step in release_yml["jobs"]["publish-npm"]["steps"])
 
 
 def test_github_packages_release_keeps_github_owner_scope(release_yml: dict):
@@ -486,6 +474,7 @@ def test_github_packages_release_keeps_github_owner_scope(release_yml: dict):
     configure = next(
         step for step in steps if "pkg.name = '@zeenie-ai/opencompany'" in step["run"]
     )
+    assert configure["run"].lstrip().startswith("bun -e")
 
     registry_assignment = next(
         line.strip()
@@ -495,7 +484,10 @@ def test_github_packages_release_keeps_github_owner_scope(release_yml: dict):
     assert registry_assignment == (
         "pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };"
     )
-    assert any(step["run"] == "npm publish" for step in steps)
+    assert any(step["run"] == "bun publish" for step in steps)
+    auth = next(step for step in steps if "_authToken" in step["run"])
+    assert "npm.pkg.github.com" in auth["run"]
+    assert auth["env"]["NPM_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
 
 
 @pytest.mark.parametrize("scope", ["@zeenie", "@zeenie-ai"])
@@ -528,11 +520,11 @@ def test_preinstall_never_removes_current_package_directory(preinstall_js_src: s
 
 def test_preinstall_gates_source_checkouts_to_bun(preinstall_js_src: str):
     """The dev-PM gate keys on ``bunfig.toml`` (committed, excluded from
-    the npm tarball by the ``files`` allowlist) and on the user agent
+    the published tarball by the ``files`` allowlist) and on the user agent
     starting with ``bun``. Bun's UA contains the literal ``npm/?``
     substring, so a substring match on ``npm`` would misfire — the gate
-    must use a prefix check. End-user tarball installs (no bunfig.toml)
-    must stay on npm without triggering the gate.
+    must use a prefix check. A published tarball (no bunfig.toml) never
+    trips the gate, whatever installed it.
     """
     assert "bunfig.toml" in preinstall_js_src
     assert "agent.startsWith('bun')" in preinstall_js_src
@@ -563,26 +555,59 @@ def test_root_manifest_declares_bun_as_the_dev_package_manager(root_pkg: dict):
     )
 
 
-def test_root_scripts_never_hop_through_npm(root_pkg: dict):
+def test_root_scripts_never_hop_through_npm_or_node(root_pkg: dict):
     """Every root script that reaches another package's script does so via
     ``bun --cwd=<dir> run`` (the ``=`` form — bun 1.4 rejects the
-    space-separated spelling). The end-user npm lifecycle hooks
-    (``preinstall`` / ``postinstall`` / ``preuninstall``) are the deliberate
-    exception: they run under the installing user's Node, where bun may be
-    absent.
+    space-separated spelling), and the lifecycle hooks run their scripts
+    under bun: there is no Node on the machine of a ``bun add -g`` user.
     """
-    lifecycle = {"preinstall", "postinstall", "preuninstall"}
     for name, cmd in root_pkg["scripts"].items():
-        if name in lifecycle:
-            continue
         assert "npm run" not in cmd and "npx " not in cmd, (
             f"root script {name!r} hops through npm: {cmd!r}"
         )
-        assert not cmd.startswith("node "), (
+        assert not cmd.startswith("node ") and " node " not in f" {cmd} ", (
             f"root script {name!r} invokes node directly: {cmd!r}"
         )
+    for hook in ("preinstall", "postinstall", "preuninstall"):
+        assert root_pkg["scripts"][hook].startswith("bun scripts/"), hook
     assert root_pkg["scripts"]["client:start"] == "bun --cwd=client run start"
     assert root_pkg["scripts"]["test:frontend"] == "bun --cwd=client run test"
+
+
+def test_root_package_declares_bun_engine_and_no_express(root_pkg: dict):
+    """``engines`` names bun, the runtime of the launcher and the sidecar;
+    the root ``express`` dependency (once a hack so the npm-tarball install
+    could run the sidecar's external express) is gone — the sidecar bundle
+    inlines it."""
+    engines = root_pkg.get("engines", {})
+    assert "bun" in engines and "node" not in engines
+    assert "express" not in root_pkg.get("dependencies", {})
+
+
+def test_installers_provision_through_the_shim_not_a_guessed_package_root(root: Path):
+    """``bun add -g`` runs no dependency lifecycle scripts, so the installers
+    provision explicitly. They must do it through ``company provision``
+    (the shim knows its own package root) and never by spelling bun's global
+    package directory, which differs by platform and configuration (on
+    Windows 1.4 it landed in the user profile, not under BUN_INSTALL)."""
+    for rel in ("install.sh", "install.ps1", "cli/terraform/gcp/startup.sh.tftpl"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "provision" in src, rel
+        assert "install/global/node_modules" not in src, rel
+        assert "scripts/install.js" not in src, rel
+    launcher = (root / "bin" / "cli.js").read_text(encoding="utf-8")
+    assert "function provision(" in launcher
+    assert "function ensureProvisioned(" in launcher
+    assert "cmd === 'provision'" in launcher
+
+
+def test_launcher_and_install_scripts_run_under_bun(root: Path):
+    """The ``company`` bin and the lifecycle scripts carry a bun shebang, so
+    a global install runs them on bun (npm's cmd-shim on Windows and the
+    symlinked bin on POSIX both honour it)."""
+    for rel in ("bin/cli.js", "bin/machina.js", "scripts/install.js", "scripts/preinstall.js", "scripts/postinstall.js"):
+        first = (root / rel).read_text(encoding="utf-8").splitlines()[0]
+        assert first == "#!/usr/bin/env bun", f"{rel}: {first!r}"
 
 
 def test_bunfig_pins_the_isolated_linker(root: Path):

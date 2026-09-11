@@ -1,10 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * OpenCompany Installation Script
  *
- * Called by postinstall.js after npm install.
- * Installs all dependencies including Python and uv.
- * WhatsApp RPC is now an npm dependency with pre-built binaries.
+ * Provisions the Python side of an install: uv, the server venv, bytecode,
+ * the CLI venv and the Temporal binary. Called by postinstall.js in a
+ * source checkout (`bun install`) and by bin/cli.js on the first `company`
+ * command of a global install (`bun add -g` runs no dependency lifecycle
+ * scripts). Plain JavaScript: runs under bun, and under node for a legacy
+ * npm-installed copy.
  */
 import { execSync } from 'child_process';
 import { existsSync, copyFileSync } from 'fs';
@@ -29,7 +32,7 @@ process.env.PYTHONUTF8 = '1';
 
 function run(cmd, cwd = ROOT, timeoutMs = 300000) {
   // Strip VIRTUAL_ENV from the spawned env. When the user runs
-  // ``npm install -g @zeenie-ai/opencompany`` from a shell that has activated a
+  // ``bun add -g @zeenie-ai/opencompany`` from a shell that has activated a
   // venv (very common during dev), uv emits a noisy ``VIRTUAL_ENV
   // ... does not match the project environment path`` warning per
   // invocation. uv only honours VIRTUAL_ENV with ``--active``, which
@@ -127,8 +130,7 @@ function installUv(pythonCmd) {
 console.log('');
 console.log('Checking dependencies...');
 console.log('');
-console.log(`  Node.js: ${getVersion('node --version')}`);
-console.log(`  npm: ${getVersion('npm --version')}`);
+console.log(`  bun: ${getVersion('bun --version') || 'not found (JS executor and plugin CLIs need it: https://bun.sh)'}`);
 
 // Check Python (required, user must install)
 let python = checkPython();
@@ -173,10 +175,10 @@ console.log(
 );
 
 // agent-browser is managed by the Python backend
-// (server/nodes/browser/_install.py) — npm-installed into
-// platformdirs.user_cache_path("OpenCompany")/browser/npm/ on first
-// use, with the Chromium runtime fetched by ``agent-browser install``
-// when the browser node first spawns. No npm dep, no postinstall step.
+// (server/nodes/browser/_install.py) — `bun add`ed into the shared
+// <DATA_DIR>/packages/ tree on first use, with the Chromium runtime
+// fetched by ``agent-browser install`` when the browser node first
+// spawns. No dependency here, no postinstall step.
 
 console.log('');
 console.log('Installing...');
@@ -204,19 +206,19 @@ try {
     console.log(`[${step}/${totalSteps}] .env exists`);
   }
 
-  // Skip client install/build if dist already exists (pre-built in npm package)
+  // Skip client install/build if dist already exists (pre-built in the published package)
   if (clientDistExists) {
     console.log(`[SKIP] Client already built (dist/index.html exists)`);
   } else {
-    // Install client dependencies
+    // Install workspace dependencies
     step++;
     console.log(`[${step}/${totalSteps}] Installing client dependencies...`);
-    run('npm install', clientDir, 600000);  // 10 min timeout
+    run('bun install', ROOT, 600000);  // 10 min timeout
 
     // Build client
     step++;
     console.log(`[${step}/${totalSteps}] Building client...`);
-    run('npm run build', clientDir, 600000);  // 10 min timeout
+    run('bun run build', clientDir, 600000);  // 10 min timeout
   }
 
   // Install Python dependencies (always needed - venv not included in package)

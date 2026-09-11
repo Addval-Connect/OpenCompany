@@ -39,8 +39,8 @@ def test_cloud_service_resolves_company_then_legacy_machina():
         encoding="utf-8"
     )
 
-    assert "npm install -g @zeenie-ai/opencompany@${version}" in template
-    assert "npm uninstall -g machinaos" in template
+    assert "bun add -g @zeenie-ai/opencompany@${version}" in template
+    assert "npm install" not in template and "npm uninstall" not in template and "nodesource" not in template
     assert "command -v company || command -v machina" in template
     assert "command -v opencompany" not in template
     assert "ExecStart=$OPENCOMPANY_BIN serve" in template
@@ -56,24 +56,34 @@ def test_installers_target_scoped_package_without_touching_unscoped_package():
     }
 
     # install.sh builds the spec (optionally pinned by OPENCOMPANY_VERSION)
-    # into $PKG before the single `npm install -g "$PKG"` call.
-    assert 'PKG="@zeenie-ai/opencompany${VERSION:+@$VERSION}"' in installers["install.sh"]
-    assert 'npm install -g "$PKG"' in installers["install.sh"]
-    assert 'npm install -g "@zeenie-ai/opencompany"' in installers["install.ps1"]
-    assert "npm install -g @zeenie-ai/opencompany@${version}" in installers["gcp startup"]
+    # into $PKG before the single `bun add -g "$PKG"` call.
+    assert 'PKG="${PKG_NAME}${VERSION:+@$VERSION}"' in installers["install.sh"]
+    assert 'PKG_NAME="@zeenie-ai/opencompany"' in installers["install.sh"]
+    assert 'bun add -g "$PKG"' in installers["install.sh"]
+    assert '$PKG_NAME = "@zeenie-ai/opencompany"' in installers["install.ps1"]
+    assert "bun add -g $PKG_NAME" in installers["install.ps1"]
+    assert "bun add -g @zeenie-ai/opencompany@${version}" in installers["gcp startup"]
 
     for source in installers.values():
-        assert "npm install -g opencompany" not in source
+        assert "npm install -g" not in source
+        assert "bun add -g opencompany" not in source
         assert "npm uninstall -g opencompany" not in source
-        assert "npm uninstall -g machinaos" in source
+    # The user-facing installers still evict a legacy npm install (the
+    # scoped package or pre-rebrand machinaos) when npm is around, so the
+    # old shim cannot shadow the bun one. The VM script starts clean.
+    for name in ("install.sh", "install.ps1"):
+        assert "machinaos" in installers[name]
+        assert "npm uninstall -g" in installers[name]
 
 
 def test_uninstaller_removes_only_scoped_and_official_legacy_packages():
     uninstaller = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
 
+    assert "remove_bun_global_package '@zeenie-ai/opencompany'" in uninstaller
     assert "remove_global_package '@zeenie-ai/opencompany'" in uninstaller
     assert "remove_global_package 'machinaos'" in uninstaller
     assert "npm uninstall -g opencompany" not in uninstaller
+    assert "bun remove -g opencompany" not in uninstaller
 
 
 def test_node_shims_print_canonical_name_and_deprecation_warning():

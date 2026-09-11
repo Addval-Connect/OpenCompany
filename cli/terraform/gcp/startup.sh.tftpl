@@ -1,6 +1,7 @@
 #!/bin/bash
 # OpenCompany VM startup script (rendered by Terraform `templatefile`).
-# Installs the toolchain, installs OpenCompany (npm), writes the login-gate env
+# Installs the toolchain (bun + uv; no Node, no npm), installs OpenCompany
+# with `bun add -g`, provisions the Python venvs, writes the login-gate env
 # file, and runs it under systemd via `company serve`.
 #
 # NOTE on syntax: Terraform renders this file with templatefile(), so any
@@ -13,25 +14,26 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "[${resource_name}] installing OpenCompany toolchain..."
 apt-get update
-apt-get install -y curl ca-certificates git build-essential pkg-config libffi-dev libssl-dev
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
+apt-get install -y curl ca-certificates git unzip build-essential pkg-config libffi-dev libssl-dev
+# bun on a stable system path: the runtime for the `company` shim, the JS
+# executor sidecar and the plugin CLIs, and the installer for the package.
+export BUN_INSTALL=/usr/local
+curl -fsSL https://bun.sh/install | bash
 # uv on a stable system path (company build uses it to sync the Python venv).
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 echo "[${resource_name}] installing OpenCompany package..."
-# The pre-rebrand package owns the deprecated `machina` binary too. Remove it
-# first so npm can create OpenCompany's compatibility shim during an upgrade.
-if npm list -g --depth=0 machinaos >/dev/null 2>&1; then
-  npm uninstall -g machinaos
-fi
 %{ if source_mode == "local" ~}
 TOKEN=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
 curl -fsS -H "Authorization: Bearer $TOKEN" -o /tmp/${resource_name}.tgz "https://storage.googleapis.com/storage/v1/b/${bucket}/o/${object}?alt=media"
-npm install -g /tmp/${resource_name}.tgz
+bun add -g /tmp/${resource_name}.tgz
 %{ else ~}
-npm install -g @zeenie-ai/opencompany@${version}
+bun add -g @zeenie-ai/opencompany@${version}
 %{ endif ~}
+# bun runs no lifecycle scripts for a global package; provision the Python
+# side now so the service's first start is warm. The shim lives in bun's
+# global bin dir ($BUN_INSTALL/bin) and knows its own package root.
+"$BUN_INSTALL/bin/company" provision
 
 echo "[${resource_name}] writing login-gate env..."
 mkdir -p /etc/${resource_name}

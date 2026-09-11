@@ -2,7 +2,7 @@
 
 Checks toolchain (node, bun, python, uv), then runs the 6-step
 build: ``.env`` bootstrap -> ``bun install`` -> client build ->
-Node.js sidecar bundle -> ``uv sync`` -> compile Python bytecode
+JS executor sidecar bundle (bun build) -> ``uv sync`` -> compile Python bytecode
 -> pooch-fetch Temporal binary.
 
 Layers ``.env.dev`` (when present in the checkout) BEFORE running
@@ -182,20 +182,11 @@ def build_command() -> None:
 
     # ---- toolchain ---------------------------------------------------
     console.print("[bold]Checking dependencies...[/]\n")
-    node_version = capture(["node", "--version"])
-    console.print(f"  Node.js: {node_version or '[red]not found[/]'}")
-    if not node_version:
-        error_block("Node.js is required.", [])
-        raise typer.Exit(code=1)
-
-    # npm is informational only: the build never calls it, but runtime
-    # plugins (`npm install --prefix`) and the sidecar's package endpoint do.
-    npm_version = capture(["npm", "--version"])
-    console.print(f"  npm: {npm_version or '[red]not found[/]'}")
-
-    # bun installs the workspace and runs every JS build script below
-    # (`bun install`, `bun run --filter ...`), so a missing bun is fatal
-    # here rather than a confusing failure inside step [1/6].
+    # bun installs the workspace, runs every JS build script below
+    # (`bun install`, `bun run --filter ...`, the sidecar's `bun build`)
+    # and is the runtime for the JS executor sidecar and the plugin CLIs,
+    # so a missing bun is fatal here rather than a confusing failure
+    # inside step [1/6].
     bun_version = capture(["bun", "--version"])
     console.print(f"  bun: {bun_version or '[red]not found[/]'}")
     if not bun_version:
@@ -204,6 +195,11 @@ def build_command() -> None:
             ["Install from https://bun.sh (the root package.json pins the version)"],
         )
         raise typer.Exit(code=1)
+
+    # Node is optional: when present, bun runs vite / vitest / eslint on it
+    # (their bins carry node shebangs); when absent, bun runs them itself.
+    node_version = capture(["node", "--version"])
+    console.print(f"  Node.js: {node_version or 'not found (optional; bun runs the build tools itself)'}")
 
     python_cmd = _which_python()
     if not python_cmd or not _check_python(python_cmd):
@@ -255,12 +251,12 @@ def build_command() -> None:
     # treats the next word as a script name).
     run(["bun", "run", "--filter", "react-flow-client", "build"], cwd=root)
 
-    # Pre-bundle the Node.js sidecar (server/nodejs) with esbuild so the
-    # production `npm start` runs `node dist/index.js` instead of
-    # interpreting `tsx src/index.ts`. Saves ~500ms-1s of cold start
-    # whenever the executor is launched. The bundle keeps Express
-    # external (it stays in node_modules), so the patch flow is intact.
-    console.log("[3/6] Building Node.js sidecar...")
+    # Bundle the JS executor sidecar (server/nodejs) with `bun build
+    # --target=bun` into one self-contained dist/index.js (express
+    # inlined) that nodes/code/_runtime.py runs on bun. Saves the
+    # TypeScript transpile on every launch and needs no node_modules at
+    # runtime, which is what lets the desktop bundle copy a single file.
+    console.log("[3/6] Building JS executor sidecar...")
     run(["bun", "run", "--filter", "opencompany-nodejs-executor", "build"], cwd=root)
 
     console.log("[4/6] Installing Python dependencies...")

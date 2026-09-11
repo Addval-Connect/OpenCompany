@@ -34,7 +34,7 @@
     "machina": "./bin/machina.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "bun": ">=1.4.0"
   },
   "packageManager": "bun@1.4.0",
   "files": [
@@ -58,6 +58,8 @@
     "!**/.pytest_cache/",
     "!**/node_modules/",
     "!**/.vite/",
+    "!**/.terraform/",
+    "!server/tests/_test_opencompany_root/",
     ".env.template",
     "pyproject.toml",
     "README.md",
@@ -97,13 +99,12 @@
     "version:sync": "python -m cli version sync",
     "typecheck": "tsc --noEmit -p client/tsconfig.json",
     "prepublishOnly": "python -m cli version sync && bun -e \"const p=require('./package.json'); if(!p.bin||!p.version){process.exit(1)}\"",
-    "preinstall": "node scripts/preinstall.js",
-    "postinstall": "node scripts/postinstall.js",
-    "preuninstall": "node scripts/preinstall.js"
+    "preinstall": "bun scripts/preinstall.js",
+    "postinstall": "bun scripts/postinstall.js",
+    "preuninstall": "bun scripts/preinstall.js"
   },
   "dependencies": {
-    "cross-env": "^10.1.0",
-    "express": "^5.2.1"
+    "cross-env": "^10.1.0"
   },
   "devDependencies": {
     "typescript": "7.0.2"

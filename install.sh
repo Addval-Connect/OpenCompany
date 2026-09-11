@@ -7,14 +7,17 @@
 # unless OPENCOMPANY_VERSION is set.
 #
 # This script installs OpenCompany and its dependencies:
-# - Node.js 18+ (distro package via brew/apt/dnf/pacman)
+# - bun (the JavaScript runtime and package manager; no Node.js, no npm)
 # - Python 3.12+ (via brew/apt/dnf/pacman)
 # - uv (Python package manager)
+#
+# Prefer the desktop app if you just want to use OpenCompany on a laptop; this
+# path is for terminal and server use.
 
 set -e
 
-MIN_NODE_VERSION=18
 MIN_PYTHON_VERSION_MINOR=12
+PKG_NAME="@zeenie-ai/opencompany"
 
 # Colors
 RED='\033[0;31m'
@@ -52,152 +55,45 @@ detect_os() {
 
 OS=$(detect_os)
 
-# Detect WSL
-is_wsl() {
-  [[ -n "$WSL_DISTRO_NAME" ]] || [[ -n "$WSL_INTEROP" ]] || grep -qi microsoft /proc/version 2>/dev/null
-}
+# bun installs to $BUN_INSTALL (default ~/.bun) and puts global bin shims in
+# its bin dir. Where it stores the global package itself varies by platform
+# and configuration, so nothing below depends on that: the `company` shim
+# knows its own package root and `company provision` does the rest.
+BUN_HOME="${BUN_INSTALL:-$HOME/.bun}"
+BUN_BIN_DIR="$BUN_HOME/bin"
 
-# Configure npm for WSL (fix nvm conflicts and Windows paths)
-setup_wsl_npm() {
-  if ! is_wsl; then
-    return 0
-  fi
-
-  info "WSL detected: Checking npm configuration..."
-
-  # If using nvm, remove any conflicting prefix from .npmrc
-  if [[ -n "$NVM_DIR" ]] || [[ -d "$HOME/.nvm" ]]; then
-    if grep -q '^prefix=' "$HOME/.npmrc" 2>/dev/null; then
-      info "Removing conflicting npm prefix (nvm detected)..."
-      sed -i '/^prefix=/d' "$HOME/.npmrc"
-      # Also remove globalconfig if present
-      sed -i '/^globalconfig=/d' "$HOME/.npmrc" 2>/dev/null || true
+# A previous npm-based install (or the pre-rebrand `machinaos` package) leaves
+# a `company` / `machina` shim on PATH that would shadow the bun one. Remove it
+# when npm happens to be around; skip silently otherwise.
+remove_legacy_npm_installs() {
+  command -v npm &> /dev/null || return 0
+  for pkg in "$PKG_NAME" machinaos; do
+    if npm list -g --depth=0 "$pkg" &> /dev/null; then
+      info "Removing legacy npm install of $pkg..."
+      npm uninstall -g "$pkg" &> /dev/null || warn "Could not remove $pkg; run: npm uninstall -g $pkg"
     fi
-
-    # Source nvm to ensure proper paths
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-      source "$NVM_DIR/nvm.sh"
-    fi
-
-    success "npm configured for nvm on WSL"
-    return 0
-  fi
-
-  # No nvm - check if npm is using Windows path
-  local npm_prefix
-  npm_prefix=$(npm config get prefix 2>/dev/null || echo "")
-
-  if [[ "$npm_prefix" == /mnt/* ]]; then
-    info "Configuring npm to use Linux-native path..."
-    mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global"
-    export PATH="$HOME/.npm-global/bin:$PATH"
-
-    # Add to .bashrc if not already there
-    if ! grep -q 'npm-global' "$HOME/.bashrc" 2>/dev/null; then
-      echo '' >> "$HOME/.bashrc"
-      echo '# npm global packages (WSL)' >> "$HOME/.bashrc"
-      echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$HOME/.bashrc"
-      info "Added npm-global to PATH in ~/.bashrc"
-    fi
-
-    success "npm configured for WSL"
-  fi
-}
-
-# The pre-rebrand package owns the deprecated `machina` binary too. Remove it
-# before installing OpenCompany so npm does not fail with an EEXIST shim clash.
-remove_legacy_machinaos() {
-  if ! npm list -g --depth=0 machinaos &> /dev/null; then
-    return 0
-  fi
-
-  info "Removing legacy machinaos package..."
-  if npm uninstall -g machinaos &> /dev/null; then
-    success "Legacy machinaos package removed"
-  elif command -v sudo &> /dev/null; then
-    info "Retrying legacy package removal with sudo..."
-    sudo npm uninstall -g machinaos
-    success "Legacy machinaos package removed"
-  else
-    error_exit "Unable to remove legacy machinaos. Try: sudo npm uninstall -g machinaos"
-  fi
+  done
 }
 
 # =============================================================================
 # Dependency Checks and Installation
 # =============================================================================
 
-check_node() {
-  # Clear command hash to ensure we find the latest node binary
+check_bun() {
   hash -r 2>/dev/null || true
-
-  if command -v node &> /dev/null; then
-    version=$(node --version | tr -d 'v')
-    major=$(echo "$version" | cut -d. -f1)
-    if [ "$major" -ge "$MIN_NODE_VERSION" ]; then
-      success "Node.js v$version"
-      return 0
-    fi
-    warn "Node.js v$version is too old (need v$MIN_NODE_VERSION+)"
+  if command -v bun &> /dev/null; then
+    success "bun $(bun --version)"
+    return 0
   fi
   return 1
 }
 
-install_node() {
-  info "Installing Node.js $MIN_NODE_VERSION..."
-
-  case "$OS" in
-    macos)
-      if command -v brew &> /dev/null; then
-        brew install node@22
-        # Add node@22 to PATH (brew doesn't link it by default)
-        export PATH="/opt/homebrew/opt/node@22/bin:/usr/local/opt/node@22/bin:$PATH"
-      else
-        error_exit "Please install Homebrew first: https://brew.sh/"
-      fi
-      ;;
-    debian)
-      # An existing Node >= 18 is kept (checked above). When none is
-      # present, install the current LTS: the published package may still
-      # require it, and Ubuntu 24.04's apt package is 18.
-      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-      sudo apt-get install -y nodejs
-      # Force rehash PATH to find newly installed node
-      hash -r 2>/dev/null || true
-      # Source profile to update PATH if needed
-      [ -f /etc/profile ] && source /etc/profile 2>/dev/null || true
-      ;;
-    redhat)
-      curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-      sudo dnf install -y nodejs
-      hash -r 2>/dev/null || true
-      ;;
-    arch)
-      sudo pacman -S --noconfirm nodejs npm
-      hash -r 2>/dev/null || true
-      ;;
-    *)
-      error_exit "Please install Node.js 18+ manually from https://nodejs.org/"
-      ;;
-  esac
-
-  # Clear hash and verify using full path as fallback
-  hash -r 2>/dev/null || true
-
-  # Check using direct path first (distro packages install to /usr/bin/node)
-  if [ -x /usr/bin/node ]; then
-    version=$(/usr/bin/node --version | tr -d 'v')
-    major=$(echo "$version" | cut -d. -f1)
-    if [ "$major" -ge "$MIN_NODE_VERSION" ]; then
-      success "Node.js v$version installed"
-      return 0
-    fi
-  fi
-
-  if ! check_node; then
-    error_exit "Failed to install Node.js. Please install manually."
+install_bun() {
+  info "Installing bun (JavaScript runtime and package manager)..."
+  curl -fsSL https://bun.sh/install | bash
+  export PATH="$BUN_BIN_DIR:$PATH"
+  if ! check_bun; then
+    error_exit "Failed to install bun. Install it manually from https://bun.sh and re-run."
   fi
 }
 
@@ -278,6 +174,23 @@ install_uv() {
   fi
 }
 
+ensure_bun_on_path() {
+  # The bun installer adds ~/.bun/bin to the shell profile; make sure the
+  # `company` shim is reachable from new shells even when bun was already
+  # present but its bin dir was not exported.
+  case ":$PATH:" in
+    *":$BUN_BIN_DIR:"*) ;;
+    *)
+      export PATH="$BUN_BIN_DIR:$PATH"
+      if ! grep -q '\.bun/bin' "$HOME/.bashrc" 2>/dev/null; then
+        echo '' >> "$HOME/.bashrc"
+        echo '# bun global packages (OpenCompany installer)' >> "$HOME/.bashrc"
+        echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.bashrc"
+      fi
+      ;;
+  esac
+}
+
 # =============================================================================
 # Main Installation Flow
 # =============================================================================
@@ -288,43 +201,32 @@ main() {
   echo ""
 
   # Check and install dependencies
-  check_node || install_node
+  check_bun || install_bun
   check_python || install_python
   check_uv || install_uv
+  ensure_bun_on_path
 
-  # Configure npm for WSL before installing
-  setup_wsl_npm
-
-  # Avoid a collision with the deprecated `machina` compatibility shim.
-  remove_legacy_machinaos
+  remove_legacy_npm_installs
 
   echo ""
   info "Installing OpenCompany..."
   echo ""
 
-  # Install OpenCompany from npm, as the current user. If the global npm
-  # prefix is not writable (system-wide Node on Linux), switch to a
-  # user-owned prefix rather than sudo: a root install leaves the venvs and
-  # ~/.opencompany owned by root, and `company start` as the login user
-  # then fails with "python: not found" (docs-internal/errors.md #16).
-  # https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally
-  if [ ! -w "$(npm prefix -g)" ]; then
-    info "Global npm prefix is not writable; using ~/.npm-global"
-    mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global"
-    export PATH="$HOME/.npm-global/bin:$PATH"
-    if ! grep -q 'npm-global' "$HOME/.bashrc" 2>/dev/null; then
-      echo '' >> "$HOME/.bashrc"
-      echo '# npm global packages (OpenCompany installer)' >> "$HOME/.bashrc"
-      echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$HOME/.bashrc"
-    fi
-  fi
   # OPENCOMPANY_VERSION pins a release (the cli/terraform startup scripts set
   # it). Otherwise ask opencompany.sh which release is current; if that is
-  # unreachable, fall back to npm's latest tag.
+  # unreachable, fall back to the registry's latest tag.
   VERSION="${OPENCOMPANY_VERSION:-$(curl -fsSL --max-time 10 https://opencompany.sh/version 2>/dev/null | tr -d '[:space:]' || true)}"
-  PKG="@zeenie-ai/opencompany${VERSION:+@$VERSION}"
-  npm install -g "$PKG" || error_exit "npm install -g $PKG failed."
+  PKG="${PKG_NAME}${VERSION:+@$VERSION}"
+  # Global install as the current user: bun's global root is user-owned, so
+  # no sudo and no root-owned venvs (docs-internal/errors.md #16).
+  bun add -g "$PKG" || error_exit "bun add -g $PKG failed."
+
+  # bun runs no lifecycle scripts for a global package, so provision the Python
+  # side now rather than on the first `company` command (which would do it too).
+  # The shim is addressed through bun's own answer for the global bin dir.
+  COMPANY="$(bun pm bin -g)/company"
+  info "Provisioning the Python environment..."
+  "$COMPANY" provision || error_exit "Provisioning failed. Re-run with: company provision"
 
   echo ""
   echo -e "${GREEN}============================================${NC}"
@@ -334,32 +236,14 @@ main() {
   echo "  Start OpenCompany:"
   echo "    company start"
   echo ""
-  echo "  Open in browser:"
-  # `.env.template` ships inside the installed package. This used to grep it
-  # from the working directory, which for `curl | bash` is wherever the user
-  # happened to be -- so the line rendered as a bare "http://localhost:".
-  # Resolve through npm's global root instead, and stay silent about the port
-  # rather than hardcoding it if that lookup fails.
-  APP_PORT=""
-  NPM_ROOT="$(npm root -g 2>/dev/null)"
-  if [ -n "$NPM_ROOT" ] && [ -f "$NPM_ROOT/@zeenie-ai/opencompany/.env.template" ]; then
-    APP_PORT="$(grep -E '^PYTHON_BACKEND_PORT=' "$NPM_ROOT/@zeenie-ai/opencompany/.env.template" \
-      | head -1 | cut -d= -f2 | tr -d '[:space:]')"
-  fi
-  if [ -n "$APP_PORT" ]; then
-    echo "    http://localhost:${APP_PORT}"
-  else
-    echo "    the URL printed by 'company start'"
-  fi
-  echo ""
   echo "  Optional: Enable JS-rendered web scraping:"
   echo "    playwright install chromium"
   echo ""
-  echo "  For development from source, install bun:"
-  echo "    https://bun.sh"
-  echo ""
   echo "  Run diagnostics:"
   echo "    company doctor"
+  echo ""
+  echo "  New shells pick up the bun bin dir from your profile; in this one run:"
+  echo "    export PATH=\"\$HOME/.bun/bin:\$PATH\""
   echo ""
 }
 

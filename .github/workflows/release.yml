@@ -1,4 +1,6 @@
-# Release workflow: predeploy gate, publish npm + GitHub Packages.
+# Release workflow: predeploy gate, publish the registry tarball to npmjs and
+# GitHub Packages with bun. No npm CLI and no setup-node: bun packs, authenticates
+# (~/.npmrc written from the job's token) and publishes.
 # Triggers on version tag push.
 
 name: Release
@@ -21,28 +23,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: '22'
-          package-manager-cache: false
-          registry-url: 'https://registry.npmjs.org'
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: python -m cli version sync
-      - name: Verify npm credentials
-        run: npm whoami
+      - name: Configure npmjs credentials
+        run: printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > ~/.npmrc
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish public npm package
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify npmjs credentials
+        run: bun pm whoami
+      - name: Publish public package
+        run: bun publish --access public
 
   publish-github-packages:
     name: Publish to GitHub Packages
@@ -56,24 +52,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: '22'
-          package-manager-cache: false
-          registry-url: 'https://npm.pkg.github.com'
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: python -m cli version sync
       - name: Configure scoped package
         run: |
-          node -e "
+          bun -e "
             const pkg = require('./package.json');
             pkg.name = '@zeenie-ai/opencompany';
             pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
-      # GitHub Packages uses the repository-scoped GITHUB_TOKEN; npm's OIDC
-      # trusted-publisher flow applies to npmjs.org, not npm.pkg.github.com.
-      - run: npm publish # zizmor: ignore[use-trusted-publishing]
+      # GitHub Packages uses the repository-scoped GITHUB_TOKEN.
+      - name: Configure GitHub Packages credentials
+        run: printf '//npm.pkg.github.com/:_authToken=%s\n' "$NPM_TOKEN" > ~/.npmrc
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: bun publish
