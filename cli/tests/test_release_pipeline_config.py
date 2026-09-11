@@ -595,6 +595,10 @@ def test_installers_provision_through_the_shim_not_a_guessed_package_root(root: 
         assert "provision" in src, rel
         assert "install/global/node_modules" not in src, rel
         assert "scripts/install.js" not in src, rel
+        # bun walks up from its (initially empty) global dir to the first
+        # package.json; a stray one in $HOME hijacks the install (errors.md
+        # 23). Every installer seeds the global dir's own manifest first.
+        assert "install/global" in src.replace("\\", "/") and "private" in src, rel
     launcher = (root / "bin" / "cli.js").read_text(encoding="utf-8")
     assert "function provision(" in launcher
     assert "function ensureProvisioned(" in launcher

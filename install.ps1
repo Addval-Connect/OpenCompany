@@ -187,6 +187,18 @@ function Main {
     Info "Installing OpenCompany..."
     Write-Host ""
 
+    # bun finds its global "project" by walking up from $BUN_INSTALL\install\global
+    # until it meets a package.json. A stray package.json or package-lock.json in
+    # the user profile (an old npm mishap) therefore hijacks global installs and
+    # `bun add -g` fails with "InvalidNPMLockfile" (docs-internal/errors.md #23).
+    # Giving the global dir its own manifest stops the walk-up.
+    $globalDir = Join-Path $BUN_HOME "install\global"
+    New-Item -ItemType Directory -Force -Path $globalDir | Out-Null
+    $globalManifest = Join-Path $globalDir "package.json"
+    if (-not (Test-Path $globalManifest)) {
+        Set-Content -Path $globalManifest -Value '{ "private": true }' -Encoding utf8
+    }
+
     # Global install as the current user (bun's global root is user-owned).
     bun add -g $PKG_NAME
     if ($LASTEXITCODE -ne 0) {

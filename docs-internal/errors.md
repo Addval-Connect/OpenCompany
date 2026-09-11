@@ -506,10 +506,18 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 
 **Fix**: `desktop/scripts/_lib.ts::tarBinary()` prefers the System32 tar on Windows and always passes the archive as a path relative to the extraction directory so no argument carries a drive colon.
 
-## 23. `company: command not found` after `bun add -g`, or `bun pm ls -g` aborts with `InvalidNPMLockfile`
+## 23. `bun add -g` fails with `InvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'`, or `company` lands in `~/node_modules`
 
-**Symptom**: `bun add -g @zeenie-ai/opencompany` succeeds, but `company` is not found in the same shell; or `bun pm ls -g` prints `error: failed to migrate lockfile: InvalidNPMLockfile`.
+**Symptom**: `bun add -g @zeenie-ai/opencompany` aborts with `InvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'`; or it succeeds but `bun pm ls -g` reports the root as your home directory and the package sits in `~/node_modules/@zeenie-ai/opencompany`; or `company` is not found in the same shell after the install.
 
-**Root cause**: bun puts global bin shims in `$(bun pm bin -g)` (`~/.bun/bin`, or `$BUN_INSTALL/bin`), which a shell opened before the bun installer ran does not have on PATH. Separately, bun keeps its global packages in a directory it chooses per platform and configuration (on Windows 1.4 it was the user profile, not `$BUN_INSTALL/install/global`), and a stray npm `package-lock.json` in that directory makes `bun pm ls -g` try to migrate it and fail.
+**Root cause**: bun resolves the "project" for a global install by walking up from its global directory (`$BUN_INSTALL/install/global`, default `~/.bun/install/global`) until it meets a `package.json`. On a fresh bun that directory is empty, so the walk continues into `$HOME`. A stray `package.json` or `package-lock.json` there (typically an old `npm init` / `npm install` run in the home directory; the lockfile is an empty `{"name": "<user>", "lockfileVersion": 3, "packages": {}}`) becomes the global project: the package is installed into `~/node_modules`, and when only the npm lockfile is present bun tries to migrate it and fails. Seen on Windows with bun 1.4.0, where the leftover pair had sat in the profile since 2025. The not-found variant is separate: bun's global bin dir (`bun pm bin -g`, `~/.bun/bin`) is not on the PATH of a shell opened before the bun installer ran.
 
-**Fix**: open a new shell, or `export PATH="$HOME/.bun/bin:$PATH"` (`$env:USERPROFILE\.bun\bin` on Windows). Nothing in OpenCompany depends on where the global package lives: `company provision` runs from the shim's own package root, `uninstall.sh` uses `bun remove -g` rather than listing, and the installers address the shim through `bun pm bin -g`. Delete the stray `package-lock.json` only if you know it is not yours.
+**Fix**: delete the stray `package.json`, `package-lock.json`, `bun.lock` and `node_modules` from your home directory (after checking they are not a real project), then give bun's global directory its own manifest and re-run the install:
+
+```bash
+mkdir -p ~/.bun/install/global
+[ -f ~/.bun/install/global/package.json ] || echo '{ "private": true }' > ~/.bun/install/global/package.json
+bun add -g @zeenie-ai/opencompany
+```
+
+`install.sh`, `install.ps1` and the cloud-init templates seed that manifest before `bun add -g`, so the installer path never hits this. For the PATH variant open a new shell, or `export PATH="$HOME/.bun/bin:$PATH"` (`$env:USERPROFILE\.bun\bin` on Windows). Nothing in OpenCompany depends on where the global package lives: `company provision` runs from the shim's own package root, `uninstall.sh` uses `bun remove -g` rather than listing, and the installers address the shim through `bun pm bin -g`.

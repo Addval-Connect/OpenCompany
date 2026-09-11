@@ -174,6 +174,22 @@ install_uv() {
   fi
 }
 
+# bun finds its global "project" by walking up from $BUN_INSTALL/install/global
+# until it meets a package.json. A stray package.json or package-lock.json in
+# $HOME (an old `npm init` / `npm install` run in the home dir) therefore
+# hijacks every global install: packages land in $HOME/node_modules and
+# `bun add -g` dies with "InvalidNPMLockfile: failed to migrate lockfile"
+# (docs-internal/errors.md #23). Giving the global dir its own manifest stops
+# the walk-up before it reaches $HOME. Harmless on a clean machine: it is the
+# same file bun would create there itself.
+seed_bun_global_dir() {
+  local global_dir="$BUN_HOME/install/global"
+  mkdir -p "$global_dir"
+  if [ ! -f "$global_dir/package.json" ]; then
+    printf '{\n  "private": true\n}\n' > "$global_dir/package.json"
+  fi
+}
+
 ensure_bun_on_path() {
   # The bun installer adds ~/.bun/bin to the shell profile; make sure the
   # `company` shim is reachable from new shells even when bun was already
@@ -205,6 +221,7 @@ main() {
   check_python || install_python
   check_uv || install_uv
   ensure_bun_on_path
+  seed_bun_global_dir
 
   remove_legacy_npm_installs
 
