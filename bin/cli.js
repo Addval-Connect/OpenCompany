@@ -53,6 +53,13 @@ Documentation: https://docs.opencompany.sh/
 `);
 }
 
+// bun is the dev package manager and script runner for source checkouts.
+// End-user global installs (the npm tarball) may not have it, so every
+// bun use below keeps an npm fallback.
+function hasBun() {
+  return getVersion('bun --version') !== null;
+}
+
 function getVersion(cmd) {
   try {
     return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -117,7 +124,8 @@ function checkDeps() {
 function doctor() {
   console.log('\nOpenCompany Doctor\n');
   try {
-    execSync('npx envinfo --system --binaries --npmPackages edgymeow,agent-browser,cross-env', {
+    const runner = hasBun() ? 'bun x' : 'npx';
+    execSync(`${runner} envinfo --system --binaries --npmPackages edgymeow,agent-browser,cross-env`, {
       cwd: ROOT, stdio: 'inherit', shell: true,
     });
   } catch { /* envinfo not available, continue with manual checks */ }
@@ -138,7 +146,8 @@ function doctor() {
 }
 
 // Resolve <ROOT>/.cli-venv Python if the postinstall step provisioned it.
-// Returns null on source checkouts (no venv -> fall back to ``npm run``).
+// Returns null on source checkouts (no venv -> fall back to ``bun run``,
+// or ``npm run`` when bun is not installed).
 function venvPython() {
   const py = process.platform === 'win32'
     ? resolve(ROOT, '.cli-venv', 'Scripts', 'python.exe')
@@ -150,9 +159,10 @@ function run(script, extraArgs = []) {
   // Global-install fast path: spawn the venv's Python directly with
   // ``-m cli <cmd>``. Skips the ``npm run`` shim that previously re-
   // resolved the system ``python`` (which on PEP 668 systems lacks
-  // the CLI runtime deps -- typer/rich/anyio/psutil). The npm-run
-  // path stays as the source-checkout fallback (``bun run start``
-  // uses package.json scripts directly).
+  // the CLI runtime deps -- typer/rich/anyio/psutil). The script-runner
+  // path stays as the source-checkout fallback: ``bun run <script>``
+  // when bun is on PATH (source checkouts are bun-only), else ``npm run``
+  // for a global install whose .cli-venv provisioning did not happen.
   const venvPy = venvPython();
   if (venvPy) {
     const child = spawn(venvPy, ['-m', 'cli', script, ...extraArgs], {
@@ -164,9 +174,12 @@ function run(script, extraArgs = []) {
     return;
   }
 
-  const npmArgs = ['run', script];
-  if (extraArgs.length) npmArgs.push('--', ...extraArgs);
-  const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', npmArgs, {
+  const runnerArgs = ['run', script];
+  if (extraArgs.length) runnerArgs.push('--', ...extraArgs);
+  const runner = hasBun()
+    ? (process.platform === 'win32' ? 'bun.exe' : 'bun')
+    : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const child = spawn(runner, runnerArgs, {
     cwd: ROOT,
     stdio: 'inherit',
     shell: true,

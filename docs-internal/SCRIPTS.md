@@ -53,8 +53,10 @@ The Electron shell is its own bun package with its own lockfile; root `bun run` 
 
 ### Dependency checks
 
-`build` checks that Node.js and npm/bun are present (no version floor), verifies
-Python 3.12+ (`_check_python`), and installs `uv` via pip if missing. `start` runs
+`build` requires Node.js (the runtime under vite/esbuild; no version floor beyond
+the package's 18+) and bun (installs the workspace and runs every JS build step),
+reports npm as informational only (runtime plugins use it, the build does not),
+verifies Python 3.12+ (`_check_python`), and installs `uv` via pip if missing. `start` runs
 no toolchain check, only the `_sqlalchemy_preflight` venv-health probe.
 
 ---
@@ -64,10 +66,10 @@ no toolchain check, only the `_sqlalchemy_preflight` venv-health probe.
 Run with `bun run <script>` from the project root (`package.json` is
 the source of truth). The dev package manager is bun@1.4.0 —
 `scripts/preinstall.js` rejects `npm install` in a source checkout.
-The commands below are quoted verbatim from `package.json`; two of them
-(`client:start`, `test:frontend`) still spell `npm run` internally
-because they invoke another package's script, which bun executes on
-Node either way (recorded follow-up).
+The commands below are quoted verbatim from `package.json`. No script
+hops through `npm run` any more: cross-package scripts use
+`bun --cwd=<dir> run <script>` (the `=` form is mandatory on bun 1.4),
+and the tools they reach (vite, vitest) still execute on Node.
 
 ### CLI wrappers
 
@@ -83,7 +85,7 @@ Node either way (recorded follow-up).
 
 | Script | Command | Description |
 |--------|---------|-------------|
-| `client:start` | `cd client && npm run start` | React frontend (Vite dev server) |
+| `client:start` | `bun --cwd=client run start` | React frontend (Vite dev server) |
 | `python:start` | `cd server && uv run python main.py` | Backend only (`main.py` reads `HOST` / `PYTHON_BACKEND_PORT` from the env) |
 | `python:daemon` | `cd server && cross-env HOST=0.0.0.0 uv run python main.py` | Backend only, LAN-reachable |
 | `temporal:worker` | `cd server && uv run python -m services.temporal.worker` | Standalone Temporal worker |
@@ -96,7 +98,7 @@ The Temporal dev server is backend-owned: the FastAPI lifespan starts it via `Te
 |--------|---------|
 | `test` | backend + frontend suites |
 | `test:backend` | `cd server && uv run pytest tests/ -v` |
-| `test:frontend` | `cd client && npm run test` (vitest) |
+| `test:frontend` | `bun --cwd=client run test` (vitest) |
 | `test:nodes` | node-plugin tests with handler coverage |
 
 ### Lifecycle hooks

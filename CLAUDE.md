@@ -757,15 +757,16 @@ company clean        # Clean build artifacts
 company help         # Show all commands
 ```
 
-### npm Scripts
+### package.json scripts (run with bun)
 ```bash
 # Core (thin wrappers over the Python CLI)
-npm run start            # Start all services (python -m cli start)
-npm run stop             # Stop all services (python -m cli stop)
-npm run build            # Build for production (python -m cli build)
-npm run clean            # Clean build artifacts (python -m cli clean)
-npm run deploy           # Self-deploy to a cloud VM (python -m cli deploy)
+bun run start            # Start all services (python -m cli start)
+bun run stop             # Stop all services (python -m cli stop)
+bun run build            # Build for production (python -m cli build)
+bun run clean            # Clean build artifacts (python -m cli clean)
+bun run deploy           # Self-deploy to a cloud VM (python -m cli deploy)
 ```
+No root script hops through `npm run`; cross-package scripts use `bun --cwd=<dir> run <script>`.
 
 ### Cross-Platform Scripts
 Service orchestration lives in the Python CLI (`company start/dev/stop/build/clean/serve/daemon/deploy/docs/version` — see `cli/`). The `scripts/` directory retains only the npm install lifecycle helpers (`install.js`, `preinstall.js`, `postinstall.js`). `company start` is single-port: uvicorn serves API + WS + built SPA on the backend port (`SERVE_STATIC_CLIENT`, default on); the retired `scripts/serve-client.js` static server and its `:3000` frontend port are gone.

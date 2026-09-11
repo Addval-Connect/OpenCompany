@@ -208,14 +208,13 @@ Locked in by the test suite at:
 ## 9. Test Run
 
 ```bash
-cd client
-npm install
-npm run test -- src/hooks/__tests__/useDragVariable.test.ts \
-                src/components/parameterPanel/__tests__
+bun install
+bun --cwd=client run test -- src/hooks/__tests__/useDragVariable.test.ts \
+                             src/components/parameterPanel/__tests__
 ```
 
 Or use the dedicated script (added in `client/package.json`):
 
 ```bash
-npm run test:nodepanels
+bun --cwd=client run test:nodepanels
 ```

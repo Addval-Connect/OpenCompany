@@ -356,7 +356,9 @@ class BrowserNode(ActionNode):
         svc = get_browser_service()
         if not svc:
             raise RuntimeError(
-                "agent-browser not installed. Run: bun install && npx agent-browser install",
+                "agent-browser not installed. OpenCompany installs it on first use "
+                "with `npm install agent-browser --prefix <DATA_DIR>/packages`; check "
+                "that npm is on PATH and see the backend log for the install error.",
             )
 
         op = params.operation

@@ -563,6 +563,28 @@ def test_root_manifest_declares_bun_as_the_dev_package_manager(root_pkg: dict):
     )
 
 
+def test_root_scripts_never_hop_through_npm(root_pkg: dict):
+    """Every root script that reaches another package's script does so via
+    ``bun --cwd=<dir> run`` (the ``=`` form — bun 1.4 rejects the
+    space-separated spelling). The end-user npm lifecycle hooks
+    (``preinstall`` / ``postinstall`` / ``preuninstall``) are the deliberate
+    exception: they run under the installing user's Node, where bun may be
+    absent.
+    """
+    lifecycle = {"preinstall", "postinstall", "preuninstall"}
+    for name, cmd in root_pkg["scripts"].items():
+        if name in lifecycle:
+            continue
+        assert "npm run" not in cmd and "npx " not in cmd, (
+            f"root script {name!r} hops through npm: {cmd!r}"
+        )
+        assert not cmd.startswith("node "), (
+            f"root script {name!r} invokes node directly: {cmd!r}"
+        )
+    assert root_pkg["scripts"]["client:start"] == "bun --cwd=client run start"
+    assert root_pkg["scripts"]["test:frontend"] == "bun --cwd=client run test"
+
+
 def test_bunfig_pins_the_isolated_linker(root: Path):
     """``linker = "isolated"`` preserves pnpm's phantom-dependency guard
     (symlinked layout); the tsgo typeRoots / vite-env.d.ts workarounds

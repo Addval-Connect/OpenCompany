@@ -188,11 +188,22 @@ def build_command() -> None:
         error_block("Node.js is required.", [])
         raise typer.Exit(code=1)
 
+    # npm is informational only: the build never calls it, but runtime
+    # plugins (`npm install --prefix`) and the sidecar's package endpoint do.
     npm_version = capture(["npm", "--version"])
     console.print(f"  npm: {npm_version or '[red]not found[/]'}")
 
+    # bun installs the workspace and runs every JS build script below
+    # (`bun install`, `bun run --filter ...`), so a missing bun is fatal
+    # here rather than a confusing failure inside step [1/6].
     bun_version = capture(["bun", "--version"])
     console.print(f"  bun: {bun_version or '[red]not found[/]'}")
+    if not bun_version:
+        error_block(
+            "bun is required to build from source.",
+            ["Install from https://bun.sh (the root package.json pins the version)"],
+        )
+        raise typer.Exit(code=1)
 
     python_cmd = _which_python()
     if not python_cmd or not _check_python(python_cmd):
