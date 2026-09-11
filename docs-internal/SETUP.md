@@ -13,18 +13,24 @@ OpenCompany/
 │   ├── core/               # DI container, database, cache
 │   ├── models/             # SQLModel definitions
 │   ├── nodes/              # Plugin folders (one per node; the WhatsApp bridge is the
-│   │                       #   `edgymeow` npm package installed under DATA_DIR/packages/, not in-tree)
+│   │                       #   `edgymeow` package `bun add`ed under DATA_DIR/packages/, not in-tree)
 │   └── requirements.txt
-├── scripts/                # npm-tarball install lifecycle helpers (install/preinstall/postinstall)
+├── scripts/                # Install lifecycle helpers, run by bun (install/preinstall/postinstall)
 └── package.json            # Workspace root; bun@1.4.0 scripts wrapping `python -m cli`
 ```
 
 ## Quick Start
 
 ```bash
-npm install -g @zeenie-ai/opencompany
+bun add -g @zeenie-ai/opencompany
 company start
 ```
+
+bun (https://bun.sh, 1.4+) and Python 3.12 are the only prerequisites — no
+Node.js, no npm. `bun add -g` runs no lifecycle scripts, so the first `company`
+command provisions the Python side (uv, the venvs, bytecode; a minute or two).
+`curl -fsSL https://opencompany.sh/install.sh | bash` (or `install.ps1` on
+Windows) installs bun, Python and uv first and provisions eagerly.
 
 Open `http://localhost:$PYTHON_BACKEND_PORT` — `company start` is single-port (API +
 WebSocket + built SPA on the backend port).
@@ -34,19 +40,24 @@ Notes for Linux servers:
 - **Memory**: plan on at least 1 GB of RAM. The backend plus the Temporal dev
   server it spawns idle at about 350 MB; a 512 MB VM is OOM-killed in a loop
   (see [errors.md #17](./errors.md#17-backend-oom-killed-in-a-loop-on-small-vms-512-mb)).
-- **uv** is installed by the postinstall: via pip where allowed, otherwise via
-  uv's official installer (PEP 668 distros such as Ubuntu 24.04, see
+- **uv** is installed by the provisioning step (`scripts/install.js`, run by
+  `company provision` on the first `company` command or eagerly by
+  `install.sh`): via pip where allowed,
+  otherwise via uv's official installer (PEP 668 distros such as Ubuntu 24.04, see
   [errors.md #15](./errors.md#15-npm-install--g-fails-with-externally-managed-environment-ubuntu-2404)).
-- **No `sudo`**: install with a user-writable npm prefix
-  (`npm config set prefix ~/.npm-global`, add `~/.npm-global/bin` to `PATH`)
-  so the venvs, the uv-managed Python and `~/.opencompany` all belong to the
-  login user. A `sudo npm install -g` leaves the venvs pointing into `/root`
-  and `company start` fails with `python: not found` (see
-  [errors.md #16](./errors.md#16-company-start-says-python-not-found-after-a-sudo-npm-install--g)).
+- **No `sudo`**: `bun add -g` installs as the login user (shim
+  `~/.bun/bin/company`; the package itself lands wherever bun keeps its
+  global packages, which nothing needs to know because `company provision`
+  runs from the shim's own root), so the venvs, the uv-managed Python and
+  `~/.opencompany` all belong to the login user with no prefix to configure.
+  The root-owned-venv failure of the npm era (see
+  [errors.md #16](./errors.md#16-company-start-says-python-not-found-after-a-sudo-npm-install--g))
+  cannot recur; `install.sh` evicts a legacy `npm install -g` copy when npm
+  happens to be present.
 
 ### Local Development (from source)
 
-**Prerequisites:** Node.js 18+ (22 recommended; CI builds on 22), Python 3.12 (CLI needs >=3.12, server venv pins >=3.11,<3.13), uv, bun 1.4+ (https://bun.sh)
+**Prerequisites:** bun 1.4+ (https://bun.sh — the package manager and the only JavaScript runtime anything shipped needs), Python 3.12 (CLI needs >=3.12, server venv pins >=3.11,<3.13), uv. Node.js is optional: when present, bun runs vite / vitest / eslint on it via their node shebangs (CI installs 22 for that reason); `company build` treats it as optional.
 
 ```bash
 git clone https://github.com/zeenie-ai/OpenCompany.git OpenCompany
@@ -74,8 +85,9 @@ Services (production `company start`; every port is declared once in `.env.templ
 
 ### Desktop app (Electron shell)
 
-End users can skip Python and Node entirely: the installers attached to each
-GitHub Release bundle `uv`, a standalone CPython 3.12 and Node 22, provision
+End users can skip Python, bun and Node entirely: the installers attached to each
+GitHub Release bundle `uv`, a standalone CPython 3.12 and bun 1.4 (the only JS
+runtime the backend needs — no Node, no npm), provision
 the backend's virtual environment into the app's data directory on first
 launch (one-time download of the Python wheels, plus the Temporal binary the
 CLI also downloads), and host the same backend-served UI in a native window.

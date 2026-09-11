@@ -41,7 +41,7 @@ The repo currently ships **three workflows** plus one composite action. A number
 | Release | `.github/workflows/release.yml` | `v*.*.*` tag, `workflow_dispatch` | predeploy gate → publish (npm + GitHub Packages) |
 | Desktop CI | `.github/workflows/desktop-ci.yml` | PR touching `desktop/**` or the backend host-contract files; push to main touching `desktop/**` | typecheck + unit + staged-tree invariants + `electron-vite build` + Playwright Electron smoke on ubuntu-22.04 (xvfb) and windows-latest |
 | Desktop release | `.github/workflows/desktop-release.yml` | `v*.*.*` tag, `workflow_dispatch` | 3-runner matrix (windows-latest x64, macos-14 arm64+x64, ubuntu-22.04 x64) builds installers with electron-builder into one **draft** GitHub Release; `finalize` undrafts once every leg is green. Artifacts-only on dispatch unless `publish` is ticked |
-| Setup | `.github/actions/setup/action.yml` | (composite) | bun 1.4 + Node 22 + Python 3.12 + uv v8 + editable CLI install |
+| Setup | `.github/actions/setup/action.yml` | (composite) | bun 1.4 + Node 22 (CI-only: bun runs vite / vitest / eslint on it) + Python 3.12 + uv v8 + editable CLI install |
 
 ### Toolchain pin
 
@@ -72,7 +72,7 @@ Desktop code signing is deliberately absent for the first releases: `CSC_IDENTIT
 | Tool | Version source | Action |
 |------|---------------|--------|
 | bun | `oven-sh/setup-bun` v2.2.0 — reads the root `packageManager` pin (`bun@1.4.0`) | Immutable commit SHA |
-| Node.js | `node-version` input, default `22` | `actions/setup-node` v6.5.0, immutable commit SHA; package cache disabled |
+| Node.js | `node-version` input, default `22` — a CI-only convenience: bun runs vite / vitest / eslint on it via their node shebangs (open bun-runtime bugs in vitest and eslint); nothing shipped needs Node | `actions/setup-node` v6.5.0, immutable commit SHA; package cache disabled |
 | Python | hard-coded `3.12` (matches `.python-version`) | `actions/setup-python` v5.6.0, immutable commit SHA |
 | uv | `astral-sh/setup-uv` v8.1.0, cache disabled | Immutable commit SHA |
 
@@ -106,7 +106,7 @@ Reusable `workflow_call` workflow with four independent jobs (no plan/change-det
 | Push of `v*.*.*` tag | predeploy gate, then publish to npm + GitHub Packages |
 | `workflow_dispatch` | Same job graph (manual run; there is no dry-run switch) |
 
-The workflow default is `contents: read`. Publishing permissions are scoped to the job that needs them: npm receives `id-token: write` for provenance, while GitHub Packages receives `packages: write`. Checkout credentials are not persisted in either publishing job.
+The workflow default is `contents: read`. Publishing permissions are scoped to the job that needs them: the npmjs job needs nothing beyond `contents: read` (bun authenticates with the `NPM_TOKEN` it writes to `~/.npmrc`; npm provenance attestation, and the `id-token: write` it needed, went away with the npm CLI), while GitHub Packages receives `packages: write`. Checkout credentials are not persisted in either publishing job.
 
 ### Job graph
 
@@ -119,15 +119,15 @@ publish-npm                    publish-github-packages
    |                              |
    +- build                       +- build
    +- cli version sync            +- cli version sync
-   +- verify npm auth             +- rewrite package name
+   +- write ~/.npmrc + bun pm whoami +- rewrite package name (bun -e)
    +- publish canonical package   +- publish mirror package
       @zeenie-ai/opencompany         @zeenie-ai/opencompany
-      npmjs, public + provenance     npm.pkg.github.com
+      npmjs, bun publish --access public   npm.pkg.github.com, bun publish
 ```
 
-- Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → immutable `actions/setup-node` (with the target `registry-url`) → `bun install --frozen-lockfile` → `bun run build` → `python -m cli version sync`.
-- `publish-npm` — validates the token with `npm whoami`, then publishes the canonical public npmjs package `@zeenie-ai/opencompany` via `npm publish --access public --provenance` with `NODE_AUTH_TOKEN=secrets.NPM_TOKEN`. The `--provenance` flag emits an npm provenance attestation (backed by the workflow's `id-token: write`).
-- `publish-github-packages` — rewrites `package.json` `name` to `@zeenie-ai/opencompany` and sets `publishConfig.registry = https://npm.pkg.github.com`, then `npm publish` with `NODE_AUTH_TOKEN=secrets.GITHUB_TOKEN`.
+- Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → `bun install --frozen-lockfile` → `bun run build` → `python -m cli version sync`. There is no `setup-node` step and no npm CLI anywhere in the release: bun packs, authenticates and publishes.
+- `publish-npm` — writes `//registry.npmjs.org/:_authToken=<NPM_TOKEN>` to `~/.npmrc`, validates it with `bun pm whoami`, then publishes the canonical public npmjs package `@zeenie-ai/opencompany` via `bun publish --access public`. npm provenance attestation was an npm-CLI feature and is gone with it.
+- `publish-github-packages` — rewrites `package.json` `name` to `@zeenie-ai/opencompany` and sets `publishConfig.registry = https://npm.pkg.github.com` (a `bun -e` one-liner), writes the `//npm.pkg.github.com/:_authToken=<GITHUB_TOKEN>` line to `~/.npmrc`, then `bun publish`.
 
 Both registries use `@zeenie-ai/opencompany`, matching the npm and GitHub
 organization owned by the project.
@@ -202,8 +202,8 @@ The following existed in earlier drafts of this doc but are **not present in the
 - **`predeploy.yml` change-detection + aggregator** — a `plan` job (`dorny/paths-filter`) gating downstream jobs, a `pre-commit` job, pytest sharding by domain, and a `ci-passed` aggregator (`re-actors/alls-green`) as the single branch-protection target. Today every predeploy job runs unconditionally and there is no aggregator job.
 - **`release.yml` hardening** — `workflow_dispatch` dry-run default, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job. (An earlier draft also planned a blocking `pnpm audit`; bun has no audit-equivalent gate, so the top-level `overrides` block + Dependabot alerts are the vulnerability-remediation channel instead.)
 - **`publish-pypi.yml`** — reusable PyPI publish (OIDC trusted publishing, `uv build --no-sources`, `pypa/gh-action-pypi-publish`). No PyPI distribution is published today.
-- **`test-install.yml`** — cross-platform end-user install smoke (npm install, git clone, install script) across 3 OS.
-- **`rollback.yml`** — manual `npm deprecate` + optional revert PR.
+- **`test-install.yml`** — cross-platform end-user install smoke (`bun add -g`, git clone, install script) across 3 OS.
+- **`rollback.yml`** — manual registry deprecate (`npm deprecate` has no bun equivalent, so this would be the one place the npm CLI reappears) + optional revert PR.
 - **`codeql.yml`** — Python + JS/TS SAST (`security-extended`).
 - **`check-zizmor.yml`** — workflow-security linter (SARIF to the Security tab).
 - **`.pre-commit-config.yaml`** — ruff / prettier / eslint / actionlint hooks (note: the project rule is to verify with pytest + the root `typecheck` gate + eslint, not ruff). This file is **not currently present in the tree**; the entry describes intent, not a live hook.

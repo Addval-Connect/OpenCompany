@@ -1,7 +1,8 @@
 # Desktop App
 
 The OpenCompany desktop app is an Electron shell in [`desktop/`](../desktop/)
-that bundles `uv`, a standalone CPython and Node, provisions the backend's
+that bundles `uv`, a standalone CPython and bun (the only JavaScript runtime the
+backend needs — no Node, no npm), provisions the backend's
 virtual environment on first launch, runs the same uvicorn backend the CLI
 runs, and shows the backend-served SPA in a native window. Nothing in
 `client/` changes: every URL in the SPA is relative and the WebSocket URL is
@@ -22,11 +23,12 @@ produced this feature. Short form:
 - **Bundle uv + Python, `uv sync` at first run** (over a pre-built venv in
   the installer). The venv is built at its final path, so nothing has to be
   made relocatable; the macOS signing scope (later) is a fixed set of
-  ~60 CPython Mach-O files plus uv and Node; updates re-sync only when
+  ~60 CPython Mach-O files plus uv and bun; updates re-sync only when
   `uv.lock` / `pyproject.toml` / the bundled Python changes. OpenCompany
   already provisions at first run (`install.js` runs `uv sync`, Temporal and
-  the npm CLIs download on first use, `browser_harness` needs `uv` at
-  runtime), so uv ships in every design.
+  the plugin CLIs (`bun add` into `~/.opencompany/packages/`) download on
+  first use, `browser_harness` needs `uv` at runtime), so uv ships in every
+  design.
 
 ## Layout
 
@@ -38,17 +40,20 @@ OpenCompany.app / OpenCompany/ / AppImage
       package.json                package.json, .opencompany/workflows/,
       .opencompany/workflows/     server/uv.lock, server/pyproject.toml
       client/dist/
-      server/  (+ nodejs/dist/index.js re-bundled with express inlined)
+      server/  (+ nodejs/dist/index.js — the sidecar's own `bun build --target=bun`, express inlined)
     runtime/
       uv/uv[.exe]                 pinned uv (runtimes.json)
       python/                     python-build-standalone install_only_stripped
-      node/                       official Node LTS dist incl. npm
-    licenses/
+      bun/bun[.exe]               official bun release zip (runtimes.json): the JS executor runtime
+                                  and the installer for the plugin CLIs; LICENSE.md fetched from the bun repo
+    licenses/                     OpenCompany-LICENSE, Bun-LICENSE.md, Python-LICENSE.txt
 
 <userData>                        %APPDATA%/OpenCompany | ~/Library/Application Support/OpenCompany | ~/.config/OpenCompany
     pyenv/venv/                   UV_PROJECT_ENVIRONMENT (+ .provision.json stamp)
     pyenv/python/                 UV_PYTHON_INSTALL_DIR (fallback path only)
     pyenv/cache/  pyenv/tools/    UV_CACHE_DIR, UV_TOOL_DIR / UV_TOOL_BIN_DIR
+    bun/                          BUN_INSTALL (+ bun/install/cache = BUN_INSTALL_CACHE_DIR): bun's package
+                                  cache and global state, kept out of a dev install's ~/.bun
     pycache/                      PYTHONPYCACHEPREFIX (bundle is read-only)
     logs/main.log, backend.log, backend.stdout.log
     desktop-state.json            persisted port
@@ -105,21 +110,28 @@ modules, so both macOS architectures build on one arm64 runner.
 ```bash
 cd desktop
 bun install
-bun run stage                 # app-root from `npm pack --dry-run` + runtimes for this host
+bun run stage                 # app-root from `bun pm pack --dry-run` + runtimes for this host
 bun run typecheck && bun run test && bun run test:invariants
 bun run build && bun run test:e2e
 bun run gen-icons && bun run dist
 ```
 
-`desktop/scripts/stage.ts` takes the file list from `npm pack --dry-run --json` (the
-root `files` allowlist, i.e. what the npm package ships), drops what a bundle
+`desktop/scripts/stage.ts` takes the file list from `bun pm pack --dry-run` (the
+root `files` allowlist, i.e. what the published tarball ships), drops what a bundle
 never needs (CLI, install scripts, client sources, backend tests) and
-force-includes `server/uv.lock`. It re-bundles the Node sidecar with
-`express` inlined. `desktop/scripts/fetch-runtimes.ts` downloads the versions pinned
+force-includes `server/uv.lock`. It builds the JS executor sidecar with the
+sidecar package's own `bun run build` (`bun build --target=bun`, a self-contained
+bundle with `express` inlined) and copies `dist/index.js` — no re-bundle of its
+own. `desktop/scripts/fetch-runtimes.ts` downloads the versions pinned
 in `runtimes.json`, verifies each against the upstream checksum manifest
 (`.sha256` sidecars for uv, `SHA256SUMS` for python-build-standalone,
-`SHASUMS256.txt` for Node), caches in `vendor/`, and extracts into
-`stage/runtime/<os>-<arch>/`. Extraction uses the platform `tar`; on Windows
+`SHASUMS256.txt` for bun), fetches bun's `LICENSE.md` from the bun repo (the
+release zip carries no license file; electron-builder ships it as
+`licenses/Bun-LICENSE.md`), caches in `vendor/`, prunes stale runtime dirs (a
+leftover `node/` from an older stage), and extracts into
+`stage/runtime/<os>-<arch>/`. The staged-tree invariants assert bun is present,
+no `node/` dir exists, and the sidecar boots on the bundled bun with Node
+stripped from PATH. Extraction uses the platform `tar`; on Windows
 the System32 bsdtar is used explicitly because Git's GNU tar cannot read
 zips.
 
@@ -162,8 +174,8 @@ bundled Python. Then remove the macOS notify-only branch in
   windows-latest / macos-14 / ubuntu-22.04; builds the client and sidecar
   with the repo toolchain, stages, runs typecheck + unit + invariant tests,
   `electron-builder --publish always` into one draft release; a `finalize`
-  job undrafts it once all legs pass. Separate from `release.yml` so npm
-  publish is never blocked and its locked strings are untouched.
+  job undrafts it once all legs pass. Separate from `release.yml` so the
+  registry publish (`bun publish`) is never blocked and its locked strings are untouched.
 - `desktop-ci.yml` on PRs touching `desktop/**` or the backend contract
   files: typecheck, unit, invariants, build, and the Playwright Electron
   smoke (xvfb on Linux) against a `uv sync`ed checkout venv.
@@ -173,7 +185,7 @@ bundled Python. Then remove the macOS notify-only branch in
 | Env var | Effect |
 |---|---|
 | `OPENCOMPANY_DESKTOP_APP_ROOT` | serve this app-root instead of `stage/app-root` (e.g. the repo checkout) |
-| `OPENCOMPANY_DESKTOP_RUNTIME_DIR` | use these `uv/python/node` dirs |
+| `OPENCOMPANY_DESKTOP_RUNTIME_DIR` | use these `uv/python/bun` dirs |
 | `OPENCOMPANY_DESKTOP_VENV_PYTHON` | use this interpreter and skip provisioning |
 | `OPENCOMPANY_DESKTOP_SKIP_PROVISION=1` | trust the existing venv even if the stamp differs |
 | `OPENCOMPANY_DESKTOP_NO_ATTACH=1` | never attach to a running backend (tests) |

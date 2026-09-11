@@ -588,7 +588,7 @@ per node type) — same pattern as every other folder.
 | Service factory for the DI container (`container.<name>()` resolves to a plugin-owned service) | `services.plugin.service_factories` | `register_service_factory(name, factory)` |
 | Short Terminal-UI log tag for a logger-name prefix (only when the `nodes.<plugin>` auto-rule yields an unwanted tag) | `core.logging` | `register_log_source_tag(prefix, tag)` |
 | Callback fired after a conversation durably saves (RFC-0002 Context live-view) | `services.agent_context.listeners` | `register_conversation_listener(listener)` — keyword-args only; a listener can never fail a save. |
-| Long-lived process supervisor (WhatsApp bridge, Node sidecar, Discord gateway) | `services._supervisor` | `register_supervisor(supervisor)` — idempotent per `supervisor.label`; a label collision raises `ValueError`. |
+| Long-lived process supervisor (WhatsApp bridge, the JS executor sidecar on bun, Discord gateway) | `services._supervisor` | `register_supervisor(supervisor)` — idempotent per `supervisor.label`; a label collision raises `ValueError`. |
 
 All accept idempotent re-imports (same callable / class for the
 same key is a no-op; conflicts raise `ValueError`).

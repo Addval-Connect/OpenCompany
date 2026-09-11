@@ -224,8 +224,8 @@ Unified multi-platform messaging (WhatsApp, Telegram, Discord, Slack, SMS, Email
 ### Code Nodes (4 nodes)
 All dual-purpose (workflow node + AI tool):
 - `pythonExecutor` - Python code execution (in-process)
-- `javascriptExecutor` - JavaScript execution via persistent Node.js server
-- `typescriptExecutor` - TypeScript execution via persistent Node.js server (tsx)
+- `javascriptExecutor` - JavaScript execution via the persistent JS executor sidecar (Express on bun; `server/nodejs/`)
+- `typescriptExecutor` - TypeScript execution via the same sidecar (bun transpiles TypeScript natively; no tsx)
 - `montyExecutor` - Sandboxed Python via the Monty interpreter
 
 ### Chat Nodes (2 nodes)

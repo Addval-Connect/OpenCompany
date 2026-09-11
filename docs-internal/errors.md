@@ -337,7 +337,7 @@ with no "Signed in" page — yet the backend log shows the login succeeded and c
 
 **Fix** (landed at tag v0.0.88): `services/events/cli.py::run_cli_command()` gained an optional `stdin` parameter (default `None` = inherit, unchanged for every existing caller). `nodes/agent/claude_code_agent/_oauth.py::_run_auth` passes `stdin=asyncio.subprocess.PIPE` **for the `login` subcommand only** so the CLI's stdin read blocks instead of EOFing, keeping the callback server alive until the flow completes naturally. `status` / `logout` stay on inherit-stdin (one-shot, no stdin read).
 
-Note the binary install path also moved this release: the claude CLI now lives in the shared OpenCompany npm tree at `<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]` (was `<DATA_DIR>/claude/npm/...`). The fresh `npm install` triggered by that move is what pulled the 2.1.162 native binary that surfaced this bug — the path change was the trigger, the `stdin=PIPE` is the actual fix.
+Note the binary install path also moved this release: the claude CLI now lives in the shared OpenCompany packages tree at `<DATA_DIR>/packages/node_modules/.bin/claude` (was `<DATA_DIR>/claude/npm/...`; the Windows shim was `claude.cmd` under npm at the time and is bun's `claude.exe` + `claude.bunx` since the tree moved to `bun add`). The fresh install triggered by that move is what pulled the 2.1.162 native binary that surfaced this bug — the path change was the trigger, the `stdin=PIPE` is the actual fix.
 
 ---
 
@@ -409,7 +409,9 @@ python -c "import ntpath; print(ntpath.join(r'D:\ws\AI_Employee_1', '2:processMa
 
 ## 15. `npm install -g` Fails With `externally-managed-environment` (Ubuntu 24.04+)
 
-**Symptom**: `npm install -g @zeenie-ai/opencompany` aborts inside the postinstall with:
+**Historical note (bun channel)**: the install channel is now `bun add -g @zeenie-ai/opencompany`, which runs no lifecycle scripts; the same provisioning (`scripts/install.js`) runs on the first `company` command instead, or eagerly from `install.sh` / `install.ps1`, so this failure would surface there rather than in an npm postinstall. The fix below still applies unchanged, and the installer scripts install uv themselves before provisioning.
+
+**Symptom**: `npm install -g @zeenie-ai/opencompany` (the install channel at the time) aborted inside the postinstall with:
 ```
 Installing uv via pip...
 error: externally-managed-environment
@@ -418,7 +420,7 @@ Seen on Ubuntu 24.04 (EC2 `ubuntu-noble` AMI). `python3 -m ensurepip` also fails
 
 **Root cause**: `scripts/install.js` installed uv with `python3 -m pip install uv` and had no other path. PEP 668 marks the distro Python as externally managed, so the system pip refuses every install outside a venv.
 
-**Fix** (shipped after 0.1.1): `installUv` tries pip first and, on failure, runs uv's official standalone installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`, `irm https://astral.sh/uv/install.ps1 | iex` on Windows) and prepends `~/.local/bin` to `PATH` for the rest of the install. On a 0.1.1 install, run that installer yourself first; the postinstall then finds `uv` and continues.
+**Fix** (shipped after 0.1.1): `installUv` tries pip first and, on failure, runs uv's official standalone installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`, `irm https://astral.sh/uv/install.ps1 | iex` on Windows) and prepends `~/.local/bin` to `PATH` for the rest of the install. On a 0.1.1 install, run that installer yourself first; the provisioning step then finds `uv` and continues.
 
 ---
 
@@ -432,16 +434,18 @@ sh: 1: python: not found
 ```
 Seen on Ubuntu 26.04 (system Python 3.14).
 
-**Root cause**: `server/pyproject.toml` pins `requires-python = ">=3.11,<3.13"`. When the system Python falls outside that range, `uv sync` downloads a managed CPython 3.12 into the invoking user's `~/.local/share/uv/python/` and both `server/.venv` and `.cli-venv` symlink into it. With `sudo npm install -g` that user is root, and `/root` is mode 700, so the venv interpreters are unusable by anyone else. `bin/cli.js` then falls back to `npm run start`, which needs a bare `python` on `PATH`; Ubuntu has only `python3`.
+**Historical note (bun channel)**: this failure mode belonged to the npm channel. `bun add -g` installs as the login user (shim `~/.bun/bin/company`; the package itself sits wherever bun keeps its global packages, which `company provision` never needs to know) — there is no global prefix to make writable and no reason to reach for `sudo`, so the venvs, the uv-managed Python and `~/.opencompany` belong to the login user by construction. `install.sh` / `install.ps1` run `bun add -g` as the invoking user and, when npm happens to be present, evict a legacy npm install of the scoped package or `machinaos` (the shims would otherwise shadow the bun one). A leftover root install from the npm era is still removed with `sudo npm uninstall -g @zeenie-ai/opencompany && sudo rm -rf /root/.opencompany`.
 
-**Fix**: do the global install without `sudo`, using a user-writable npm prefix (the npm-documented way; Ubuntu 26.04 has no `python3.12` apt package to fall back on):
+**Root cause** (npm era): `server/pyproject.toml` pins `requires-python = ">=3.11,<3.13"`. When the system Python falls outside that range, `uv sync` downloads a managed CPython 3.12 into the invoking user's `~/.local/share/uv/python/` and both `server/.venv` and `.cli-venv` symlink into it. With `sudo npm install -g` that user was root, and `/root` is mode 700, so the venv interpreters were unusable by anyone else. `bin/cli.js` then fell back to the script-runner path, which needs a bare `python` on `PATH`; Ubuntu has only `python3`.
+
+**Fix** (npm era): do the global install without `sudo`, using a user-writable npm prefix (Ubuntu 26.04 has no `python3.12` apt package to fall back on):
 ```bash
-npm config set prefix ~/.npm-global
+npm config set prefix ~/.npm-global      # npm era only; bun add -g is user-owned under ~/.bun
 echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> ~/.bashrc && source ~/.bashrc
 npm install -g @zeenie-ai/opencompany
 company start
 ```
-uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the login user, and data lands in `~/.opencompany`. If a root install already exists, remove it first: `sudo npm uninstall -g @zeenie-ai/opencompany && sudo rm -rf /root/.opencompany`. Verified on an EC2 t3a.small running Ubuntu 26.04. `install.sh` (the `curl | bash` installer) now does this itself whenever the global prefix is not writable, instead of retrying with `sudo`; verified end to end on a fresh Ubuntu 24.04 t3.micro.
+uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the login user, and data lands in `~/.opencompany`. Verified on an EC2 t3a.small running Ubuntu 26.04, and end to end on a fresh Ubuntu 24.04 t3.micro through `install.sh`. The bun channel keeps the same rule — install as the login user, never `sudo` — and gets the user-owned layout for free.
 
 ---
 
@@ -467,11 +471,13 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 
 ## 19. JS/TS Executor Fails on a Fresh npm Install: `Cannot find package 'express'`
 
-**Symptom**: On a machine set up with `npm install -g @zeenie-ai/opencompany`, the first JavaScript or TypeScript executor node run fails with `Node.js executor did not become ready`, and the sidecar log shows `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from .../server/nodejs/dist/index.js`.
+**Historical note (moot on the bun channel)**: the sidecar is now built with `bun build src/index.ts --target=bun --outfile=dist/index.js`, a self-contained bundle with `express` inlined, and runs as `bun dist/index.js` (`nodes/code/_runtime.py` via `core/js_runtime.py`). There is no runtime dependency left to resolve, so the root `express` dependency this fix added has been removed again. Kept for the record.
 
-**Root cause**: The sidecar bundle is built with `--packages=external`, so Express stays a runtime dependency, but it was declared only in `server/nodejs/package.json`. The npm package excludes every `node_modules`, and `nodes/code/_runtime.py` only checks that `dist/index.js` exists, so nothing ever installed Express on an npm-installed copy. Source checkouts never saw it because `bun install` provisions the workspace.
+**Symptom** (npm era): On a machine set up with `npm install -g @zeenie-ai/opencompany`, the first JavaScript or TypeScript executor node run failed with `Node.js executor did not become ready`, and the sidecar log showed `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from .../server/nodejs/dist/index.js`.
 
-**Fix**: `express` is declared in the root `package.json` `dependencies`, so npm installs it beside the package and Node resolves it from `server/nodejs/dist` by walking up to the package root. Nothing else changed; the sidecar still runs under whichever `node` is on `PATH` (18+ verified on Ubuntu 24.04's distro package).
+**Root cause** (npm era): The sidecar bundle was built with esbuild's `--packages=external`, so Express stayed a runtime dependency, but it was declared only in `server/nodejs/package.json`. The package excludes every `node_modules`, and `nodes/code/_runtime.py` only checks that `dist/index.js` exists, so nothing ever installed Express on an npm-installed copy. Source checkouts never saw it because `bun install` provisions the workspace.
+
+**Fix** (npm era): `express` was declared in the root `package.json` `dependencies`, so npm installed it beside the package and Node resolved it from `server/nodejs/dist` by walking up to the package root. Superseded by the `--target=bun` bundle above.
 
 ## 20. Graceful backend shutdown hangs, then the supervisor tree-kills it (Temporal / node / edgymeow orphaned)
 
@@ -479,7 +485,7 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 
 **Root causes** (two, found while building the desktop shell; the CLI's 5 s grace + tree-kill had masked both):
 
-1. `nodes/browser/_service.py::shutdown_browser_service` called `get_browser_service()`, which lazily runs `npm install agent-browser@latest` on first call — so a process that never used the browser ran a network install *at teardown*, synchronously on the event loop, and every graceful exit wedged there.
+1. `nodes/browser/_service.py::shutdown_browser_service` called `get_browser_service()`, which lazily runs the `agent-browser@latest` install on first call (`npm install` at the time; `bun add` via `core/js_runtime.add_package` today) — so a process that never used the browser ran a network install *at teardown*, synchronously on the event loop, and every graceful exit wedged there.
 2. uvicorn's `timeout_graceful_shutdown` defaults to `None`: it waits forever for open connections and in-flight handler tasks before sending the lifespan shutdown. A browser WebSocket that disappears with a TCP reset (the tab or window closing) can leave its handler task lingering, and the lifespan teardown — the part that reaps the child daemons — is never reached.
 
 **Fix**: the browser hook reads its module singleton and closes only a service that was actually created; every plugin shutdown hook now runs under `HOOK_TIMEOUT_SECONDS` (10 s, `services/plugin/shutdown_hooks.py`) and names the offender at WARNING; `company serve` / `company start` and the desktop shell pass `--timeout-graceful-shutdown 5` (`cli/_common.py::UVICORN_GRACEFUL_SHUTDOWN_SECONDS`). Note that the hook timeout cannot interrupt a hook that blocks the loop synchronously — keep hooks async.

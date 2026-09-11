@@ -8,7 +8,7 @@ Post-migration (2026-04-14). Single source of truth for the current frontend.
 
 - **React 19 + Vite 7**, type-checked by **TypeScript 7** (the native Go compiler, exact-pinned `7.0.2` in the **root** `devDependencies`). The client keeps `typescript@^5.9.3` only because typescript-eslint's peer range excludes 6/7 — it is not the gate. With the **React Compiler** (`babel-plugin-react-compiler@1.0.0`, `target: '19'`, scoped to all of `src/` except `components/ui/`).
 - **Tailwind v4** via `@tailwindcss/vite` + `@import "tailwindcss"` in [src/index.css](../client/src/index.css). Tokens defined in the same CSS file via `@theme inline` (no `tailwind.config.js` colors block).
-- **shadcn/ui** via the canonical CLI (`npx shadcn@latest add`). All primitives live under [client/src/components/ui/](../client/src/components/ui/) as first-class repo files we can edit.
+- **shadcn/ui** via the canonical CLI (`bun x shadcn@latest add` — bun's `npx` equivalent; npm is not part of the toolchain). All primitives live under [client/src/components/ui/](../client/src/components/ui/) as first-class repo files we can edit.
 - **Radix UI** is the primitive engine shadcn uses (Dialog, Accordion, Select, Switch, Tabs, Tooltip, Popover, Dropdown, AlertDialog, Collapsible, Progress, Slider, Label, Checkbox).
 - **Forms**: react-hook-form + zod via shadcn's `Form` composition. Per-form schemas live colocated with the form (e.g. `credentials/panels/schemas/email.ts`); tiny forms use inline zod.
 - **Toasts**: `sonner` imported directly at call-sites. The shadcn `<Toaster />` wrapper (at [components/ui/sonner.tsx](../client/src/components/ui/sonner.tsx)) is patched to read our `ThemeContext` instead of `next-themes`.
@@ -26,7 +26,7 @@ Post-migration (2026-04-14). Single source of truth for the current frontend.
 | Type checker (second opinion) | `typescript@^5.9.3` in **client** `dependencies` | Kept for typescript-eslint's peer range (`>=4.8.4 <6.1.0`). Two `typescript` entries cannot live in one manifest, and both 5.x and 7.x expose a `tsc` bin — hence the root/client split. `bun run typecheck:tsc` runs it for triage only. |
 | Compiler | `babel-plugin-react-compiler@1.0.0` (exact-pinned; `target: '19'` = the React version, not the plugin version) | [vite.config.js](../client/vite.config.js) (scoped: all of `/src/` except `components/ui/`). Pin is exact because semver sorts the old `19.1.0-rc.3` **above** `1.0.0`, so a range would silently reinstall the release candidate — which lacks the incompatible-library skip list. |
 | Styling | Tailwind v4 + `@tailwindcss/vite` | [index.css](../client/src/index.css) + [tailwind.config.js](../client/tailwind.config.js) |
-| Component library | shadcn/ui (CLI `npx shadcn@latest add`) | [components/ui/](../client/src/components/ui/) |
+| Component library | shadcn/ui (CLI `bun x shadcn@latest add`) | [components/ui/](../client/src/components/ui/) |
 | Primitives | Radix UI | Pulled as transitive deps by shadcn |
 | Icons | `lucide-react` | Everywhere. No more `@ant-design/icons`. Backend-declared node / provider icons go through `<NodeIcon size={token}>` — `theme.nodeSize.squareIcon` on canvas nodes, `theme.iconSize.*` elsewhere; the token is applied as width, height and emoji font size, so never size an icon with `h-*` / `text-*` classes. |
 | Typography | `@tailwindcss/typography` (`prose`) | Activated via `@plugin` in index.css |
@@ -289,7 +289,7 @@ All under [components/ui/](../client/src/components/ui/). Editable — add varia
 | Toast | `Sonner` `<Toaster />` | Patched for our ThemeContext |
 
 **Rules for adding primitives:**
-- Always use the CLI: `OPENCOMPANY_INSTALLING=true npx shadcn@latest add <name>` from `client/` (the env var suppresses the project's recursive postinstall hook).
+- Always use the CLI: `OPENCOMPANY_INSTALLING=true bun x shadcn@latest add <name>` from `client/` (the env var suppresses the project's recursive postinstall hook).
 - New variants go inside the generated file (we own it).
 - Don't wrap primitives in `<Stack>`/`<Inline>`/`<Text>`/`<Heading>`. Use raw Tailwind classes. The Tailwind utility API IS the design system for layout/typography.
 
@@ -628,7 +628,7 @@ bun run typecheck:tsc   # second opinion under client's tsc 5.9.3 (triage only, 
 **Adding shadcn components:**
 ```bash
 cd client
-OPENCOMPANY_INSTALLING=true npx shadcn@latest add <name>
+OPENCOMPANY_INSTALLING=true bun x shadcn@latest add <name>
 ```
 The `OPENCOMPANY_INSTALLING=true` env var suppresses the recursive project postinstall hook during shadcn's internal package-manager install. Without it the hook's `company build` run fails and shadcn aborts before writing the component file.
 

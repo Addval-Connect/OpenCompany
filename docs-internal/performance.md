@@ -93,7 +93,7 @@ corresponding `start.log` measurement.
 | 2026-05-04 | Lazy LangChain imports in `services/ai.py` (BaseMessage stays eager; everything else moves into local imports) | **~30 s** AIService cold import | `74b75b6` | inline plan |
 | 2026-05-05 | `tsgo` for client `--noEmit` typecheck | ~6 s in CI gate | `0b45fb1` | [release_build_pipeline.md](release_build_pipeline.md) |
 | 2026-05-05 | Vite `manualChunks` (split reactflow / radix / lobehub-icons / TanStack Query / markdown stack) + `target: 'es2022'` | main bundle 232 KB gz, 7 vendor chunks separately cached | `0b45fb1` | same |
-| 2026-05-05 | Pre-bundle Node.js sidecar with esbuild (`tsx src/index.ts` → `node dist/index.js`) | ~500 ms-1 s of tsx startup per server boot | `0b45fb1` | same |
+| 2026-05-05 | Pre-bundle the JS executor sidecar with esbuild (`tsx src/index.ts` → `node dist/index.js`); since superseded by `bun build --target=bun` → `bun dist/index.js` when bun became the only shipped JS runtime | ~500 ms-1 s of tsx startup per server boot | `0b45fb1` | same |
 | 2026-05-05 | Scoped `python -O -m compileall` over project source dirs (excludes `.venv/`, `tests/`) | 3-5 s on warm-disk imports | `0b45fb1` | same |
 | 2026-05-05 | Test coverage: 12 build-orchestrator + 32 config-contract tests under `cli/tests/` | n/a (regression guard) | `0f1e55e` | same |
 | 2026-05-06 | Frontend WS reconnect → PartySocket; auth bootstrap → TanStack Query; CloudEvents envelope typed | **~20 s** (eliminates +12 s WS drop + +7 s reconnect cycle on cold start) | `e77215c` | inline plan |

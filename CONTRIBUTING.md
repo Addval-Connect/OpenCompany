@@ -57,7 +57,7 @@ Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [nati
 | `server/config/` | llm_defaults.json, pricing.json, model_registry.json, email_providers.json, google_apis.json, credential_providers.json, ai_cli_providers.json, node_allowlist.json | [pricing_service.md](docs-internal/pricing_service.md), [node_allowlist.md](docs-internal/node_allowlist.md) |
 | `server/tests/` | Contract-test invariants + per-category node tests + `NodeTestHarness` | [tests/nodes/_harness.py](server/tests/nodes/_harness.py), [tests/credentials/README.md](server/tests/credentials/README.md) |
 | `client/src/` (styling + themes) | Tailwind tokens, shadcn primitives, the 12-theme contract | [frontend_architecture.md](docs-internal/frontend_architecture.md), [theme_system.md](docs-internal/theme_system.md) |
-| `desktop/` | Electron desktop shell — a standalone bun package (not a root workspace member) that bundles uv + Python + Node, provisions the backend venv on first launch and hosts the backend-served SPA in a native window | [desktop_app.md](docs-internal/desktop_app.md), [desktop_host_contract.md](docs-internal/desktop_host_contract.md) |
+| `desktop/` | Electron desktop shell — a standalone bun package (not a root workspace member) that bundles uv + Python + bun (no Node, no npm), provisions the backend venv on first launch and hosts the backend-served SPA in a native window | [desktop_app.md](docs-internal/desktop_app.md), [desktop_host_contract.md](docs-internal/desktop_host_contract.md) |
 | `docs-internal/` | In-repo architecture deep dives (50+ files) | Index below |
 
 ## How to Contribute Features
@@ -127,7 +127,7 @@ The diagram above shows the full lifecycle of a workflow node: one self-containe
 
 ## Local Dev Quick Reference
 
-Development from source uses **bun** (not npm). The `scripts/preinstall.js` hook enforces this when `bunfig.toml` is present (it keys on the file plus a `bun` user agent; end-user npm tarball installs are unaffected because `bunfig.toml` is not shipped in the package). Install bun once from https://bun.sh — Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`; macOS/Linux: `curl -fsSL https://bun.sh/install | bash`.
+Development from source uses **bun** (not npm) — the same bun that end users install with (`bun add -g @zeenie-ai/opencompany`) and that everything shipped runs on. The `scripts/preinstall.js` hook enforces this when `bunfig.toml` is present (it keys on the file plus a `bun` user agent; end-user `bun add -g` installs never trigger it — a global add runs no lifecycle scripts, and `bunfig.toml` is not shipped in the tarball anyway). Install bun once from https://bun.sh — Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`; macOS/Linux: `curl -fsSL https://bun.sh/install | bash`.
 
 ```bash
 bun install            # install workspace dependencies
@@ -147,7 +147,7 @@ The desktop shell has its own package: `cd desktop && bun install && bun run sta
 
 - **No strict-peer-dependencies equivalent.** bun never errors on peer conflicts, so the check that kept client `typescript` inside typescript-eslint's peer range is gone from install time — the CLI test locking client `typescript` to `^5` (`cli/tests/test_release_pipeline_config.py`) is now the only guard.
 - **Dependabot's `bun` ecosystem does version updates only — no security-update PRs.** Alerts still fire; remediation goes through the top-level `overrides` block in the root `package.json` (the pins formerly under `pnpm.overrides`).
-- **`--bun` is not enabled anywhere.** Node (18+; CI builds on 22) remains the runtime for vite/vitest/eslint/the sidecar. A trial of `--bun` for `vite dev` only is a documented follow-up once the package-manager migration proves stable — never for vitest/eslint (known bun-runtime breakage: oven-sh/bun#20762, #13346).
+- **`--bun` is not enabled anywhere — but Node is dev/CI-only now.** Everything shipped runs on bun: the `company` shim (`bin/cli.js`, `#!/usr/bin/env bun`), the JS executor sidecar (`bun build --target=bun` bundle), the plugin CLIs `bun add`ed into `~/.opencompany/packages/` (`server/core/js_runtime.py`) and the end-user install itself. Node (CI installs 22) is kept only so bun can run vite / vitest / eslint / playwright / electron-builder on it via their node shebangs when it is present — vitest and eslint have open bugs on the bun runtime (oven-sh/bun#20762, #13346) — and `company build` reports Node as optional (bun runs the build tools itself when it is absent). A trial of `--bun` for `vite dev` only remains a documented follow-up; never for vitest/eslint.
 
 Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.md](docs-internal/SCRIPTS.md)
 
@@ -199,7 +199,7 @@ Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.
 | [authentication.md](docs-internal/authentication.md) | JWT/cookie auth — modes, middleware, frontend bootstrap |
 | [errors.md](docs-internal/errors.md) | Known errors and troubleshooting |
 | [performance.md](docs-internal/performance.md) | Cold-start measurements, optimisation history, anti-patterns |
-| [release_build_pipeline.md](docs-internal/release_build_pipeline.md) | npm-distribution build pipeline (TypeScript 7 native-Go type-check, esbuild sidecar, bytecode) |
+| [release_build_pipeline.md](docs-internal/release_build_pipeline.md) | Registry-tarball build pipeline (TypeScript 7 native-Go type-check, `bun build` sidecar, bytecode; bun is the only shipped JS runtime) |
 | [Skill Creation Guide](server/skills/GUIDE.md) | How to create new skills |
 
 ## Community

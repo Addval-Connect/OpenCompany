@@ -19,16 +19,18 @@ Bring your own API keys, or run models locally for free. No subscription. No usa
 
 ## Quick Start
 
-**Prerequisites:** Node.js 18+, Python 3.12
+**Prerequisites:** [bun](https://bun.sh) 1.4+, Python 3.12 (no Node.js, no npm)
 
 ```bash
-npm install -g @zeenie-ai/opencompany
+bun add -g @zeenie-ai/opencompany
 company start
 ```
 
+The first `company` command sets up the Python side (uv, the virtual environments; a minute or two), or run `company provision` to do that up front. The installer scripts do all of it for you, bun included: `curl -fsSL https://opencompany.sh/install.sh | bash` on macOS/Linux, `iwr -useb https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/install.ps1 | iex` on Windows.
+
 Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`), click the key icon in the toolbar, and connect your first AI provider. Three example employees are already on the canvas; open one to see how it is put together.
 
-**Prefer a desktop app?** Installers for Windows (`.exe`), macOS (`.dmg`, Apple Silicon and Intel) and Linux (`.AppImage` / `.deb`) are attached to every [GitHub Release](https://github.com/zeenie-ai/OpenCompany/releases). They need no Python or Node on the machine: the app bundles them, sets up the backend on first launch (one-time download, a minute or two), and shares its data with a CLI install in `~/.opencompany`. The first releases are unsigned, so macOS asks you to allow the app under System Settings > Privacy & Security and Windows SmartScreen needs "More info > Run anyway". Details in [docs-internal/desktop_app.md](docs-internal/desktop_app.md).
+**Prefer a desktop app?** Installers for Windows (`.exe`), macOS (`.dmg`, Apple Silicon and Intel) and Linux (`.AppImage` / `.deb`) are attached to every [GitHub Release](https://github.com/zeenie-ai/OpenCompany/releases). They need no Python, bun or Node on the machine: the app bundles uv, Python and bun, sets up the backend on first launch (one-time download, a minute or two), and shares its data with a CLI install in `~/.opencompany`. The first releases are unsigned, so macOS asks you to allow the app under System Settings > Privacy & Security and Windows SmartScreen needs "More info > Run anyway". Details in [docs-internal/desktop_app.md](docs-internal/desktop_app.md).
 
 <details>
 <summary><b>Run from source (for contributors)</b></summary>
@@ -36,7 +38,7 @@ Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`), click the key icon i
 ```bash
 git clone https://github.com/zeenie-ai/OpenCompany.git OpenCompany
 cd OpenCompany
-npm install -g bun
+# bun once, from https://bun.sh: `curl -fsSL https://bun.sh/install | bash` (or `irm bun.sh/install.ps1 | iex` on Windows)
 bun run build
 bun run dev
 ```

@@ -188,9 +188,10 @@ background task awaits exit. Success gate is the same mtime-advance +
 sniff pair, against a **pinned config dir**: every invocation passes
 `--global-config <DATA_DIR>/vercel/` (the `CLAUDE_CONFIG_DIR`
 isolation idiom) so the auth-file path is deterministic across
-platforms. The installer is `npm install <pkg> --prefix
-<packages_dir()>` into the shared npm tree instead of a GitHub-release
-download. Reference: [`server/nodes/vercel/`](../server/nodes/vercel/)
+platforms. The installer is `core.js_runtime.add_package(<spec>)` —
+`bun add --cwd <packages_dir()> <spec>` into the shared bun-managed
+packages tree, the bin shim then running on bun — instead of a
+GitHub-release download. Reference: [`server/nodes/vercel/`](../server/nodes/vercel/)
 + [vercel_service.md](./vercel_service.md).
 
 **CLI-opens-the-browser variant (Cloudflare).** Some CLIs run the
@@ -201,8 +202,8 @@ browser directly. The login handler then proxies NOTHING to the modal
 flips when the background completion broadcasts. Two hazards force the
 handler's shape: concurrent logins collide on the fixed port
 (single-flight guard: repeat clicks return "already in progress"), and
-on Windows killing the npm `.cmd` shim orphans the node child still
-holding the port (the completion watcher never kills — the CLI's own
+on Windows killing bun's `.exe` launcher shim orphans the child bun
+process still holding the port (the completion watcher never kills — the CLI's own
 login timeout ends it). Success gate = a CLI status probe that parses
 JSON, never exit codes (`cf auth whoami` exits 0 in both auth states).
 When the CLI's OAuth grant is a fixed scope set (cf: 86 scopes, no

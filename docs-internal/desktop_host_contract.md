@@ -20,8 +20,8 @@ be force-quit without running any of its own shutdown code.
 
 ## 1. Relocatable tree: `core.approot`
 
-The backend ships as a sibling layout that a checkout, the npm tarball, and
-the bundle share:
+The backend ships as a sibling layout that a checkout, the published tarball
+(`bun add -g`), and the bundle share:
 
 ```
 <app root>/
@@ -71,7 +71,7 @@ cwd: <app root>/server
 open connections and in-flight handler tasks before it runs the lifespan
 shutdown. A renderer that disappears with a TCP reset (the window closing)
 can leave its WebSocket handler task lingering, and without the bound the
-backend never reaches the teardown that reaps Temporal / node / edgymeow.
+backend never reaches the teardown that reaps Temporal / the bun sidecar / edgymeow.
 `company serve` / `company start` pass the same bound
 (`cli/_common.py::UVICORN_GRACEFUL_SHUTDOWN_SECONDS`).
 
@@ -84,14 +84,16 @@ OPENCOMPANY_DESKTOP_TOKEN=<random per launch>
 OPENCOMPANY_DESKTOP_STDIN=1            # shell keeps stdin as an open pipe
 OPENCOMPANY_APP_ROOT=<bundle>/app-root
 OPENCOMPANY_ENV_FILE=<data dir>/desktop.env
-OPENCOMPANY_NODE_BIN=<bundle>/node/bin/node    # optional; PATH prefix also works
+OPENCOMPANY_BUN_BIN=<bundle>/bun/bun[.exe]     # the bundled bun (core/js_runtime.py); PATH prefix also works
+BUN_INSTALL=<data dir>/bun                     # bun's global state, kept out of a dev install's ~/.bun
+BUN_INSTALL_CACHE_DIR=<data dir>/bun/install/cache
 OPENCOMPANY_UV_BIN=<bundle>/uv/uv              # optional; PATH prefix also works
 PORT=<PORT>  PYTHON_BACKEND_PORT=<PORT>  HOST=127.0.0.1
 SERVE_STATIC_CLIENT=1  PYTHONUTF8=1  PYTHONUNBUFFERED=1
 PYTHONPYCACHEPREFIX=<data dir>/pycache          # bundle is read-only
 LOG_FILE=<data dir>/logs/backend.log  LOG_FORMAT=json
 TEMPORAL_GRACEFUL_SHUTDOWN_SECONDS=10
-PATH=<bundle>/node[/bin]:<bundle>/uv:$PATH      # node, npm, uv for runtime installs
+PATH=<bundle>/bun:<bundle>/uv:$PATH             # bun (JS runtime + package installs), uv; no Node, no npm
 ```
 
 `DATA_DIR` is left at its default (`~/.opencompany`) so the desktop app and
@@ -123,8 +125,8 @@ Primary: `POST /api/desktop/shutdown` with header `X-Desktop-Token:
 <OPENCOMPANY_DESKTOP_TOKEN>`. Returns 202, then after 0.2 s the backend
 raises the signal uvicorn already handles (SIGINT on Windows, SIGTERM
 elsewhere). The lifespan teardown then runs: plugin shutdown hooks, the
-process manager, every registered supervisor (Temporal dev server, Node
-sidecar, WhatsApp bridge) through `terminate_then_kill`, then database
+process manager, every registered supervisor (Temporal dev server, the JS
+executor sidecar on bun, WhatsApp bridge) through `terminate_then_kill`, then database
 close. The route exists only under `OPENCOMPANY_DESKTOP=1` and refuses every
 request when the token is unset. Locked by
 `tests/test_desktop_shutdown_endpoint.py`.
@@ -150,7 +152,7 @@ Armed by `start_desktop_mode()` at lifespan start:
   our children and `os._exit(1)`s if the graceful path wedges.
 - **Windows Job Object**: the backend enrolls itself in a kill-on-close job
   (ctypes, no pywin32). Children inherit membership, so if the backend is
-  terminated by any means the kernel kills Temporal / node / edgymeow with
+  terminated by any means the kernel kills Temporal / the bun sidecar / edgymeow with
   it. Locked by `tests/test_job_object.py` (Windows only).
 
 `tests/test_desktop_watchdog.py` covers the watchdogs and the single
@@ -158,14 +160,22 @@ shutdown funnel.
 
 ## 7. Runtime binaries
 
-Plugins resolve `node`, `npm`, `npx`, `uv` through `shutil.which`, so a
-bundled `bin/` prepended to PATH satisfies the JS executor sidecar
-(`nodes/code/_runtime.py`), the five `npm install --prefix` plugins
-(claude-code, edgymeow, agent-browser, cf, vercel), the codex provider, and
-`uv tool install browser-harness`. `OPENCOMPANY_NODE_BIN` and
-`OPENCOMPANY_UV_BIN` are explicit overrides for the two the backend spawns
-directly. Do not put the bundled bare Python on PATH: plugins must never
-pick it up instead of the venv interpreter.
+The backend spawns exactly one JavaScript runtime, bun, and resolves it in one
+place: `core/js_runtime.py` (`OPENCOMPANY_BUN_BIN`, else `bun` on PATH). `uv`
+is resolved through `OPENCOMPANY_UV_BIN` / `shutil.which`. So the bundled
+runtime dirs prepended to PATH (plus the two overrides) satisfy the JS
+executor sidecar (`nodes/code/_runtime.py`, `[bun, dist/index.js]`), the five
+plugin installers that `bun add` into the shared `<DATA_DIR>/packages/` tree
+(claude-code, edgymeow, agent-browser, cf, vercel — `core.js_runtime.add_package`),
+the codex provider (`bun x @openai/codex` when no system `codex` exists), and
+`uv tool install browser-harness`. `BUN_INSTALL` / `BUN_INSTALL_CACHE_DIR`
+keep bun's own cache and global state under the app's data dir rather than a
+dev install's `~/.bun`. There is no Node in the bundle and nothing looks for
+one — `tests/core_config/test_js_runtime.py::test_backend_never_spawns_node_or_npm`
+forbids `shutil.which("node"|"npm"|"npx")` anywhere under `server/`, and the
+desktop staged-tree invariants boot the sidecar on the bundled bun with Node
+stripped from PATH. Do not put the bundled bare Python on PATH: plugins must
+never pick it up instead of the venv interpreter.
 
 ## 8. Logging
 

@@ -13,7 +13,7 @@ grant** that makes the optional API token the only path to analytics.
 |---|---|
 | Node type | `cloudflareAction` (palette group `deployment`, dual-purpose AI tool `cloudflare`) |
 | Operations | `whoami` / `zones_list` / `dns_records_list` / `dns_record_create` / `dns_record_delete` / `graphql_query` / `custom` |
-| CLI pin | `cf@0.2.0` (`_NPM_SPEC` in `_install.py`), npm-installed into the shared `packages_dir()` tree; cf declares `engines.node >= 22`, above OpenCompany's 18+ floor (this is the only node that needs 22) |
+| CLI pin | `cf@0.2.0` (`_NPM_SPEC` in `_install.py`), `bun add`ed into the shared `packages_dir()` tree via `core/js_runtime.add_package` and run on bun; cf declares `engines.node >= 22`, which bun ignores — verified on bun 1.4 with no Node on PATH, including `cf auth whoami` |
 | Auth | Dual-path: cf-owned OAuth login OR optional canonical `apiKey` field (stored under the provider id `cloudflare`) -> `CLOUDFLARE_API_TOKEN` env |
 | Task queue | `TaskQueue.REST_API` |
 | Output | `ui_hints = {"outputMode": "terminal"}`; `_shape` contract (parsed JSON -> `result`, text -> `stdout`, never both) + NDJSON recovery |
@@ -28,7 +28,7 @@ server/nodes/cloudflare/
 ├── cloudflare_action.py  # CloudflareActionNode + Params/Output + _run/_shape + _graphql_post
 ├── _credentials.py       # CloudflareCredential — resolve() returns the optional token row
 ├── _handlers.py          # cloudflare_login / cloudflare_logout / cloudflare_status
-├── _install.py           # ensure_cf_cli() — pinned npm install, system cf NEVER consulted
+├── _install.py           # ensure_cf_cli() — pinned `bun add` (core/js_runtime), system cf NEVER consulted
 ├── _service.py           # cf_env(token, email) / api_auth_headers() / login_env() / whoami_snapshot() / stored_token() / stored_email() / resolve_cf_light()
 └── meta.json             # {"color": "#F38020"}
 ```
@@ -40,9 +40,11 @@ dual-path shape: one optional field, never gating the Login button).
 
 ## Install — pinned, never the system PATH
 
-`_install.py` uses vercel's npm **mechanism** (install into the shared
-`packages_dir()` tree, `.bin` shim, `asyncio.to_thread`, double-checked
-lock) but github's **resolution philosophy**: `shutil.which("cf")` is
+`_install.py` uses vercel's install **mechanism** (`core.js_runtime.add_package`
+— `bun add --cwd <packages_dir> <spec>` into the shared tree, the
+`node_modules/.bin` shim via `shared_tree_bin("cf")`, `asyncio.to_thread`,
+double-checked lock; the CLI runs on bun, no Node or npm involved) but
+github's **resolution philosophy**: `shutil.which("cf")` is
 never consulted. The preview CLI's command tree is schema-generated and
 drifts between versions — between 0.0.5 and 0.2.0, `--ndjson`/`--fields`
 were removed (JSON became the default output), `dns records create`
@@ -72,9 +74,10 @@ Two hazards drove the handler's shape (both observed live):
    collide on 8877; the second exits instantly with "Port already in
    use". A module-level **single-flight guard** (`_active_login` task +
    proc) makes repeat Login clicks return "already in progress".
-2. **Windows shim orphaning** — the installed binary is an npm `.cmd`
-   shim; killing it terminates only the cmd.exe wrapper and orphans the
-   node child, which keeps holding 8877 and breaks every later login.
+2. **Windows shim orphaning** — the installed binary is bun's `cf.exe`
+   launcher shim (plus a `cf.bunx` file, never `.cmd`); killing it
+   terminates only the launcher and orphans the child bun process running
+   the CLI, which keeps holding 8877 and breaks every later login.
    The completion watcher **never kills the process** (test-locked) —
    cf enforces its own login timeout and exits by itself.
 

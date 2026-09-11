@@ -1,8 +1,8 @@
 # Release Build Pipeline
 
-Compile-step plan for the npm distribution `@zeenie-ai/opencompany`. Goal: cut cold-start ~20s further on top of the lazy-LangChain fix already in v0.0.76, shrink the Vite main bundle below 200 KB gz, and drop the `tsx` interpreter cost from the Node.js sidecar.
+Compile-step plan for the registry tarball `@zeenie-ai/opencompany` (published to npmjs and GitHub Packages, installed with `bun add -g`). Goal: cut cold-start ~20s further on top of the lazy-LangChain fix already in v0.0.76, shrink the Vite main bundle below 200 KB gz, and drop the `tsx` interpreter cost from the JS executor sidecar.
 
-User scope (confirmed before this work): stay on npm distribution; **no** Nuitka/PyOxidizer standalone binary channel; optimize Vite output too; **skip** the plugin-walker (~11s) and service-status-refresh (~20s) hotspots — those are runtime concerns, not compile-time.
+User scope (confirmed before this work): stay on the registry-tarball distribution; **no** Nuitka/PyOxidizer standalone binary channel; optimize Vite output too; **skip** the plugin-walker (~11s) and service-status-refresh (~20s) hotspots — those are runtime concerns, not compile-time.
 
 ## Tooling
 
@@ -10,7 +10,7 @@ User scope (confirmed before this work): stay on npm distribution; **no** Nuitka
 |---|---|---|
 | TypeScript type-check | `typescript@7` (the native Go compiler) at the **repo root** | **5.9× faster** on `--noEmit` — measured 2026-07-26 on this codebase, 3 warm runs each: **~820 ms** vs **~4830 ms** under `tsc` 5.9.3. Type-check only; Vite/esbuild keep producing the actual JS bundles. Lives in root `devDependencies`, exact-pinned, never ships to users. |
 | Vite output | `manualChunks` + `target: 'es2022'` | Split heavy libs (reactflow, radix-ui, lobehub, react-markdown stack) so the main bundle no longer hits the 1500KB warning ceiling. ES2022 unlocks `findLast` / optional-chaining-assignment without polyfills (Chrome 94+, FF 93+, Safari 15.4+ — within React 19 / Tailwind 4 baseline). |
-| Node sidecar | `esbuild` bundle to `dist/index.js`, run via `node` | Drops tsx interpreter startup (~500ms-1s every server boot). `--packages=external` keeps Express in `node_modules/` for patch flow. |
+| JS executor sidecar | `bun build src/index.ts --target=bun --outfile=dist/index.js`, run via `bun dist/index.js` | Drops tsx interpreter startup (~500ms-1s every server boot). `--target=bun` yields a self-contained bundle with Express inlined — no `node_modules` at runtime, which is what lets the desktop bundle copy one file. (The first cut was an esbuild bundle with `--packages=external` run on Node; superseded when bun became the only shipped JavaScript runtime.) |
 | Python | `python -m compileall -q -j 0 <project dirs>` + `[tool.uv] compile-bytecode = true` | Pre-compile bytecode. Implemented as step `[5/6]` in [`cli/commands/build.py`](../cli/commands/build.py) (`COMPILEALL_SOURCE_DIRS` constant lists the dirs); `server/pyproject.toml`'s `compile-bytecode = true` makes `uv sync` (step `[4/6]`) compile `.venv/` site-packages too. No `-O`: every runtime launches python without `-O`, and per PEP 488 a non-optimized interpreter only loads plain `.pyc` — the earlier `-O` invocation produced `.opt-1.pyc` that nothing ever loaded (fixed 2026-07-14; ~30-50s cold-start gain, see [performance.md](performance.md)). |
 
 ## Package manager (bun)
@@ -19,17 +19,21 @@ The dev workspace runs on **bun** (migrated from pnpm@9.15.0, 2026-08; pinned
 via `"packageManager": "bun@1.4.0"` — CI's `oven-sh/setup-bun` reads that pin).
 Facts that are load-bearing, each verified during the migration:
 
-- **Scope**: bun installs the workspace and runs scripts; **Node stays the
-  runtime** — the floor is Node 18+ (`engines.node`, `bin/cli.js`, the
-  installers); CI and the desktop bundle happen to use 22 LTS
-  (vite/vitest/eslint/the sidecar run on node via shebang — never
-  pass `--bun`). Everything npm-facing is deliberately untouched: end-user
-  `npm install -g @zeenie-ai/opencompany`, the backend's
-  `npm install --prefix <DATA_DIR>/packages/` shared tree, the sidecar's
-  user-package endpoints, and `npm publish --provenance` in release.yml.
+- **Scope**: bun installs the workspace, runs scripts, and is **the only
+  JavaScript runtime anything shipped needs** — the `company` shim
+  (`bin/cli.js`, `#!/usr/bin/env bun`), the JS executor sidecar
+  (`bun dist/index.js`), the plugin CLIs in the shared `<DATA_DIR>/packages/`
+  tree (`server/core/js_runtime.py`, `bun add --cwd`), the sidecar's
+  user-package endpoints (`bun add`), and `bun publish --access public` in
+  release.yml. `engines` is `{"bun": ">=1.4.0"}`; end users install with
+  `bun add -g @zeenie-ai/opencompany`; the desktop app bundles bun. Node is
+  dev/CI-only: when present, bun runs vite / vitest / eslint on it via their
+  node shebangs (never pass `--bun` — vitest and eslint have open bun-runtime
+  bugs), and `company build` reports it as optional.
 - **Gate**: `scripts/preinstall.js` rejects non-bun installs in a source
   checkout. It keys on `bunfig.toml` existing (committed, excluded from the
-  tarball by the `files` allowlist, so end-user npm installs never trigger it)
+  tarball by the `files` allowlist, so end-user `bun add -g` installs never
+  trigger it — a global add runs no lifecycle scripts anyway)
   and on `npm_config_user_agent` **starting with** `bun` — bun's UA is
   `bun/x.y.z npm/? node/...`, so a substring match on "npm" would misfire.
 - **Layout**: `bunfig.toml` pins `linker = "isolated"` — pnpm-style symlinked
@@ -108,12 +112,14 @@ named `tsgo` — stopped publishing the day before and must not come back.
 
 Keep `sourcemap: analyze` (already correct), keep React Compiler config.
 
-### 3. Node sidecar esbuild bundle
+### 3. JS executor sidecar bundle (`bun build`)
 
-- `server/nodejs/package.json` → add `esbuild` devDep; replace scripts:
-  - `"build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --packages=external --outfile=dist/index.js"` (kept in sync with `engines.node` by `test_sidecar_engines_match_esbuild_target`)
-  - `"start": "node dist/index.js"` (was `tsx src/index.ts`)
-  - keep `"dev": "tsx watch src/index.ts"`
+- `server/nodejs/package.json` scripts (no esbuild, no tsx — bun bundles and runs TypeScript natively):
+  - `"build": "bun build src/index.ts --target=bun --outfile=dist/index.js"` — `--target=bun` inlines `express` into one self-contained file (locked flag-by-flag by `test_sidecar_build_script_carries_required_bun_build_flag`, which also asserts no `esbuild` / `--packages=external`)
+  - `"start": "bun dist/index.js"` (was `tsx src/index.ts`, then `node dist/index.js`; `test_sidecar_start_runs_compiled_bundle_on_bun`)
+  - `"dev": "bun --watch src/index.ts"` (`test_sidecar_dev_uses_bun_watch`)
+  - `"engines": {"bun": ">=1.4.0"}` — no Node floor (`test_sidecar_engines_declare_bun_not_node`)
+- At runtime `nodes/code/_runtime.py` spawns `[bun, dist/index.js]`, resolving bun through `server/core/js_runtime.py` (`OPENCOMPANY_BUN_BIN`, else PATH). Verified on bun 1.4.0 with Node stripped from PATH, including `node:vm` `runInContext` with the timeout.
 - `server/nodejs/.gitignore` → new file: `dist/`
 
 ### 4. Python bytecode pre-compile
@@ -139,7 +145,7 @@ Two halves (both required; see [performance.md](performance.md) for the
   dirs is the public `cli.commands.build.COMPILEALL_SOURCE_DIRS`
   constant — `scripts/install.js` mirrors it.
 
-The npm tarball still excludes `__pycache__/` per `package.json` `files` (cross-Python-minor pyc fragility) — `compileall` runs on the user's machine via `company build` or `scripts/install.js` post-install.
+The tarball still excludes `__pycache__/` per `package.json` `files` (cross-Python-minor pyc fragility) — `compileall` runs on the user's machine via `company build` or `scripts/install.js` (run by `company provision`: eagerly from the installer scripts, or on the first `company` command of a `bun add -g` install, which runs no lifecycle scripts).
 
 ### 4a-bis. `.env` scaffolding with fresh secrets (step `[0/6]`)
 
@@ -149,20 +155,20 @@ The npm tarball still excludes `__pycache__/` per `package.json` `files` (cross-
 
 - Step `[6/6]` runs `uv run python -m services.temporal._install`, which pooch-downloads the official `temporal` CLI into `<DATA_DIR>/packages/temporal/` (= `~/.opencompany/packages/temporal/` by default). Pre-fetching at build time turns the ~114 MB download into a sub-second cache hit on first `company start`. The download uses an explicit `HTTPDownloader(timeout=300)` (per-socket-read timeout — slow links can finish; pooch's 30 s default aborted them). Fatality differs by entry point: `company build` keeps the step **fatal** (locked by `test_temporal_install_is_fatal_on_failure`), while npm postinstall (`scripts/install.js`) wraps it in a **non-fatal** try/catch because `TemporalServerRuntime._pre_spawn()` re-downloads lazily on first `company start`. The cache survives `company clean` (`packages` ∈ `_OPENCOMPANY_KEEP`), so clean+build cycles don't re-download.
 - **`company build` layers `.env.dev` first.** `build_command()` calls `cli.config.load_dev_overrides(root)` before the install steps, so the build's `DATA_DIR` matches what the runtime sees. Without it, a repo checkout's `company build` read `DATA_DIR=~/.opencompany` from `.env.template` and installed Temporal under user home, but `company dev` then read `DATA_DIR=.opencompany` from `.env.dev` and re-downloaded into `<repo>/.opencompany/` — a redundant ~114 MB fetch on every fresh clone.
-- **Safe for global installs.** `.env.dev` is git-committed for contributors but is NOT in the npm `files` list, so an npm-distributed copy has no `.env.dev` — `load_dev_overrides` is a no-op and everything falls through to the `.env.template` default (`DATA_DIR=~/.opencompany`), matching `company start` / `company daemon`.
+- **Safe for global installs.** `.env.dev` is git-committed for contributors but is NOT in the `files` list, so an installed (`bun add -g`) copy has no `.env.dev` — `load_dev_overrides` is a no-op and everything falls through to the `.env.template` default (`DATA_DIR=~/.opencompany`), matching `company start` / `company daemon`.
 
 ### 5. Wire compileall into install.js (the sidecar bundle ships pre-built)
 
 - `scripts/install.js` → after `uv sync`:
   1. `uv run python -m compileall -q -j 0 <COMPILEALL_SOURCE_DIRS>` — same shape as build.py (no `-O`; locked in sync by `cli/tests/test_release_pipeline_config.py`)
-- The sidecar is **not** rebuilt at install time: `company build` step `[3/6]` runs `bun run --filter opencompany-nodejs-executor build` before `npm pack`, and `server/nodejs/dist/index.js` rides inside the tarball (the `server/` entry in the root `files` list covers it). Likewise the client is only built by install.js when `client/dist/index.html` is missing.
+- The sidecar is **not** rebuilt at install time: `company build` step `[3/6]` runs `bun run --filter opencompany-nodejs-executor build` before `bun pm pack` / `bun publish`, and `server/nodejs/dist/index.js` rides inside the tarball (the `server/` entry in the root `files` list covers it). Likewise the client is only built by install.js when `client/dist/index.html` is missing.
 
-Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is deterministic).
+Idempotent on re-runs (compileall only rewrites stale pyc; `bun build` is deterministic).
 
 ### 6. Tarball verification
 
-- `npm pack --dry-run` after the change. Confirm `server/nodejs/dist/index.js` is included (existing `server/` glob already covers it). Confirm no `__pycache__/` leakage.
-- `server/uv.lock` is committed (since the desktop app) and ships in the tarball; `.npmignore` only hides `package-lock.json`. The desktop stage script also reads the `npm pack --dry-run --json` file list as its layout source of truth, so a change to the root `files` allowlist reaches the desktop bundle automatically.
+- `bun pm pack --dry-run` after the change. Confirm `server/nodejs/dist/index.js` is included (existing `server/` glob already covers it). Confirm no `__pycache__/` leakage.
+- `server/uv.lock` is committed (since the desktop app) and ships in the tarball; `.npmignore` only hides `package-lock.json` (a legacy artefact — the tree is `bun.lock`-only). The desktop stage script also reads the `bun pm pack --dry-run` file list as its layout source of truth, so a change to the root `files` allowlist reaches the desktop bundle automatically.
 
 ## Critical files
 
@@ -171,7 +177,7 @@ Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is determinis
 | root `package.json` | + `typescript@7` devDep (exact-pinned), + root `typecheck` script |
 | `client/package.json` | `typecheck` delegates to the root gate; keeps `typescript@^5.x` for typescript-eslint |
 | `client/vite.config.js` | + manualChunks, target, lower warning |
-| `server/nodejs/package.json` | + esbuild devDep, build script, change start |
+| `server/nodejs/package.json` | `bun build --target=bun` build script, `bun dist/index.js` start, `bun --watch` dev, `engines.bun` (no esbuild / tsx deps) |
 | `server/nodejs/.gitignore` | new — ignore `dist/` |
 | `cli/commands/build.py` | + compileall step (`[5/6]`, plain `.pyc` — no `-O`), `COMPILEALL_SOURCE_DIRS` constant |
 | `scripts/install.js` | + compileall call (sidecar bundle arrives pre-built in the tarball) |
@@ -182,10 +188,10 @@ Idempotent on re-runs (compileall only rewrites stale pyc; esbuild is determinis
 
 1. `bun run --filter react-flow-client typecheck` → <5s, zero errors.
 2. `ANALYZE=1 bun run --filter react-flow-client build` → open `client/dist/stats.html`. Expect: no chunk trips the 850 KB `chunkSizeWarningLimit` (`vendor-icons` is the ~830 KB outlier it is sized for), main < 200 KB gz, `vendor-flow` split.
-3. `cd server/nodejs && bun run build && NODEJS_EXECUTOR_PORT=<port> node dist/index.js` → starts on `NODEJS_EXECUTOR_PORT` (required env; no fallback literal) in <100ms.
+3. `cd server/nodejs && bun run build && NODEJS_EXECUTOR_PORT=<port> bun dist/index.js` → starts on `NODEJS_EXECUTOR_PORT` (required env; no fallback literal) in <100ms; `GET /health` reports `runtime: "bun"`.
 4. `cd server && uv run python -m compileall -q -j 0 services` → plain `__pycache__/*.pyc` present (no `.opt-1.pyc` — nothing loads those).
 5. Cold-start: clean install + `company start > start.log 2>&1` → `Application startup complete` at ≤+50s (was +66.9s).
-6. `npm pack --dry-run` → `server/nodejs/dist/index.js` included; no `__pycache__/`; tarball size ≤ v0.0.76.
+6. `bun pm pack --dry-run` → `server/nodejs/dist/index.js` included; no `__pycache__/`; tarball size ≤ v0.0.76.
 7. Smoke: `company start` → load the app URL (`http://localhost:${PYTHON_BACKEND_PORT}`) → run "AI Assistant" example → agent responds.
 
 ## Desktop installers
