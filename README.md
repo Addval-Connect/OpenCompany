@@ -19,33 +19,40 @@ Bring your own API keys, or run models locally for free. No subscription. No usa
 
 ## Quick Start
 
-**Prerequisites:** [bun](https://bun.sh) 1.4+, Python 3.12 (no Node.js, no npm)
+Download the app for your computer from the [latest release](https://github.com/zeenie-ai/OpenCompany/releases/latest) and install it:
+
+- **Windows**: the `.exe` installer.
+- **macOS**: the `.dmg` (`arm64` for Apple Silicon, `x64` for Intel).
+- **Linux**: the `.AppImage`, or the `.deb` on Debian and Ubuntu.
+
+Nothing else to install. On first launch the app sets itself up (a one-time download, a minute or two) and opens the canvas. Click the key icon in the toolbar to connect your first AI provider. Three example employees are already on the canvas; open one to see how it is put together.
+
+The builds are not code-signed yet, so macOS asks you to allow the app under System Settings > Privacy & Security, and Windows SmartScreen needs "More info > Run anyway".
+
+<details>
+<summary><b>Terminal install (servers and headless machines)</b></summary>
 
 ```bash
-bun add -g @zeenie-ai/opencompany
+curl -fsSL https://opencompany.sh/install.sh | bash    # macOS / Linux
+iwr -useb https://opencompany.sh/install.ps1 | iex      # Windows PowerShell
 company start
 ```
 
-The first `company` command sets up the Python side (uv, the virtual environments; a minute or two), or run `company provision` to do that up front. The installer scripts do all of it for you, bun included: `curl -fsSL https://opencompany.sh/install.sh | bash` on macOS/Linux, `iwr -useb https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/install.ps1 | iex` on Windows.
+The script installs bun, Python and uv when they are missing, then the `@zeenie-ai/opencompany` package. Open http://localhost:5678. Data lives in `~/.opencompany`, shared with the desktop app. See [SETUP.md](docs-internal/SETUP.md).
 
-Open http://localhost:5678 (default `PYTHON_BACKEND_PORT`), click the key icon in the toolbar, and connect your first AI provider. Three example employees are already on the canvas; open one to see how it is put together.
-
-**Prefer a desktop app?** Installers for Windows (`.exe`), macOS (`.dmg`, Apple Silicon and Intel) and Linux (`.AppImage` / `.deb`) are attached to every [GitHub Release](https://github.com/zeenie-ai/OpenCompany/releases). They need no Python, bun or Node on the machine: the app bundles uv, Python and bun, sets up the backend on first launch (one-time download, a minute or two), and shares its data with a CLI install in `~/.opencompany`. The first releases are unsigned, so macOS asks you to allow the app under System Settings > Privacy & Security and Windows SmartScreen needs "More info > Run anyway". Details in [docs-internal/desktop_app.md](docs-internal/desktop_app.md).
+</details>
 
 <details>
-<summary><b>Run from source (for contributors)</b></summary>
+<summary><b>Run from source (contributors)</b></summary>
 
 ```bash
-git clone https://github.com/zeenie-ai/OpenCompany.git OpenCompany
+git clone https://github.com/zeenie-ai/OpenCompany.git
 cd OpenCompany
-# bun once, from https://bun.sh: `curl -fsSL https://bun.sh/install | bash` (or `irm bun.sh/install.ps1 | iex` on Windows)
 bun run build
 bun run dev
 ```
 
-The `dev` task starts the Vite client (with HMR) at `http://localhost:$VITE_CLIENT_PORT` — the same URL as production — proxying API/WebSocket traffic to the Python backend on `$PYTHON_BACKEND_PORT` (re-pointed in `.env.dev` so the two can coexist); optional daemons (WhatsApp, Temporal) are spawned by the backend on demand. Every port is declared in `.env.template` and overridable in `.env`; nothing is hardcoded. See [SETUP.md](docs-internal/SETUP.md) and [SCRIPTS.md](docs-internal/SCRIPTS.md) for details, and [CONTRIBUTING.md](CONTRIBUTING.md) for the codebase map and contribution recipes.
-
-**Upgrading from MachinaOS?** Existing `~/.machina` and checkout-local `.machina` state is detected when the new `.opencompany` location does not yet exist, so databases and deployment state are not stranded. The `machina` command remains available as a deprecated legacy alias; new scripts should use `company`.
+Needs bun 1.4+ and Python 3.12. See [SETUP.md](docs-internal/SETUP.md), [SCRIPTS.md](docs-internal/SCRIPTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 </details>
 
