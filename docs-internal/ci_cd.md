@@ -104,7 +104,7 @@ Reusable `workflow_call` workflow with four independent jobs (no plan/change-det
 | Trigger | Behaviour |
 |---------|-----------|
 | Push of `v*.*.*` tag | predeploy gate, then publish to npm + GitHub Packages |
-| `workflow_dispatch` | Same job graph (manual run; there is no dry-run switch) |
+| `workflow_dispatch` | Publish an existing tag again, to one or both registries (inputs `tag`, `registries`); the publish jobs check out that tag, the predeploy gate runs against the dispatching branch. Never cuts a new version |
 
 The workflow default is `contents: read`. Publishing permissions are scoped to the job that needs them: the npmjs job needs nothing beyond `contents: read` (bun authenticates with the `NPM_TOKEN` it writes to `~/.npmrc`; npm provenance attestation, and the `id-token: write` it needed, went away with the npm CLI), while GitHub Packages receives `packages: write`. Checkout credentials are not persisted in either publishing job.
 
@@ -119,7 +119,7 @@ publish-npm                    publish-github-packages
    |                              |
    +- build                       +- build
    +- cli version sync            +- cli version sync
-   +- write ~/.npmrc + bun pm whoami +- rewrite package name (bun -e)
+   +- write ~/.npmrc + bun pm whoami +- write ~/.npmrc (scope route + token)
    +- publish canonical package   +- publish mirror package
       @zeenie-ai/opencompany         @zeenie-ai/opencompany
       npmjs, bun publish --access public   npm.pkg.github.com, bun publish
@@ -127,7 +127,7 @@ publish-npm                    publish-github-packages
 
 - Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → `bun install --frozen-lockfile` → `bun run build` → `python -m cli version sync`. There is no `setup-node` step and no npm CLI anywhere in the release: bun packs, authenticates and publishes.
 - `publish-npm` — writes `//registry.npmjs.org/:_authToken=<NPM_TOKEN>` to `~/.npmrc`, validates it with `bun pm whoami`, then publishes the canonical public npmjs package `@zeenie-ai/opencompany` via `bun publish --access public`. npm provenance attestation was an npm-CLI feature and is gone with it.
-- `publish-github-packages` — rewrites `package.json` `name` to `@zeenie-ai/opencompany` and sets `publishConfig.registry = https://npm.pkg.github.com` (a `bun -e` one-liner), writes the `//npm.pkg.github.com/:_authToken=<GITHUB_TOKEN>` line to `~/.npmrc`, then `bun publish`.
+- `publish-github-packages` — writes `@zeenie-ai:registry=https://npm.pkg.github.com/` and the `//npm.pkg.github.com/:_authToken=<GITHUB_TOKEN>` line to `~/.npmrc`, then a plain `bun publish`. bun 1.4 ignores `publishConfig.registry`, and it keeps an `.npmrc` token only for the registry that same file points at, so the route and the token must sit together; the v0.2.0 mirror publish went to npmjs with the GitHub token and failed with `missing authentication` before this was known ([errors.md #24](./errors.md#24-github-packages-publish-fails-with-missing-authentication-although-the-job-wrote-a-token-for-npmpkggithubcom)).
 
 Both registries use `@zeenie-ai/opencompany`, matching the npm and GitHub
 organization owned by the project.
@@ -141,15 +141,17 @@ There is currently no audit gate, no PyPI publish, no SLSA `attest-build-provena
 The tag is the version. Everything else is derived from it, and there is no
 CHANGELOG file: the annotated tag's message is the release notes (first line =
 release title, the rest = body), which `desktop-release.yml` copies onto the
-GitHub Release. Nothing publishes until a `v*.*.*` tag is pushed. Tag push is
-also the only trigger that works: a `workflow_dispatch` run has a shallow
-checkout with no tags for `company version sync` to read.
+GitHub Release. Nothing publishes until a `v*.*.*` tag is pushed. A
+`workflow_dispatch` run never cuts a version: it publishes an existing tag
+again (inputs `tag` and `registries`), which is the retry path when a token
+had lapsed or one registry failed.
 
 1. **Pre-flight.** `main` green on CI. `NPM_TOKEN` unexpired: the
    `bun pm whoami` preflight fails only the npmjs job, after the predeploy
    gate, while GitHub Packages and the installers still publish, so a lapsed
-   token means a partial release (rotate the secret, then
-   `gh run rerun <id> --failed`). `bun publish --dry-run --access public`
+   token means a partial release (rotate the secret, then dispatch the
+   Release workflow with `tag` set to the release and `registries` set to
+   the registry that failed). `bun publish --dry-run --access public`
    packs cleanly from the checkout.
 2. **Bump.** `python -m cli version sync vX.Y.Z` writes the version into the
    root, client and desktop `package.json`, `pyproject.toml` and

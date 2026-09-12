@@ -469,25 +469,47 @@ def test_npm_release_publishes_public_package_with_bun(release_yml: dict):
     assert not any("setup-node" in str(step.get("uses", "")) for step in release_yml["jobs"]["publish-npm"]["steps"])
 
 
-def test_github_packages_release_keeps_github_owner_scope(release_yml: dict):
+def test_github_packages_release_routes_the_scope_through_npmrc(release_yml: dict):
+    """bun 1.4 ignores package.json ``publishConfig.registry``, and it keeps
+    an .npmrc token only for the registry that same file points at (the
+    default or a scoped one) -- ``--registry`` on the command line comes too
+    late. So the scope route and the token must sit together in ~/.npmrc.
+    Locked after the v0.2.0 mirror publish went to npmjs carrying the GitHub
+    token and died with "missing authentication" (docs-internal/errors.md
+    #24)."""
     steps = _run_steps(release_yml["jobs"]["publish-github-packages"])
-    configure = next(
-        step for step in steps if "pkg.name = '@zeenie-ai/opencompany'" in step["run"]
-    )
-    assert configure["run"].lstrip().startswith("bun -e")
-
-    registry_assignment = next(
-        line.strip()
-        for line in configure["run"].splitlines()
-        if line.strip().startswith("pkg.publishConfig =")
-    )
-    assert registry_assignment == (
-        "pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };"
-    )
-    assert any(step["run"] == "bun publish" for step in steps)
     auth = next(step for step in steps if "_authToken" in step["run"])
-    assert "npm.pkg.github.com" in auth["run"]
+    assert "@zeenie-ai:registry=https://npm.pkg.github.com/" in auth["run"]
+    assert "//npm.pkg.github.com/:_authToken=" in auth["run"]
     assert auth["env"]["NPM_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert any(step["run"] == "bun publish" for step in steps)
+    assert not any("publishConfig" in step["run"] for step in steps)
+
+
+def test_release_dispatch_republishes_an_existing_tag(release_yml: dict):
+    """Manual dispatch exists to redo the publish of a tag that already
+    exists (a lapsed token, a failed mirror). It must check out that tag --
+    a shallow checkout of main has no tags for ``company version sync`` and
+    would otherwise pack untagged code -- and let one registry be chosen so
+    a registry that already holds the version is not published to again."""
+    triggers = release_yml.get("on") or release_yml[True]
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert inputs["tag"]["required"] is True
+    assert set(inputs["registries"]["options"]) == {"both", "npmjs", "github-packages"}
+    assert inputs["registries"]["default"] == "both"
+
+    for job_name, skipped_for in (
+        ("publish-npm", "github-packages"),
+        ("publish-github-packages", "npmjs"),
+    ):
+        job = release_yml["jobs"][job_name]
+        assert job["if"] == (
+            f"github.event_name == 'push' || inputs.registries != '{skipped_for}'"
+        )
+        checkout = next(
+            step for step in job["steps"] if "actions/checkout" in str(step.get("uses", ""))
+        )
+        assert checkout["with"]["ref"] == "${{ inputs.tag || github.ref }}"
 
 
 @pytest.mark.parametrize("scope", ["@zeenie", "@zeenie-ai"])
