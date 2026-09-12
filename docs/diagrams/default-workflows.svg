@@ -31,49 +31,43 @@
   <!-- ================= ROW 1: AI ASSISTANT (purple) ================= -->
   <rect class="panel p-purple" x="30" y="95" width="1180" height="340" rx="10"/>
   <text x="50" y="129" class="h1 accent-purple">AI Assistant</text>
-  <text x="50" y="151" class="sub">16 nodes &#183; one smart agent with a full toolbox</text>
+  <text x="50" y="151" class="sub">17 nodes &#183; one smart agent with a full toolbox</text>
 
-  <!-- triggers -->
-  <rect class="box p-orange" x="50" y="175" width="180" height="40" rx="6"/>
-  <text x="140" y="200" text-anchor="middle" class="h2">Chat Trigger</text>
-  <rect class="box p-orange" x="50" y="235" width="180" height="40" rx="6"/>
-  <text x="140" y="260" text-anchor="middle" class="h2">Telegram Receive</text>
+  <!-- trigger -->
+  <rect class="box p-orange" x="50" y="205" width="180" height="40" rx="6"/>
+  <text x="140" y="230" text-anchor="middle" class="h2">Chat Trigger</text>
 
   <!-- agent -->
   <rect class="box p-purple" x="380" y="195" width="200" height="60" rx="8"/>
   <text x="480" y="230" text-anchor="middle" class="h2">AI Agent</text>
 
-  <path class="conn" d="M 230 195 L 380 213" marker-end="url(#arrow)"/>
-  <path class="conn" d="M 230 255 L 380 237" marker-end="url(#arrow)"/>
+  <path class="conn" d="M 230 225 L 380 225" marker-end="url(#arrow)"/>
 
-  <!-- outputs -->
-  <rect class="box p-pink" x="700" y="175" width="180" height="40" rx="6"/>
-  <text x="790" y="200" text-anchor="middle" class="h2">Console</text>
-  <rect class="box p-pink" x="700" y="235" width="180" height="40" rx="6"/>
-  <text x="790" y="260" text-anchor="middle" class="h2">Telegram Send</text>
+  <!-- output -->
+  <rect class="box p-pink" x="700" y="205" width="180" height="40" rx="6"/>
+  <text x="790" y="230" text-anchor="middle" class="h2">Console</text>
 
-  <path class="conn" d="M 580 213 L 700 195" marker-end="url(#arrow)"/>
-  <path class="conn" d="M 580 237 L 700 255" marker-end="url(#arrow)"/>
+  <path class="conn" d="M 580 225 L 700 225" marker-end="url(#arrow)"/>
 
   <!-- dotted attachment note -->
   <path class="conn-dot" d="M 560 195 L 560 160 L 1020 160 L 1020 175"/>
   <rect class="box p-cyan" x="930" y="175" width="250" height="44" rx="6"/>
-  <text x="1055" y="193" text-anchor="middle" class="sub">Memory + Skills</text>
+  <text x="1055" y="193" text-anchor="middle" class="sub">Context, Memory + Skills</text>
   <text x="1055" y="209" text-anchor="middle" class="sub">attached to the agent</text>
 
   <!-- toolbox cluster -->
   <path class="conn-dot" d="M 480 255 L 480 305"/>
   <rect class="box p-purple" x="380" y="305" width="560" height="80" rx="8"/>
-  <text x="660" y="329" text-anchor="middle" class="h2 accent-purple">Toolbox (9 tools)</text>
-  <text x="660" y="351" text-anchor="middle" class="small">web search &#183; browser &#183; file read/write &#183; fs search</text>
-  <text x="660" y="369" text-anchor="middle" class="small">shell &#183; Python &#183; processes &#183; todos</text>
+  <text x="660" y="329" text-anchor="middle" class="h2 accent-purple">Toolbox (11 tools)</text>
+  <text x="660" y="351" text-anchor="middle" class="small">web search &#183; Perplexity &#183; browser &#183; file read/write &#183; fs search</text>
+  <text x="660" y="369" text-anchor="middle" class="small">shell &#183; Python &#183; processes &#183; todos &#183; Vercel</text>
 
-  <text x="50" y="415" class="sub"><tspan class="accent-purple">Use when:</tspan> one AI that browses, runs code, and chats over Telegram.</text>
+  <text x="50" y="415" class="sub"><tspan class="accent-purple">Use when:</tspan> one AI that browses, runs code, and chats in the app.</text>
 
   <!-- ================= ROW 2: AI EMPLOYEE (cyan) ================= -->
   <rect class="panel p-cyan" x="30" y="465" width="1180" height="410" rx="10"/>
   <text x="50" y="499" class="h1 accent-cyan">AI Employee</text>
-  <text x="50" y="521" class="sub">58 nodes &#183; a team lead that delegates to 5 specialists</text>
+  <text x="50" y="521" class="sub">62 nodes &#183; a team lead that delegates to 5 specialists</text>
 
   <!-- triggers -->
   <rect class="box p-orange" x="50" y="541" width="180" height="40" rx="6"/>
@@ -85,27 +79,24 @@
 
   <!-- team lead -->
   <rect class="box p-cyan" x="380" y="589" width="200" height="60" rx="8"/>
-  <text x="480" y="613" text-anchor="middle" class="h2">Zeenie</text>
+  <text x="480" y="613" text-anchor="middle" class="h2">AI Employee</text>
   <text x="480" y="633" text-anchor="middle" class="small">team lead</text>
 
   <path class="conn" d="M 230 561 L 380 604" marker-end="url(#arrow)"/>
   <path class="conn" d="M 230 619 L 380 619" marker-end="url(#arrow)"/>
   <path class="conn" d="M 230 677 L 380 634" marker-end="url(#arrow)"/>
 
-  <!-- outputs -->
-  <rect class="box p-pink" x="700" y="570" width="180" height="40" rx="6"/>
-  <text x="790" y="595" text-anchor="middle" class="h2">Console</text>
-  <rect class="box p-pink" x="700" y="628" width="180" height="40" rx="6"/>
-  <text x="790" y="653" text-anchor="middle" class="h2">Telegram Send</text>
+  <!-- output -->
+  <rect class="box p-pink" x="700" y="599" width="180" height="40" rx="6"/>
+  <text x="790" y="624" text-anchor="middle" class="h2">Console</text>
 
-  <path class="conn" d="M 580 609 L 700 590" marker-end="url(#arrow)"/>
-  <path class="conn" d="M 580 629 L 700 648" marker-end="url(#arrow)"/>
+  <path class="conn" d="M 580 619 L 700 619" marker-end="url(#arrow)"/>
 
   <!-- dotted attachment note -->
   <path class="conn-dot" d="M 560 589 L 560 553 L 1020 553 L 1020 599"/>
   <rect class="box p-purple" x="930" y="599" width="250" height="44" rx="6"/>
-  <text x="1055" y="617" text-anchor="middle" class="sub">own Memory + Skills</text>
-  <text x="1055" y="633" text-anchor="middle" class="sub">+ todos + processes</text>
+  <text x="1055" y="617" text-anchor="middle" class="sub">own Context, Memory + Skills</text>
+  <text x="1055" y="633" text-anchor="middle" class="sub">+ todos &#183; canvas &#183; task manager</text>
 
   <!-- delegation trunk + bus -->
   <path class="conn" d="M 480 649 L 480 715"/>
@@ -122,13 +113,13 @@
   <text x="210" y="770" text-anchor="middle" class="h2">Coding Agent</text>
   <text x="210" y="790" text-anchor="middle" class="small">files &#183; shell &#183; Python</text>
 
-  <rect class="box p-cyan" x="335" y="747" width="230" height="56" rx="6"/>
+  <rect class="box p-cyan" x="325" y="747" width="250" height="56" rx="6"/>
   <text x="450" y="770" text-anchor="middle" class="h2">Productivity Agent</text>
-  <text x="450" y="790" text-anchor="middle" class="small">Gmail &#183; Calendar &#183; Drive &#183; Sheets</text>
+  <text x="450" y="790" text-anchor="middle" class="small">Google Workspace &#183; Microsoft 365</text>
 
-  <rect class="box p-cyan" x="590" y="747" width="160" height="56" rx="6"/>
-  <text x="670" y="770" text-anchor="middle" class="h2">Travel Agent</text>
-  <text x="670" y="790" text-anchor="middle" class="small">Maps &#183; places</text>
+  <rect class="box p-cyan" x="582" y="747" width="175" height="56" rx="6"/>
+  <text x="670" y="770" text-anchor="middle" class="h2">Tool Agent</text>
+  <text x="670" y="790" text-anchor="middle" class="small">Vercel &#183; Cloudflare &#183; GCP</text>
 
   <rect class="box p-cyan" x="775" y="747" width="170" height="56" rx="6"/>
   <text x="860" y="770" text-anchor="middle" class="h2">Web Agent</text>
@@ -136,16 +127,16 @@
 
   <rect class="box p-cyan" x="970" y="747" width="160" height="56" rx="6"/>
   <text x="1050" y="770" text-anchor="middle" class="h2">Social Agent</text>
-  <text x="1050" y="790" text-anchor="middle" class="small">Twitter &#183; WhatsApp</text>
+  <text x="1050" y="790" text-anchor="middle" class="small">X &#183; WhatsApp</text>
 
-  <text x="620" y="828" text-anchor="middle" class="small">each specialist has its own memory &#183; skills &#183; tools &#183; console</text>
+  <text x="620" y="828" text-anchor="middle" class="small">each specialist has its own context &#183; skills &#183; tools &#183; console</text>
 
   <text x="50" y="856" class="sub"><tspan class="accent-cyan">Use when:</tspan> one chat handles everything, each domain gets a real specialist.</text>
 
   <!-- ================= ROW 3: CLAUDE ASSISTANT (green) ================= -->
   <rect class="panel p-green" x="30" y="905" width="1180" height="340" rx="10"/>
   <text x="50" y="939" class="h1 accent-green">Claude Assistant</text>
-  <text x="50" y="961" class="sub">15 nodes &#183; Claude Code in a workflow, sessions persist across days</text>
+  <text x="50" y="961" class="sub">16 nodes &#183; Claude Code in a workflow, sessions persist across days</text>
 
   <!-- triggers -->
   <rect class="box p-orange" x="50" y="985" width="180" height="40" rx="6"/>
@@ -172,7 +163,7 @@
   <!-- dotted attachment note -->
   <path class="conn-dot" d="M 560 1005 L 560 970 L 1020 970 L 1020 985"/>
   <rect class="box p-cyan" x="930" y="985" width="250" height="44" rx="6"/>
-  <text x="1055" y="1011" text-anchor="middle" class="sub">Memory + Skills attached</text>
+  <text x="1055" y="1011" text-anchor="middle" class="sub">Context, Memory + Skills attached</text>
 
   <!-- toolbox cluster -->
   <path class="conn-dot" d="M 480 1065 L 480 1115"/>
