@@ -140,7 +140,9 @@ zips.
 NSIS x64; DMG + zip for arm64 and x64 (zip is required by electron-updater);
 AppImage + deb x64. Artifact names spell the OS out and carry no version
 (`OpenCompany-windows-x64.exe`, `OpenCompany-macos-arm64.dmg`,
-`OpenCompany-linux-x64.AppImage`, ...): the README links to them through
+`OpenCompany-linux-x86_64.AppImage`, `OpenCompany-linux-amd64.deb`; on
+Linux electron-builder's `${arch}` takes each format's own spelling, so
+the README links use those exact names): the README links to them through
 GitHub's `releases/latest/download/<file>` redirect, which only works for
 a name that is identical on every release. The version lives in the tag
 and in the `latest*.yml` feeds, which electron-updater compares by their
