@@ -13,8 +13,8 @@
 > same-named folders; its `_source_docs/` are this directory's root files;
 > `reference-mockup/` lives here at
 > [`reference-mockup/`](./reference-mockup/); its `assets/diagrams/` were
-> stripped exports of the richer sources already in
-> [`assets/diagrams/`](./assets/diagrams/).
+> stripped exports of the public diagrams in
+> [`docs/diagrams/`](../../docs/diagrams/).
 >
 > **Product amendments** (decisions recorded after the fidelity pass —
 > where this brief and the product deliberately differ, the amendment
@@ -300,7 +300,7 @@ Also: canvas node icons are **36px** everywhere, and the size is a token, not a 
 ## Assets
 
 `assets/product-canvas-screenshot.png` — the real running canvas; the fidelity target for node/edge rendering.
-`assets/diagrams/*.svg` — six architecture diagrams (node anatomy, execution flow, AI agent routing, system overview, default workflows, how-it-works).
+[`docs/diagrams/*.svg`](../../docs/diagrams/) — the six diagrams (node anatomy, execution flow, AI agent routing, system overview, default workflows, how-it-works). They live at the repo root only; `assets/diagrams/` holds a pointer, not copies.
 
 ## Files
 

@@ -68,7 +68,7 @@ The app ships 12 visual themes (light, dark, Renaissance, Cyber, Edo, Steampunk�
 - `reference/themes/` — pointer README only; the snapshots went stale and were retired in favor of the authoritative `client/src/themes/`.
 - `HANDOFF.md` — merged design-handoff brief + recorded product amendments (read alongside `IMPLEMENTATION.md`).
 - `reference-mockup/` — 17-panel × 12-theme fidelity target (`Panel Theme Matrix.dc.html`, open in a browser).
-- `assets/` — `product-canvas-screenshot.png`, `diagrams/*.svg` (official README diagrams).
+- `assets/` — `product-canvas-screenshot.png`; `diagrams/` is a pointer to the live [`docs/diagrams/`](../../docs/diagrams/), the only copy of the six diagrams.
 - `components/buttons/` — ActionButton (6 intents), Button (shadcn variants).
 - `components/forms/` — Input, Select, RadioGroup, Textarea, Switch, Checkbox, Slider, ApiKeyInput.
 - `components/display/` — Badge, Card, Tabs, Avatar, Kbd, LogLine, ChatBubble.
