@@ -529,3 +529,31 @@ bun add -g @zeenie-ai/opencompany
 **Root cause**: Two bun 1.4 behaviours. `bun publish` ignores `publishConfig.registry` in package.json, so the `bun -e` rewrite the job used to do was inert and the publish went to the default registry, npmjs, where that job holds no token. And bun keeps an `.npmrc` `//host/:_authToken` line only when `host` is the registry that same file points at (the default `registry=` or a scoped `@scope:registry=`) at parse time; `--registry` on the command line comes too late, so a token for `npm.pkg.github.com` on its own is dropped whichever of `~/.npmrc` or the project `.npmrc` carries it. Verified with `bun publish --dry-run`: with only `publishConfig.registry` it prints `Registry: https://registry.npmjs.org/`; with `--registry https://npm.pkg.github.com/` and the token in either file it still reports `missing authentication`; with `registry=https://npm.pkg.github.com/` or `@zeenie-ai:registry=https://npm.pkg.github.com/` next to the token it prints `Registry: https://npm.pkg.github.com/` and succeeds.
 
 **Fix**: The job writes the scope route and the token into one `~/.npmrc` (`@zeenie-ai:registry=https://npm.pkg.github.com/` plus `//npm.pkg.github.com/:_authToken=<GITHUB_TOKEN>`) and runs a plain `bun publish`; the package.json rewrite is gone. To publish a mirror that failed this way, dispatch the Release workflow with `tag` set to the release and `registries` set to `github-packages`; the job checks out that tag. Locked by `test_github_packages_release_routes_the_scope_through_npmrc` in `cli/tests/test_release_pipeline_config.py`.
+
+## 25. OPEN: `company start` / `company serve` from a `bun add -g` install stops with `Project not built. Run "company build" first.`
+
+**Status**: open in 0.2.0 and 0.2.1 (found 2026-09-12 by running the README steps in a clean Ubuntu 24.04 container; the fix is small but has not shipped). Affects every registry install, including the installer scripts and the GCP / AWS VM templates, which end in `company serve`. The desktop app is unaffected.
+
+**Symptom**: `bun add -g @zeenie-ai/opencompany` (or `install.sh` / `install.ps1`) provisions the Python side fine, then the first `company start` prints `Error: Project not built. Run "company build" first.` and exits.
+
+**Root cause**: `cli/buildenv.py::validate_build` requires a `node_modules/` directory next to the package for every verb. That is an npm-era layout assumption: `npm install -g` nested a package's dependencies under the package, while bun keeps a global package's dependencies in its own global tree, so the directory never exists. Nothing at runtime needs it: `company start` is uvicorn plus the built SPA, and the JS executor sidecar is a self-contained bundle. Only `company dev` (Vite) genuinely needs `node_modules`.
+
+**Workaround**: run `company build` once from the installed package (it runs `bun install` there, which creates the directory), then `company start`. **Fix, when shipped**: require `node_modules` only for `dev`; keep the server venv and the built client as the check for `start` / `serve`.
+
+## 26. OPEN: JS / TS executor nodes fail on a registry install because the sidecar bundle is not in the tarball
+
+**Status**: open in 0.2.0 and 0.2.1. `tar -tzf` of the published tarball lists `client/dist/` but no `server/nodejs/dist/`; the npm-era 0.1.1 tarball had it.
+
+**Symptom**: `javascriptExecutor` / `typescriptExecutor` return the "JavaScript executor is unavailable" envelope on a `bun add -g` install; the backend log shows the sidecar spawn refusing because `server/nodejs/dist/index.js` does not exist.
+
+**Root cause**: `bun pm pack` honours a nested `.gitignore` even for paths under an explicit root `files` entry. `server/nodejs/.gitignore` lists `dist/`, so the bundle `company build` had just produced is dropped at pack time (npm's packer kept it). Verified with `bun pm pack --dry-run`: adding `server/nodejs/dist/` to `files` alone changes nothing; removing the nested rule includes the file (the root `.gitignore`'s `dist` rule still keeps it untracked).
+
+**Workaround**: `company build` from the installed package rebuilds the bundle. **Fix, when shipped**: drop `dist/` from `server/nodejs/.gitignore`, add `server/nodejs/dist/` to the root `files` list, and change `test_sidecar_dist_is_gitignored` to assert the root rule instead.
+
+## 27. OPEN: `install.sh` on a bare box fails at `error: unzip is required to install bun`
+
+**Status**: open in 0.2.1. Seen on a bare Ubuntu 24.04 container; Ubuntu cloud images usually ship `unzip`, minimal images and Debian netinst do not.
+
+**Root cause**: bun's own installer refuses to run without `unzip`, and `install.sh` hands off to it without checking. The script also calls `sudo` unconditionally for apt, which does not exist in containers that run as root.
+
+**Workaround**: `apt-get install -y unzip` (or the distro equivalent) before the one-liner. **Fix, when shipped**: install `unzip` via the detected package manager before calling bun's installer, and run package-manager commands directly when already root.

@@ -32,6 +32,13 @@ command provisions the Python side (uv, the venvs, bytecode; a minute or two).
 `curl -fsSL https://opencompany.sh/install.sh | bash` (or `install.ps1` on
 Windows) installs bun, Python and uv first and provisions eagerly.
 
+**Known issue on 0.2.0 and 0.2.1**: a registry install provisions but then
+`company start` (and `company serve`) stops with "Project not built", and the
+package ships without the JS executor sidecar bundle; `company build` in the
+installed package works around both. Details and status in
+[errors.md #25 and #26](./errors.md). The desktop app is not affected and is
+the recommended install.
+
 Open `http://localhost:$PYTHON_BACKEND_PORT` — `company start` is single-port (API +
 WebSocket + built SPA on the backend port).
 
@@ -86,7 +93,12 @@ Services (production `company start`; every port is declared once in `.env.templ
 ### Desktop app (Electron shell)
 
 End users can skip Python, bun and Node entirely: the installers attached to each
-GitHub Release bundle `uv`, a standalone CPython 3.12 and bun 1.4 (the only JS
+GitHub Release (`OpenCompany-windows-x64.exe`, `OpenCompany-macos-arm64.dmg` /
+`-macos-x64.dmg`, `OpenCompany-linux-x86_64.AppImage` / `-linux-amd64.deb`;
+the names carry no version, so
+`https://github.com/zeenie-ai/OpenCompany/releases/latest/download/<file>`
+always fetches the newest one, and the README links exactly those) bundle
+`uv`, a standalone CPython 3.12 and bun 1.4 (the only JS
 runtime the backend needs — no Node, no npm), provision
 the backend's virtual environment into the app's data directory on first
 launch (one-time download of the Python wheels, plus the Temporal binary the

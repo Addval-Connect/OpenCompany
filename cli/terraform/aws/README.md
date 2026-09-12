@@ -24,10 +24,15 @@ cd cli/terraform/aws
 terraform init
 terraform fmt
 terraform validate
-terraform apply -var key_name=<your-key-pair> -var opencompany_version=0.1.1 \
+terraform apply -var key_name=<your-key-pair> -var opencompany_version=0.2.1 \
   -var-file=app_env.auto.tfvars.json
 terraform output url
 ```
+
+`opencompany_version` is the release tag without the `v`. The module was
+validated on 0.1.1; the 0.2.x registry package currently fails `company serve`
+on a fresh install (see [errors.md #25](../../../docs-internal/errors.md)), so
+a VM deploy of 0.2.x does not come up until that is fixed.
 
 `app_env` carries the owner login, fresh JWT/encryption keys, `PORT=5678`,
 `DATA_DIR=/var/lib/opencompany` and `TEMPORAL_ENABLED=false`. Generate it with
