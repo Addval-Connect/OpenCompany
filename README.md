@@ -146,4 +146,4 @@ One note on scope: connector and provider lists are kept deliberately narrow. Th
 
 ## License
 
-[MIT](LICENSE) — © 2025 MachinaOs, © 2026 OpenCompany contributors.
+[MIT](LICENSE) — © 2026 OpenCompany contributors.
