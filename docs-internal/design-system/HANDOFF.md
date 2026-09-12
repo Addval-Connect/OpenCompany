@@ -300,7 +300,7 @@ Also: canvas node icons are **36px** everywhere, and the size is a token, not a 
 ## Assets
 
 `assets/product-canvas-screenshot.png` — the real running canvas; the fidelity target for node/edge rendering.
-[`docs/diagrams/*.svg`](../../docs/diagrams/) — the six diagrams (node anatomy, execution flow, AI agent routing, system overview, default workflows, how-it-works). They live at the repo root only; `assets/diagrams/` holds a pointer, not copies.
+[`docs/diagrams/*.svg`](../../docs/diagrams/) — the 20 diagrams: six overview diagrams (node anatomy, execution flow, AI agent routing, system overview, default workflows, how-it-works) plus 14 source-backed architecture and product-panel diagrams indexed in `CONTRIBUTING.md`. They live at the repo root only; `assets/diagrams/` holds a pointer, not copies.
 
 ## Files
 

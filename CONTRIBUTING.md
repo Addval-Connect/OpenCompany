@@ -40,6 +40,27 @@ Direct chat completions and every new agent execution use the native SDK layer i
 
 Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [native_llm_sdk.md](docs-internal/native_llm_sdk.md) - [agent_teams.md](docs-internal/agent_teams.md) - [memory_compaction.md](docs-internal/memory_compaction.md) - [cli_agent_framework.md](docs-internal/cli_agent_framework.md)
 
+## More Diagrams
+
+Fourteen source-backed architecture and product-panel diagrams live next to the ones above in [docs/diagrams/](docs/diagrams/). Each carries the source files it was drawn from in its `<desc>`.
+
+| Diagram | What it shows |
+|---|---|
+| [System context](docs/diagrams/system-context.svg) | Who uses OpenCompany and which external capabilities it orchestrates |
+| [Runtime and trust topology](docs/diagrams/runtime-trust-topology.svg) | Browser, desktop and CLI clients, the authenticated REST / WebSocket / MCP / webhook surfaces, Temporal and the lazy sidecars |
+| [Workflow execution routing](docs/diagrams/workflow-execution-routing.svg) | Temporal, parallel and sequential branches converging on the NodeExecutor pipeline |
+| [Durable deployment and events](docs/diagrams/durable-deployment-events.svg) | Generation snapshots, WorkflowControlWorkflow, push / poll / cron triggers, CloudEvents dispatch |
+| [Plugin, agent and team composition](docs/diagrams/plugin-agent-team-composition.svg) | How plugins become chat-model and agent nodes, assemble context, skills and tools, and form teams |
+| [Persistence and secret plane](docs/diagrams/persistence-secret-plane.svg) | workflow.db versus the encrypted credentials.db boundary |
+| [Workspace anatomy](docs/diagrams/workspace-anatomy.svg) | Immutable id to mutable slug directories, contained I/O, CLI worktrees and materialized skills |
+| [Node configuration anatomy](docs/diagrams/node-configuration-anatomy.svg) | The Input / Parameters / Output modal, local draft, save-before-run and correlated output |
+| [Credentials architecture](docs/diagrams/credentials-architecture.svg) | Server-owned catalogue, WebSocket handlers, AuthService and encrypted storage |
+| [Team operations](docs/diagrams/team-operations.svg) | Task Manager lifecycle from blocked and queued through submission, review and finish |
+| [Agent context versus memory](docs/diagrams/agent-context-memory.svg) | The stored conversation (RFC-0002) beside the explicit Memory tool |
+| [Master Skill editor](docs/diagrams/master-skill-editor.svg) | Skill sources, the catalogue and instruction panes, expansion and runtime badges |
+| [Workspace files](docs/diagrams/workspace-files.svg) | The Gallery node panel: WebSocket listing, HTTP content and the FileRef output |
+| [Runtime observability dock](docs/diagrams/runtime-observability-dock.svg) | Chat, Console and Terminal producers, retention and the dock UI |
+
 ## Repository Map
 
 | Directory | What lives here | Start reading |
