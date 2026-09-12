@@ -202,49 +202,43 @@ folder — both the folder and the workflow are gone.
 | `.github/workflows/desktop-ci.yml` | Desktop shell checks on PRs: typecheck, unit, invariants, build, Playwright smoke |
 | `.github/workflows/desktop-release.yml` | Tag-triggered desktop installers (NSIS / DMG+zip / AppImage+deb) into a draft release, then undraft. Separate from `release.yml` so npm publish is never blocked |
 | `.github/actions/setup/action.yml` | Composite: bun + Node + Python + uv + editable CLI install |
-| `.github/dependabot.yml` | **Security updates only** — version-update PRs disabled; see below |
+| `.github/dependabot.yml` | **Dependabot disabled** — every entry ignores `*`, so no version or security PRs; the entries exist only to keep alerts routed to the right updater; see below |
 | `.python-version` | Toolchain pin (`3.12`) — single source of truth |
 
 ---
 
-## Dependency update policy (security-only)
+## Dependency update policy (Dependabot disabled)
 
-Dependabot raises **security PRs only**; routine version bumps are disabled
-(`open-pull-requests-limit: 0` on every entry — the limit affects version
-updates only; security PRs are exempt from both the limit and the schedule
-and are grouped per ecosystem via `applies-to: security-updates`).
+Dependabot opens **no pull requests**, neither version bumps nor security
+updates (disabled 2026-09-12). Every entry in `.github/dependabot.yml`
+carries `open-pull-requests-limit: 0` and `ignore: dependency-name: "*"`;
+the ignore rule is what also stops security-update PRs. Dependencies move
+by hand, alongside test runs:
 
-Four entries cover the real surfaces: `bun /` (bun workspace spans root +
-`client/` + `server/nodejs/`), `bun /desktop` (the standalone desktop
-package with its own `bun.lock`), `pip /server` (authoritative
-`server/pyproject.toml`; the committed `requirements.txt` export is the
-transitive-pin surface security fixes patch), `github-actions /`. A former
-`pip: /` entry (duplicate churn against `server/requirements.txt`) and a
-dead `npm: /server` entry were removed.
+- JS: bump the range in the relevant `package.json` (or the top-level
+  `overrides` block in the root manifest for transitive pins), `bun install`,
+  run the suites.
+- pip: `uv lock --upgrade-package <name>` in `server/`, `uv sync`, run the
+  suites (`predeploy.yml` runs `uv lock --check`).
 
-**Caveat on the `bun` ecosystem**: Dependabot's `bun` support does version
-updates only — it never raises security-update PRs, so the security-only
-posture above yields no automated PRs at all for the JS workspace. Alerts
-still fire; the remediation channel is the top-level `overrides` block in
-the root `package.json` (the ranged pins formerly under `pnpm.overrides`)
-plus a hand bump of the affected range. Do not expect the "Dependabot
-Updates" workflow to do it: before `bun /desktop` existed, a desktop alert
-(vitest, 2026-09-11) was routed to the `npm_and_yarn` updater, which cannot
-read `bun.lock`, sees only the `^` range in `package.json`, and fails every
-run with "can't update vulnerable dependencies for projects without a
-lockfile or pinned version requirement". The fix was the bump itself
-(`bun add -d vitest@^4.1.11` in `desktop/`, `^4.1.11` in `client/`), which
-closes the alert and stops the job.
+The file is kept rather than deleted because of how alerts are routed:
+a directory with no entry gets whatever updater Dependabot guesses, and for
+a `bun.lock` tree it guesses `npm_and_yarn`, which cannot read `bun.lock`
+and fails every run ("can't update vulnerable dependencies for projects
+without a lockfile or pinned version requirement", the desktop vitest alert
+of 2026-09-11). The four entries (`bun /`, `bun /desktop`, `pip /server`,
+`github-actions /`) keep every surface mapped to the right ecosystem so
+that never happens again.
 
-Repo-level alerts + security updates must stay enabled — verify with
-`gh api repos/zeenie-ai/OpenCompany/vulnerability-alerts` (204 = enabled).
+Alerts themselves still appear in the repository's Security tab; they are
+useful and cost nothing. Dependabot's own security-update attempts are a
+repository setting (Settings > Code security > Dependabot), not something
+the config file controls; turn them off there if the "Dependabot Updates"
+job should stop running entirely.
 
-Re-enable version updates deliberately, never by just deleting the limits:
-raise `open-pull-requests-limit`, set `schedule.interval: monthly`, add
-`groups` with `patterns: ["*"]` + `update-types: [minor, patch]`, and
-`cooldown: {semver-major-days: 30}`. Stored comment-ignores (`mcp` 2.x,
-`websockets` 17.x) are inspectable via `@dependabot show <dep> ignore
-conditions`.
+Re-enable updates deliberately, never by just deleting the ignore rules:
+raise `open-pull-requests-limit`, add `groups` with `patterns: ["*"]` +
+`update-types: [minor, patch]`, and `cooldown: {semver-major-days: 30}`.
 
 ---
 
