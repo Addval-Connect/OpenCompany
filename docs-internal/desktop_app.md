@@ -138,7 +138,11 @@ zips.
 `electron-builder.yml` maps `stage/app-root/` and
 `stage/runtime/${os}-${arch}/` to `resources/` outside the asar. Targets:
 NSIS x64; DMG + zip for arm64 and x64 (zip is required by electron-updater);
-AppImage + deb x64.
+AppImage + deb x64. Artifact names spell the OS out
+(`OpenCompany-<version>-windows-x64.exe`, `-macos-arm64.dmg`, `-linux-x64.AppImage`)
+so the release page reads without guessing; electron-updater's `latest*.yml`
+feeds are generated from whatever names are produced, so renaming is safe
+between releases.
 
 ## Signing and updates
 
