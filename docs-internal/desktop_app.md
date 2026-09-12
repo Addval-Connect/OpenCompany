@@ -138,11 +138,14 @@ zips.
 `electron-builder.yml` maps `stage/app-root/` and
 `stage/runtime/${os}-${arch}/` to `resources/` outside the asar. Targets:
 NSIS x64; DMG + zip for arm64 and x64 (zip is required by electron-updater);
-AppImage + deb x64. Artifact names spell the OS out
-(`OpenCompany-<version>-windows-x64.exe`, `-macos-arm64.dmg`, `-linux-x64.AppImage`)
-so the release page reads without guessing; electron-updater's `latest*.yml`
-feeds are generated from whatever names are produced, so renaming is safe
-between releases.
+AppImage + deb x64. Artifact names spell the OS out and carry no version
+(`OpenCompany-windows-x64.exe`, `OpenCompany-macos-arm64.dmg`,
+`OpenCompany-linux-x64.AppImage`, ...): the README links to them through
+GitHub's `releases/latest/download/<file>` redirect, which only works for
+a name that is identical on every release. The version lives in the tag
+and in the `latest*.yml` feeds, which electron-updater compares by their
+`version` field, not by file name; the feeds are generated from whatever
+names are produced, so the rename was safe between releases.
 
 ## Signing and updates
 

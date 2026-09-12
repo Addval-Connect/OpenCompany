@@ -19,11 +19,12 @@ Bring your own API keys, or run models locally for free. No subscription. No usa
 
 ## Quick Start
 
-Download the app for your computer from the [latest release](https://github.com/zeenie-ai/OpenCompany/releases/latest) and install it:
+Download the app for your computer and install it (these links always point at the [latest release](https://github.com/zeenie-ai/OpenCompany/releases/latest)):
 
-- **Windows**: the `.exe` installer.
-- **macOS**: the `.dmg` (`arm64` for Apple Silicon, `x64` for Intel).
-- **Linux**: the `.AppImage`, or the `.deb` on Debian and Ubuntu.
+- **Windows**: [OpenCompany-windows-x64.exe](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-windows-x64.exe)
+- **macOS, Apple Silicon**: [OpenCompany-macos-arm64.dmg](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-macos-arm64.dmg)
+- **macOS, Intel**: [OpenCompany-macos-x64.dmg](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-macos-x64.dmg)
+- **Linux**: [OpenCompany-linux-x64.AppImage](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-linux-x64.AppImage), or [OpenCompany-linux-x64.deb](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-linux-x64.deb) on Debian and Ubuntu
 
 Nothing else to install. On first launch the app sets itself up (a one-time download, a minute or two) and opens the canvas. Click the key icon in the toolbar to connect your first AI provider. Three example employees are already on the canvas; open one to see how it is put together.
 
