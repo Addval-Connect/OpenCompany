@@ -74,6 +74,29 @@ def client_dist() -> Path:
     return _env_path("OPENCOMPANY_CLIENT_DIST") or (app_root() / "client" / "dist")
 
 
+def resolve_static_asset(base_dir: Path, relative: str) -> str | None:
+    """Return the absolute path of ``relative`` inside ``base_dir``, or ``None``.
+
+    Built for the SPA fallback route, which maps a request path onto the
+    built client directory. The request path is attacker-controlled, so the
+    joined path is normalised with :func:`os.path.normpath` and then
+    required to start with the (real) base directory plus a separator; a
+    ``..`` escape, an absolute path, or a prefix-sibling such as
+    ``client/dist2`` all fail that test. ``None`` also covers a path that
+    resolves inside the directory but is not a regular file, so callers
+    fall through to their default (the SPA shell).
+    """
+    if not relative:
+        return None
+    root = os.path.realpath(str(base_dir))
+    candidate = os.path.normpath(os.path.join(root, relative))
+    if not candidate.startswith(root + os.sep):
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
 def env_template_path() -> Path:
     """The canonical ``.env.template`` (baseline for every env var)."""
     return _env_path("OPENCOMPANY_ENV_TEMPLATE") or (app_root() / ".env.template")
@@ -98,6 +121,7 @@ __all__ = [
     "app_root",
     "server_root",
     "client_dist",
+    "resolve_static_asset",
     "env_template_path",
     "env_file_path",
     "package_json_path",

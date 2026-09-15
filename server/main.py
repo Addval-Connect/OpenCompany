@@ -57,7 +57,11 @@ from core.env_defaults import apply_file_defaults_to_environ
 
 apply_file_defaults_to_environ()
 
-from core.approot import client_dist as _client_dist, package_json_path as _package_json_path
+from core.approot import (
+    client_dist as _client_dist,
+    package_json_path as _package_json_path,
+    resolve_static_asset as _resolve_static_asset,
+)
 from core.config import Settings, cookie_posture_warnings, dev_secret_offenders
 from core.logging import configure_logging, get_logger, setup_websocket_logging, shutdown_websocket_logging
 from core.tracing import init_tracing
@@ -798,11 +802,12 @@ if _SERVE_STATIC and (_CLIENT_DIST / "index.html").is_file():
         """Serve a built static asset when it exists, else the SPA shell."""
         if full_path.startswith(_NON_SPA_PREFIXES):
             return JSONResponse(status_code=404, content={"detail": "Not Found"})
-        candidate = (_CLIENT_DIST / full_path).resolve()
-        # is_file() + containment check guard against ``..`` path traversal
-        # escaping the build directory.
-        if full_path and candidate.is_file() and _CLIENT_DIST in candidate.parents:
-            return FileResponse(str(candidate))
+        # The request path is user input; core.approot normalises it and
+        # refuses anything that does not stay inside the build directory
+        # (``..`` traversal, absolute paths, prefix siblings).
+        asset = _resolve_static_asset(_CLIENT_DIST, full_path)
+        if asset is not None:
+            return FileResponse(asset)
         return FileResponse(str(_CLIENT_DIST / "index.html"))
 
     logger.info("Serving built client from %s", _CLIENT_DIST)

@@ -453,7 +453,7 @@ def test_npm_release_authenticates_before_publish(
     publish_index = next(i for i, step in enumerate(steps) if "bun publish" in step["run"])
 
     assert steps[auth_index]["env"]["NPM_TOKEN"] == "${{ secrets.NPM_TOKEN }}"
-    assert "registry.npmjs.org" in steps[auth_index]["run"]
+    assert steps[auth_index]["run"] == "printf '//registry.npmjs.org/:_authToken=%s\\n' \"$NPM_TOKEN\" > ~/.npmrc"
     assert steps[preflight_index]["run"] == "bun pm whoami"
     assert auth_index < preflight_index < publish_index
 

@@ -4,6 +4,7 @@
  */
 
 import express, { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -31,6 +32,16 @@ const bunVersion = (globalThis as { Bun?: { version: string } }).Bun?.version ??
 
 const app = express();
 app.use(express.json({ limit: BODY_LIMIT }));
+
+// The package routes touch the filesystem and spawn `bun add`. The only
+// caller is the same-machine Python backend, so the ceiling is generous;
+// it exists so a stray loop cannot hammer the disk or the registry.
+const packageRouteLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 interface ExecuteRequest {
   code: string;
@@ -99,8 +110,8 @@ app.post('/execute', (req: Request, res: Response) => {
     // the deployment context is: server binds to localhost only (line 16,
     // default 'localhost') and is invoked exclusively by the same-machine
     // Python backend via NodeJSClient. Public network exposure is the
-    // operator's responsibility.
-    // codeql[js/code-injection]
+    // operator's responsibility. CodeQL's js/code-injection finding on this
+    // line is by design and is dismissed on the repository as "won't fix".
     vm.runInContext(prepareSource(code, language), context, { timeout, filename: language === 'typescript' ? 'user-code.ts' : 'user-code.js' });
 
     res.json({
@@ -131,10 +142,8 @@ function ensureUserPackagesTree(): void {
 
 // Install packages - package list from request.
 // Localhost-only service (see server.listen at the bottom); same trust
-// boundary as the /execute sandbox. No request-rate limiting because the
-// only caller is the same-machine Python backend.
-// codeql[js/missing-rate-limiting]
-app.post('/packages/install', (req: Request, res: Response) => {
+// boundary as the /execute sandbox.
+app.post('/packages/install', packageRouteLimiter, (req: Request, res: Response) => {
   const { packages } = req.body as { packages: string[] };
 
   if (!packages || !Array.isArray(packages) || packages.length === 0) {
@@ -165,8 +174,7 @@ app.post('/packages/install', (req: Request, res: Response) => {
 // List packages — same localhost-only trust boundary as above. The tree's
 // own manifest is the source of truth (what `bun add` wrote), so no
 // package-manager listing command is needed.
-// codeql[js/missing-rate-limiting]
-app.get('/packages', (_req: Request, res: Response) => {
+app.get('/packages', packageRouteLimiter, (_req: Request, res: Response) => {
   try {
     const manifest = JSON.parse(readFileSync(path.join(USER_PACKAGES_DIR, 'package.json'), 'utf-8')) as {
       dependencies?: Record<string, string>;
