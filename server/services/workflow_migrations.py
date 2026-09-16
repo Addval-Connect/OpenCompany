@@ -177,7 +177,7 @@ def normalize_workflow_graph(
     *,
     canonicalize_ids: bool = True,
 ) -> WorkflowGraphNormalization:
-    """Normalize a graph to Context V2.
+    """Normalize a graph to the Context topology.
 
     The transform is idempotent and preserves unknown edges for validation.
     It performs the following ordered stages:

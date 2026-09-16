@@ -196,7 +196,7 @@ channel. The consumer is the parameter panel, which already holds an
 authenticated socket with request correlation — a second HTTP listing surface
 would mean a second auth path and a second error envelope for no gain.
 
-### `GET /api/workspace/{workflow_id}/files/{path:path}`
+### `GET /api/workspace/{workflow_id}/files/{file_path:path}`
 
 - id → slug via `workspace_locator.resolve_workspace_root` (reads keep the
   `"default"` fallback), then `resolve_within`.

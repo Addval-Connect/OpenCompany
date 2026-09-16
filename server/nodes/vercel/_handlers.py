@@ -8,8 +8,9 @@ cannot use :func:`run_cli_command` (it buffers output via
 ``communicate()`` until process exit — the URL is needed mid-run).
 Instead it spawns the CLI directly, reads stdout/stderr incrementally
 until the URL appears, returns ``{success, url}`` to the frontend
-(which ``window.open``s the url — it never renders a separate code, so
-the url must be the code-embedding link), and lets a background task
+(which ``window.open``s the url and renders ``verification_code`` in
+``OAuthConnect.tsx``; the url should still be the code-embedding link
+so the opened tab works on its own), and lets a background task
 await process exit.
 
 Success gate mirrors Stripe's exit-code-distrust idiom: the pinned
@@ -48,7 +49,7 @@ _LOGIN_TIMEOUT_SECONDS = 600
 # output before giving up on this login attempt.
 _URL_DEADLINE_SECONDS = 20
 # The frontend drops WS requests after 30s (REQUEST_TIMEOUT in
-# WebSocketContext). The first-ever login pays a cold `npm install
+# WebSocketContext). The first-ever login pays a cold `bun add
 # vercel` inside this handler, which can blow well past that — so the
 # handler answers within this budget no matter what, and the login
 # keeps going in the background (the CLI auto-opens the browser on
@@ -169,7 +170,7 @@ async def _start_login_flow() -> Dict[str, Any]:
         if not binary:
             return {
                 "success": False,
-                "error": "Vercel CLI install failed. Manual install: npm i -g vercel (https://vercel.com/docs/cli)",
+                "error": "Vercel CLI install failed. Manual install: bun add -g vercel (https://vercel.com/docs/cli)",
             }
 
         auth = vercel_auth_path()
@@ -204,8 +205,8 @@ async def _start_login_flow() -> Dict[str, Any]:
             _LOGIN_TIMEOUT_SECONDS,
         )
         _spawn_background(_complete_login(proc, pre_mtime))
-        # The frontend only opens `url`; `verification_code` rides along for
-        # forward-compat (never rendered today — keep the URL code-embedding).
+        # The frontend opens `url` and renders `verification_code`
+        # (OAuthConnect.tsx); keep the URL code-embedding so the tab works alone.
         return {"success": True, "url": url, "verification_code": code}
     except Exception as e:
         logger.exception("[Vercel] login flow raised unexpectedly: %s", e)
@@ -217,7 +218,7 @@ async def handle_vercel_login(data: Dict[str, Any], websocket: WebSocket) -> Dic
 
     Fast path (CLI already installed): the device-flow URL is on the
     CLI's output within a few seconds — return it so the frontend opens
-    the browser. Cold path (first run pays ``npm install vercel``): the
+    the browser. Cold path (first run pays ``bun add vercel``): the
     budget expires first; return a pending success immediately and let
     the flow finish in the background — ``vercel login`` opens the
     browser on this machine itself once it reaches the device-flow

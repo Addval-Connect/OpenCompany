@@ -1,12 +1,19 @@
 """``edgymeow`` (WhatsApp Go bridge) local install — landed in the
-shared OpenCompany npm tree at :func:`core.paths.packages_dir`
+shared OpenCompany packages tree at :func:`core.paths.packages_dir`
 (``<DATA_DIR>/packages/``).
 
 All OpenCompany-managed npm packages (``edgymeow``,
-``@anthropic-ai/claude-code``, ``agent-browser``) share a single
-``<packages_dir>/node_modules/`` so npm manages them with one
-``package.json`` + ``package-lock.json``. ``npm install <pkg>
---prefix <packages_dir>`` extends the shared tree idempotently.
+``@anthropic-ai/claude-code``, ``agent-browser``, ``cf``, ``vercel``)
+share a single ``<packages_dir>/node_modules/`` managed by bun through
+one ``package.json`` + ``bun.lock``. :func:`core.js_runtime.add_package`
+(``bun add --cwd <packages_dir> <spec>``) extends the shared tree
+idempotently; no Node or npm is involved.
+
+edgymeow is the one package whose postinstall matters: it downloads the
+platform's Go binary into ``node_modules/edgymeow/bin/``. bun blocks
+dependency lifecycle scripts by default, so this install passes
+``trust=True`` (bun's ``--trust``), which also records the package in
+the tree's ``trustedDependencies``.
 
 Pre-fix this lived as a top-level ``edgymeow`` dep in the root
 ``package.json`` and landed at ``<repo>/node_modules/edgymeow/`` via
@@ -18,11 +25,10 @@ OpenCompany-managed CLI.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from typing import Optional
 
+from core.js_runtime import add_package, bun_binary
 from core.logging import get_logger
 from core.paths import packages_dir
 
@@ -36,7 +42,7 @@ _NPM_SPEC = "edgymeow@0.0.20"
 def edgymeow_binary_path() -> Optional[str]:
     """Return path to the edgymeow Go binary, installing on miss.
 
-    Returns ``None`` if npm is not on PATH or the install failed —
+    Returns ``None`` if bun is not available or the install failed —
     callers should surface this as a user-visible error (the runtime
     can't spawn without it). Idempotent: subsequent calls hit the
     existing binary on disk.
@@ -48,20 +54,14 @@ def edgymeow_binary_path() -> Optional[str]:
     if bin_path.exists():
         return str(bin_path)
 
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        logger.warning("[whatsapp] npm not on PATH; cannot install %s", _NPM_SPEC)
+    if bun_binary() is None:
+        logger.warning("[whatsapp] bun not available; cannot install %s", _NPM_SPEC)
         return None
 
-    logger.info("[whatsapp] installing %s into shared tree %s", _NPM_SPEC, root)
-    root.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [npm_cmd, "install", _NPM_SPEC, "--prefix", str(root), "--no-audit", "--no-fund"],
-        capture_output=True,
-        text=True,
-    )
+    logger.info("[whatsapp] installing %s into the shared packages tree %s", _NPM_SPEC, root)
+    result = add_package(_NPM_SPEC, trust=True)
     if result.returncode != 0 or not bin_path.exists():
-        logger.error("[whatsapp] npm install failed: %s", result.stderr.strip())
+        logger.error("[whatsapp] bun add %s failed: %s", _NPM_SPEC, result.stderr.strip())
         return None
 
     logger.info("[whatsapp] edgymeow installed at %s", bin_path)

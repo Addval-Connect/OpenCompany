@@ -23,7 +23,7 @@ from pathlib import Path
 
 import typer
 
-from cli._common import preflight
+from cli._common import UVICORN_GRACEFUL_SHUTDOWN_SECONDS, preflight
 from cli.buildenv import validate_build
 from cli.colors import console
 from cli.platform_ import server_dir, server_venv_python
@@ -64,6 +64,8 @@ def serve_command(port: int | None = None) -> None:
                 str(bind_port),
                 "--log-level",
                 "warning",
+                "--timeout-graceful-shutdown",
+                str(UVICORN_GRACEFUL_SHUTDOWN_SECONDS),
             ],
             cwd=server_dir(root),
             env={"SERVE_STATIC_CLIENT": "1", "PORT": str(bind_port)},

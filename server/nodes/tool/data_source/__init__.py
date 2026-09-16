@@ -221,7 +221,6 @@ class DataSourceNode(ToolNode):
         },
     )
     ui_hints = {
-        "isToolPanel": True,
         "isDataPanel": True,
         "hideInputSection": True,
         "hideOutputSection": True,

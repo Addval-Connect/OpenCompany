@@ -13,8 +13,8 @@
 > same-named folders; its `_source_docs/` are this directory's root files;
 > `reference-mockup/` lives here at
 > [`reference-mockup/`](./reference-mockup/); its `assets/diagrams/` were
-> stripped exports of the richer sources already in
-> [`assets/diagrams/`](./assets/diagrams/).
+> stripped exports of the public diagrams in
+> [`docs/diagrams/`](../../docs/diagrams/).
 >
 > **Product amendments** (decisions recorded after the fidelity pass —
 > where this brief and the product deliberately differ, the amendment
@@ -84,8 +84,9 @@ design_handoff_theme_system/
 │                       node roles, shadows, all-theme comparisons).
 ├─ ui_kits/opencompany/ ← A runnable recreation of the app shell
 │                       (App / CanvasView / Toolbar / Panels / ConsoleDock).
-├─ reference/themes/  ← The design system's own distilled copy of the 12 themes.
-│                       Useful for reading; `themes/` is authoritative.
+├─ reference/themes/  ← Pointer README only. The distilled snapshots went stale
+│                       (pre-hex-migration) and were retired; `client/src/themes/`
+│                       is authoritative.
 ├─ assets/            ← Product canvas screenshot + 6 architecture diagrams.
 ├─ reference-mockup/  ← The panel × theme matrix (open the .dc.html in a browser).
 └─ _source_docs/      ← DS readme, IMPLEMENTATION.md, SKILL.md, manifest,
@@ -206,7 +207,7 @@ Defined in `themes/base.css`. Getting this right is most of the canvas's quality
 | **Resting** | `box-shadow: 0 2px 8px color-mix(in srgb, <node-color> 18%, transparent)` — a quiet drop shadow. **No halo.** |
 | **Hover** | `translateY(-1px)` + `0 4px 14px color-mix(… 28%, transparent)`, transitioned on `--dur-fast` / `--ease-default` |
 | **Selected** | 1px accent ring + `0 4px 14px color-mix(… 32%, transparent)`, border goes to full strength |
-| **Executing** | the theme's own `--pulse-keyframe`, driven by `--node-pulse-color`. Timing: `.node` **1.4s**, `.sq-node-box` **1.5s** |
+| **Executing** | the theme's own `--pulse-keyframe`, driven by `--node-pulse-color`. Timing: the shared `--pulse-duration` token (**1.4s**) for both `.node` and `.sq-node-box` |
 | **Success / error** | `0 0 0 1px <semantic>, 0 0 14px color-mix(in srgb, <semantic> 60%, transparent)` |
 
 Three traps, all of which I hit:
@@ -270,7 +271,7 @@ The skins that use `uppercase` + wide tracking (Cyber at `.18em`, Greek at `.18e
 - **Pin your toolbar clusters.** The wordmark, workflow-name chip, mode toggle and action cluster all need `flex: none`; leave exactly one group (File/Edit/View) shrinkable. Without this the mode toggle collapses to a sliver in Cyber and Atomic.
 - **Test the widest theme, not the default.** Anything that fits in Light will overflow somewhere. Cyber and Greek are the stress cases.
 
-Also: canvas node icons are **36px** everywhere, and the size is a token, not a class — `theme.nodeSize.squareIcon` in `client/src/styles/theme.ts` (0.5625 x the 64px `nodeSize.square` box), passed to `NodeIcon` as `size=`; non-canvas surfaces use the `theme.iconSize.*` scale the same way. `NodeIcon` applies that one token as the box's width, height AND font size, so SVG, library and emoji icons all draw at the same edge. Never size an icon with Tailwind `h-*`/`text-*` classes: the theme type scale maps `text-3xl` to 44px, which is how emoji nodes once painted half again larger than every SVG-backed node beside them. Eight themes ship their own glyph set; Light, Dark, Plague and Surveillance fall through to lucide.
+Also: canvas node icons are **36px** everywhere, and the size is a token, not a class — `theme.nodeSize.squareIcon` in `client/src/styles/theme.ts` (0.5625 x the 64px `nodeSize.square` box), passed to `NodeIcon` as `size=`; non-canvas surfaces use the `theme.iconSize.*` scale the same way. `NodeIcon` applies that one token as the box's width, height AND font size, so SVG, library and emoji icons all draw at the same edge. Never size an icon with Tailwind `h-*`/`text-*` classes: the theme type scale maps `text-3xl` to 44px, which is how emoji nodes once painted half again larger than every SVG-backed node beside them. Ten themes ship their own glyph set; only Light and Dark fall through to lucide.
 
 ---
 
@@ -299,7 +300,7 @@ Also: canvas node icons are **36px** everywhere, and the size is a token, not a 
 ## Assets
 
 `assets/product-canvas-screenshot.png` — the real running canvas; the fidelity target for node/edge rendering.
-`assets/diagrams/*.svg` — six architecture diagrams (node anatomy, execution flow, AI agent routing, system overview, default workflows, how-it-works).
+[`docs/diagrams/*.svg`](../../docs/diagrams/) — the 20 diagrams: six overview diagrams (node anatomy, execution flow, AI agent routing, system overview, default workflows, how-it-works) plus 14 source-backed architecture and product-panel diagrams indexed in `CONTRIBUTING.md`. They live at the repo root only; `assets/diagrams/` holds a pointer, not copies.
 
 ## Files
 

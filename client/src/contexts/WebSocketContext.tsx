@@ -751,13 +751,9 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const currentWorkflowId = currentWorkflow?.id;
 
   const [isConnected, setIsConnected] = useState(false);
-  // `isReady` flips true only AFTER the init burst inside `ws.onopen`
-  // completes (api-key probes, terminal/chat/console history). Queries
-  // that depend on backend-served catalogue data (NodeSpec catalogue,
-  // node groups, node parameters, user settings, credential panels)
-  // gate on `isReady` instead of `isConnected` so they fire once,
-  // post-burst, instead of racing the serial awaits and arriving in
-  // arbitrary order.
+  // `isReady` flips true as soon as the socket opens and the pending-send
+  // queue drains (Wave 32: no init burst). Catalogue/spec queries gate on
+  // it rather than `isConnected` so queued sends replay first.
   const [isReady, setIsReady] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [androidStatus, setAndroidStatus] = useState<AndroidStatus>(defaultAndroidStatus);
@@ -2075,8 +2071,8 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         // First click "did nothing" because catalogue / nodeSpec / credentials
         // queries gate on `isReady` and stayed disabled. The cache (warmed
         // from localStorage via PersistQueryClientProvider for `nodeSpec` /
-        // `nodeGroups` / `pluginCatalogue` / `skillContent`) carries the
-        // visible state until refreshes land.
+        // `nodeGroups` — see lib/queryPersist.ts) carries the visible state
+        // until refreshes land.
         //
         // Wave 32 also dropped the legacy hardcoded `probeApiKey` loop over
         // `['openai', 'anthropic', 'gemini', 'google_maps', 'android_remote']`.

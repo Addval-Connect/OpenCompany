@@ -64,7 +64,6 @@ class TestSpecInvariants:
 
     def test_ui_hints(self):
         hints = DataSourceNode.ui_hints
-        assert hints["isToolPanel"] is True
         assert hints["isDataPanel"] is True
         assert hints["hideRunButton"] is True
 

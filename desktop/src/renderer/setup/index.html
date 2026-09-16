@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+    <title>OpenCompany</title>
+    <link rel="stylesheet" href="./setup.css" />
+  </head>
+  <body>
+    <main class="card" data-state="starting">
+      <header class="head">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <h1>OpenCompany</h1>
+          <p id="message" class="message">Starting</p>
+        </div>
+      </header>
+
+      <div class="progress" aria-hidden="true"><div class="bar"></div></div>
+
+      <p id="detail" class="detail" hidden></p>
+
+      <pre id="log" class="log" aria-live="polite"></pre>
+
+      <footer class="actions">
+        <button id="retry" type="button" class="primary" hidden>Retry</button>
+        <button id="logs" type="button">Open logs folder</button>
+        <button id="quit" type="button">Quit</button>
+      </footer>
+    </main>
+    <script type="module" src="./setup.ts"></script>
+  </body>
+</html>

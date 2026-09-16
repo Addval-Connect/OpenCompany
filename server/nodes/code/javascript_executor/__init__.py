@@ -13,14 +13,14 @@ class JavaScriptExecutorNode(CodeExecutorBase):
     type = "javascriptExecutor"
     display_name = "JavaScript Executor"
     subtitle = "Run JS"
-    description = "Execute JavaScript code via persistent Node.js server"
+    description = "Execute JavaScript code via the persistent JS executor sidecar (bun)"
     tool_name = "javascript_code"
     tool_description = "Execute JavaScript code for calculations, data processing, and JSON manipulation. Set output variable with result."
 
     @Operation("execute")
     async def execute_op(self, ctx: NodeContext, params: CodeExecutorParams) -> Any:
         """Inlined from handlers/code.py (Wave 11.D.2). Dispatches to the
-        backend-supervised Node.js sidecar; ``acquire_client`` spawns it
+        backend-supervised JS executor sidecar (bun); ``acquire_client`` spawns it
         on demand (first JS/TS execution) in every run mode."""
         from aiohttp import ClientConnectorError
 
@@ -44,7 +44,7 @@ class JavaScriptExecutorNode(CodeExecutorBase):
             # LLM. Tell it what's actually wrong and which tool can
             # substitute.
             raise NodeUserError(
-                "JavaScript executor is unavailable (Node.js sidecar at "
+                "JavaScript executor is unavailable (bun sidecar at "
                 f"{executor_base_url()}). Fall back to python_executor "
                 f"for similar logic. Underlying: {exc}"
             ) from exc

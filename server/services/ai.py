@@ -976,7 +976,7 @@ class AIService:
             if context_runtime is not None:
                 # Simple Memory is an explicit tool when a Context node is
                 # connected; legacy automatic recall/persistence remains only
-                # for immutable V1 snapshots.
+                # for graphs recorded with an input-memory edge.
                 memory_data = None
 
             # Build initial messages for state. The SystemMessage is

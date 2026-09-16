@@ -47,6 +47,7 @@ server/nodes/scraper/
     │                            # register_output_schema. Must NOT import `tikhub` at module import.
     ├── _sdk.py                  # Everything that touches `tikhub`, lazily inside functions:
     │                            # make_client, EndpointInfo/ParamInfo, endpoint_index (cached),
+    │                            # call_endpoint, list_endpoints,
     │                            # resolve_endpoint, bind_params, to_plain, raise_user_error,
     │                            # load_tikhub_endpoints, track_tikhub_usage, PLATFORMS,
     │                            # _MAX_RETRIES / _TIMEOUT
@@ -207,7 +208,7 @@ class TikHubCredential(ApiKeyCredential):
   free_credit` and `api_key_data.api_key_name` defensively (field names
   were inferred from the CLI's `user info` output; absence is tolerated)
   into `ProbeResult(extra=...)`, message
-  `"TikHub key validated - {email} (balance ${balance})"`. A 401 surfaces
+  `"TikHub key validated — {email or api_key_name or 'account'} (balance ${balance})"`. A 401 surfaces
   through the base `raise_for_status` path.
 
 Catalogue entry (`credential_providers.json`, same shape as `apify`, no

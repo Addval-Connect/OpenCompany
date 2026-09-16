@@ -1,4 +1,4 @@
-"""Thin-node wiring tests for specialized Context V2 backends."""
+"""Thin-node wiring tests for specialized Context backends."""
 
 from __future__ import annotations
 
@@ -108,8 +108,9 @@ async def test_claude_node_routes_context_separately_from_v1_memory(harness):
     assert kwargs["connected_context"]["kind"] == "context"
     task = list(kwargs["tasks"])[0]
     assert task.continue_session is False
-    assert result["result"]["session_id"] is None
-    assert result["result"]["tasks"][0]["session_id"] is None
+    # Claude's own session UUID stays visible on Context-bound runs.
+    assert result["result"]["session_id"] == "uuid-1"
+    assert result["result"]["tasks"][0]["session_id"] == "uuid-1"
 
 
 @pytest.mark.asyncio

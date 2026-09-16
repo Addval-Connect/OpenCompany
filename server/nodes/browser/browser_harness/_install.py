@@ -44,9 +44,10 @@ def browser_harness_binary_path() -> Optional[str]:
     if bin_path.exists():
         return str(bin_path)
 
-    uv_cmd = shutil.which("uv")
-    if not uv_cmd:
-        logger.warning("[browser-harness] uv not on PATH; cannot install %s", _PYPI_SPEC)
+    # OPENCOMPANY_UV_BIN: the desktop shell's bundled uv; else PATH.
+    uv_cmd = os.environ.get("OPENCOMPANY_UV_BIN", "").strip() or shutil.which("uv")
+    if not uv_cmd or not os.path.isfile(uv_cmd):
+        logger.warning("[browser-harness] uv not on PATH (or OPENCOMPANY_UV_BIN); cannot install %s", _PYPI_SPEC)
         return None
 
     root = package_dir("browser-harness")

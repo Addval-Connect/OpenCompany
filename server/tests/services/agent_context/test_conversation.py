@@ -32,7 +32,7 @@ from services.llm.protocol import Message, message_to_wire
 
 
 @pytest.fixture
-async def conversation_database():
+async def conversation_database(tmp_path: Path):
     # The root conftest stubs core.database for fast plugin tests, so load
     # the real module privately for transaction coverage.
     module_name = f"tests._conversation_database_{uuid.uuid4().hex}"
@@ -45,7 +45,7 @@ async def conversation_database():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
 
-    db_path = Path.cwd() / f".conversation-{uuid.uuid4().hex}.db"
+    db_path = tmp_path / f"conversation-{uuid.uuid4().hex}.db"
     settings = SimpleNamespace(
         database_url=f"sqlite+aiosqlite:///{db_path.as_posix()}",
         database_echo=False,

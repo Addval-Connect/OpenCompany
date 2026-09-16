@@ -36,7 +36,7 @@ class CurrentTimeToolNode(ToolNode):
         {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
         {"name": "output-tool", "kind": "output", "position": "top", "label": "Tool", "role": "tools"},
     )
-    ui_hints = {"isToolPanel": True, "hideRunButton": True}
+    ui_hints = {"hideRunButton": True}
     annotations = {"destructive": False, "readonly": True, "open_world": False}
     task_queue = TaskQueue.DEFAULT
 

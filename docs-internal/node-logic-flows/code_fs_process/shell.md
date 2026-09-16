@@ -64,8 +64,7 @@ backend root is `ctx.workspace_dir`.
 }
 ```
 
-`node_output_schemas.ShellOutput` declares `stdout` / `exit_code` / `truncated`
-/ `command`.
+The plugin's `ShellOutput` (server/nodes/filesystem/shell/__init__.py) declares `stdout` / `exit_code` / `truncated`; `command` rides through on `extra="allow"`.
 
 ## Logic Flow
 

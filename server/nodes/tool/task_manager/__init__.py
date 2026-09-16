@@ -69,7 +69,6 @@ class TaskManagerNode(ToolNode):
         {"name": "output-tool", "kind": "output", "position": "top", "label": "Tool", "role": "tools"},
     )
     ui_hints = {
-        "isToolPanel": True,
         "isTaskManagerPanel": True,
         "hideInputSection": True,
         "hideOutputSection": True,

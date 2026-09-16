@@ -18,9 +18,10 @@ this filesystem layer.
 Why workspace_dir (not cwd)
 ---------------------------
 
-Memory-bound pool runs spawn with ``cwd = repo_root`` so claude's
-``project_key`` stays stable for ``--continue`` / ``--resume``.
-Writing skills into ``<repo_root>/.claude/skills/`` would:
+Pool runs spawn in a git worktree under the workspace (a stable
+``wt_session`` per agent node for bound runs) so claude's ``project_key``
+stays stable for ``--resume``. Writing skills into the worktree's own
+``.claude/skills/`` would:
 
   - Pollute the user's repo (gitignored, but visible).
   - Accumulate stale SKILL.md trees across workflow runs that wired

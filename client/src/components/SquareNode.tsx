@@ -120,7 +120,7 @@ const SquareNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnectab
     if (spec?.handles?.length) return spec.handles;
 
     // Cold-cache / legacy fallback. Once a NodeSpec arrives its declared
-    // topology replaces this list wholesale, including Context V2 handles.
+    // topology replaces this list wholesale, including Context handles.
     const fallback: NodeSpecHandle[] = [];
     if (!spec?.hideInputHandle) {
       fallback.push({

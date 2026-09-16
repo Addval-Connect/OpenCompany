@@ -101,3 +101,9 @@ server/experiments/
 # Package lock files
 package-lock.json
 **/package-lock.json
+
+# Local Terraform state from `company deploy` runs (provider binaries are
+# hundreds of MB) and the backend test suite's scratch data root. Both live
+# inside allowlisted dirs (cli/, server/), so `files` alone cannot drop them.
+**/.terraform/
+server/tests/_test_opencompany_root/

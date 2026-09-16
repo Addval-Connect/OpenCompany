@@ -27,7 +27,7 @@ blocks land.
 |--------|-----------------|----------|---------|
 | `output-tool` (source, top, label "Vision") | tools | yes | Connect to an agent's `input-tools`; the agent calls `vision(...)` |
 
-No `input-main`. uiHints: `isToolPanel`, `hideInputSection`,
+No `input-main`. uiHints: `hideInputSection`,
 `hideOutputSection`, `hideRunButton`; `isConfigNode` auto-derived. A direct
 execution (Params only, no tool args) raises `NodeUserError("The vision tool
 needs an image argument; connect it to an agent's tools ...")`.

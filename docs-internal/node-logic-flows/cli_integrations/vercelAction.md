@@ -117,8 +117,9 @@ flowchart TD
 - **Subprocess**: one `vercel` process per op. Binary resolution order:
   in-process cache, `shutil.which("vercel")` (a system install is PREFERRED,
   unlike cf / gh / gcloud), the shared-tree shim
-  `<DATA_DIR>/packages/node_modules/.bin/vercel(.cmd)`, then
-  `npm install vercel@54.21.1 --prefix <DATA_DIR>/packages` in a worker
+  `<DATA_DIR>/packages/node_modules/.bin/vercel(.exe)` (bun's shim; runs the
+  CLI on bun), then `core.js_runtime.add_package("vercel@54.21.1")` — `bun add
+  --cwd <DATA_DIR>/packages --no-progress vercel@54.21.1` — in a worker
   thread under a lock followed by a best-effort `vercel telemetry disable`.
   Every invocation appends `--global-config <DATA_DIR>/vercel/ --no-color`;
   env = server env plus `NO_COLOR=1` and `VERCEL_TOKEN` when a token is

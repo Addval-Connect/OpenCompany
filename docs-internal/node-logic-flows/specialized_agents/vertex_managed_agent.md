@@ -23,8 +23,8 @@ glow exactly as they do for the local agent loop) and answered with
 usage (sandbox commands, `google_search`, `url_context`, `code_execution`,
 MCP tools) is surfaced live as dynamic [`vertexCloudTool`](./vertexCloudTool.md)
 canvas nodes via the workflow-ops protocol. Conversation continuity is the
-Context store on V2 graphs (transcript rendered into the prompt); immutable
-V1 generations keep the recorded Simple Memory chain-id bridge
+Context store when a Context node is wired (transcript rendered into the
+prompt); legacy `input-memory` graphs keep the recorded Simple Memory chain-id bridge
 (`vertex_interaction_id` / `vertex_environment_id`).
 
 ## Inputs (handles)
@@ -41,7 +41,7 @@ V1 generations keep the recorded Simple Memory chain-id bridge
 | `input-tools` (bottom 75%) | tools | no | Tool nodes -> Interactions `function` declarations (ToolNodes, agents for delegation, `usable_as_tool` ActionNodes; display-only types such as `vertexCloudTool` are skipped) |
 | `output-main` (right), `output-top` (top) | main | - | Result payload below |
 
-Legacy `input-memory` edges (immutable V1 generations) still surface as
+Legacy `input-memory` edges still surface as
 `context_data` that is not a Context descriptor; the plugin treats that as
 `memory_data` and reads/writes chain ids on the `simpleMemory` node's
 parameters.
@@ -180,7 +180,7 @@ flowchart TD
 
 - **Skills and task input are silently ignored**: `collect_agent_connections` returns a 5-tuple and this plugin unpacks `context_data, _, tool_data, input_data, _` — `input-skill` and `input-task` edges are accepted by the handles but contribute nothing. `STD_AGENT_HINTS.hasSkills` is therefore cosmetic for this node.
 - **Provider fallback trap**: `_inject_api_keys` calls `detect_ai_provider(node_type, params)`, which reads `parameters.provider`; saved params that predate the Literal field fall back to `openai`, the injected key fails the `AIza`/`AQ.` prefix check, and the run raises the "need a project id or AIza key" `NodeUserError` even though a gemini key is stored.
-- **Sandbox continuity differs by graph generation**: the skill doc promises 7-day sandbox/conversation persistence "when a simpleMemory node is connected"; on V2 graphs the standard handles carry no `input-memory` and Context-bound runs start a fresh remote interaction every firing, so only the stored transcript persists — installed packages / created files in the cloud sandbox do not.
+- **Sandbox continuity differs by graph generation**: the skill doc promises 7-day sandbox/conversation persistence "when a simpleMemory node is connected"; the standard handles carry no `input-memory` and Context-bound runs start a fresh remote interaction every firing, so only the stored transcript persists — installed packages / created files in the cloud sandbox do not.
 - The `cost={"service": "vertex_agent", "action": "interact"}` on `@Operation` is inert metadata (nothing in `services/` reads `OperationSpec.cost`); the usage row is written manually with `cost: 0.0` — tokens are billed by Google and not priced here.
 - `max_turns` counts the initial turn: `max_turns=1` never answers a `requires_action`.
 - Undeclared cloud-side `function_call` names stop the loop with a warning rather than an error; the payload then reports `status: requires_action` and node status `warning`.

@@ -39,6 +39,20 @@ def test_build_specs_backend_uses_venv_interpreter(tmp_path: Path):
     assert server.argv[1:4] == ["-m", "uvicorn", "main:app"]
 
 
+def test_build_specs_bounds_uvicorn_graceful_shutdown(tmp_path: Path):
+    """uvicorn's default waits forever for lingering connections before the
+    lifespan teardown that reaps Temporal / node / edgymeow; a reset browser
+    WebSocket used to wedge it until the supervisor tree-killed the backend."""
+    from cli._common import UVICORN_GRACEFUL_SHUTDOWN_SECONDS
+
+    cfg = _cfg()
+    specs = start._build_specs(tmp_path, cfg)
+    server = next(s for s in specs if s.name == "server")
+    idx = server.argv.index("--timeout-graceful-shutdown")
+    assert server.argv[idx + 1] == str(UVICORN_GRACEFUL_SHUTDOWN_SECONDS)
+    assert 0 < UVICORN_GRACEFUL_SHUTDOWN_SECONDS <= 30
+
+
 def test_build_specs_assigns_ready_ports(tmp_path: Path):
     cfg = _cfg()
     specs = start._build_specs(tmp_path, cfg)

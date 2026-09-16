@@ -198,19 +198,21 @@ class TestClaudeArgv:
         ):
             assert forbidden not in entries_with_skills
 
-    def test_no_session_id_flag_in_interactive(self, claude_provider):
-        """Claude assigns its own session UUID in interactive mode; we
-        no longer pre-mint a UUID and pass it via `--session-id`. The
-        `session_id` field on ClaudeTaskSpec is kept for back-compat
-        but silently dropped from argv."""
+    def test_session_id_flag_emitted_when_set(self, claude_provider):
+        """A host-minted UUID (``ClaudeSessionPool._spawn`` sets it on a
+        cold spawn with no continuity flag) is passed as ``--session-id``
+        so the session UUID is known before the first stream event."""
         task = ClaudeTaskSpec(prompt="x", session_id="sess-abc-123")
         argv = claude_provider.interactive_argv(task, defaults={})
-        assert "--session-id" not in argv
+        idx = argv.index("--session-id")
+        assert argv[idx + 1] == "sess-abc-123"
+        assert "--resume" not in argv
+        assert "--continue" not in argv
 
     def test_resume_flag_emitted(self, claude_provider):
         task = ClaudeTaskSpec(
             prompt="x",
-            session_id="new-sess",  # silently dropped in interactive
+            session_id="new-sess",  # loses to an explicit resume
             resume_session_id="prior-sess",
         )
         argv = claude_provider.interactive_argv(task, defaults={})

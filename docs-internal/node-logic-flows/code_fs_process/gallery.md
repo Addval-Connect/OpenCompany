@@ -27,6 +27,12 @@ operations; shipping an editor panel must not hand every agent a delete tool as 
 side effect. If agent-facing delete is ever wanted it belongs on `fileModify`,
 where the tool description can be written carefully.
 
+`ui_hints`: `isGalleryPanel: True, hideInputSection: True`. `hideOutputSection`
+is deliberately absent — the in-code comment in
+[`server/nodes/filesystem/gallery/__init__.py`](../../../server/nodes/filesystem/gallery/__init__.py)
+notes that, unlike `processManager`, this node produces output worth seeing
+and dragging, so the Output section stays.
+
 ## Inputs (handles)
 
 | Handle | Connection type | Required | Purpose |

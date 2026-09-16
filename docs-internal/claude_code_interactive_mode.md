@@ -2,14 +2,14 @@
 
 > **TL;DR.** `ClaudeSessionPool` keeps a warm `claude` subprocess per
 > session key (the RFC-0002 conversation key `context_bridge.pool_key` when
-> a Context node is wired; the legacy `simpleMemory.node_id` on immutable V1
-> graphs — `services/cli_agent/service.py:354-358`) and drives it with the same flags Anthropic's
+> a Context node is wired; the legacy `simpleMemory.node_id` on `input-memory`
+> graphs — `services/cli_agent/service.py:359-363`) and drives it with the same flags Anthropic's
 > own VSCode extension uses — stdio pipes, `--output-format stream-json
 > --input-format stream-json --verbose --ide`. Multi-turn happens by
 > writing newline-delimited JSON to `proc.stdin` of the long-lived
 > subprocess. Events arrive on `proc.stdout`. The on-disk JSONL is no
-> longer the runtime contract — claude writes it for `--continue` /
-> `--resume` persistence but the `result` event is stdout-only in
+> longer the runtime contract — claude writes it for `--resume`
+> persistence but the `result` event is stdout-only in
 > stream-json mode.
 
 ## Why we cut over from `-p`
@@ -66,8 +66,8 @@ server/nodes/agent/claude_code_agent/
 
 server/services/cli_agent/  (generic framework — shared by all CLI plugins)
 ├── factory.py     # register_provider / register_session_pool / register_skill_materialiser registries
-├── service.py     # AICliService.run_batch — dispatcher; routes to pool when memory-bound (registry lookup)
-├── session.py     # AICliSession — one-shot non-pooled path (still PTY on POSIX; out of scope)
+├── service.py     # AICliService.run_batch — dispatcher; every claude task goes to the pool (registry lookup)
+├── session.py     # AICliSession — generic PTY + JSONL path; NOT used for claude (GitHub #133 / #134)
 ├── mcp_server.py  # BatchContext + FastMCP bridge (shared by every CLI provider)
 ├── workflow_tools.py / lockfile.py / jsonl_watcher.py / config.py / protocol.py / types.py / _cli_auth.py
 └── _handlers.py   # codex WS handlers only (will move once codex_agent migrates)
@@ -86,7 +86,7 @@ claude
   --ide
   [--mcp-config <json> --strict-mcp-config]
   --model <name>
-  [--resume <UUID> | --continue]
+  [--resume <UUID> | --continue | --session-id <UUID>]
   --allowedTools <csv>
   --permission-mode dontAsk
   [--append-system-prompt <text>]
@@ -102,8 +102,15 @@ Notable absences (intentional):
 |---|---|
 | `-p` / `--print` | Drops us into the SDK billing bucket; the whole point of the cutover. |
 | Positional prompt (`-- "<text>"`) | Prompt arrives via stdin in stream-json input mode; an argv positional would double-send the first turn. `interactive_argv`'s `include_prompt` parameter is kept for back-compat but ignored. |
-| `--session-id <UUID>` | Rejected by claude in non-headless mode. We discover the UUID from the first event that carries `session_id`. |
+| `--continue` | The CLI reference says it skips sessions created non-interactively (`-p` / stream-json input), which is exactly what the pool spawns, so it never found the prior conversation. Memory-bound runs pass `--resume <last_session_id>` instead (the UUID persisted on the memory node by `_persist_memory`). |
 | `--include-partial-messages`, `--include-hook-events`, `--max-turns`, `--max-budget-usd`, `--fallback-model` | All `-p`-only. `ClaudeTaskSpec` keeps the fields for back-compat; they're silently dropped here. External cost / turn caps are a Phase 2 follow-up. |
+
+Emitted for session identity:
+
+| Flag | When |
+|---|---|
+| `--session-id <UUID>` | Cold spawn with no continuity flag. `ClaudeSessionPool._spawn` mints a `uuid4` so `current_session_uuid` is known before the first stream event; crash-recovery respawns then always have a UUID to `--resume`. The CLI requires a valid UUID and rejects one already in use. |
+| `--resume <UUID>` | Crash-recovery respawn of a pooled session, and every memory-bound run that has a persisted `last_session_id`. Works from any directory on the pinned CLI (2.1.223+). |
 
 `--permission-mode dontAsk` is the documented mode for *"only
 pre-approved tools, no prompts"* per
@@ -124,7 +131,10 @@ allowlist gate.
 ## Session pool — warm-process reuse
 
 [`ClaudeSessionPool`](../server/nodes/agent/claude_code_agent/_pool.py) is
-keyed by `simpleMemory.node_id`. Each entry is a
+keyed by the RFC-0002 conversation key `context_bridge.pool_key`
+(`(workflow_id, agent_node_id, generation)`), falling back to the legacy
+`simpleMemory.node_id` only on `input-memory` graphs
+(`services/cli_agent/service.py:359-363`). Each entry is a
 `PooledClaudeSession` carrying the live `asyncio.subprocess.Process`,
 the captured session UUID (filled in from the first event that has
 one), the MCP bearer token embedded in the spawn argv, a per-session
@@ -180,21 +190,24 @@ The pool's continuity model is two-layered:
 
 - **Intra-process (warm pool).** Within a live subprocess, every turn
   writes to the same `proc.stdin` and claude itself keeps the conversation
-  in memory. No `--continue` / `--resume` needed — same session UUID
-  flows across turns. Verified: turn 1 `13ac5819-...`, turn 2 same UUID.
-- **Cross-process (cold spawn / crash recovery).** Cold spawns of a
-  memory-bound run emit `--continue` (claude auto-finds the latest
-  conversation under the cwd via `project_key`). If `acquire` finds the
-  pooled subprocess has died, it captures the dead session's UUID
-  before respawning and splices `--resume <UUID>` into the spec so the
-  new subprocess continues writing to the same on-disk JSONL.
+  in memory. No `--resume` needed — same session UUID flows across turns.
+  Verified: turn 1 `13ac5819-...`, turn 2 same UUID.
+- **Cross-process (cold spawn / crash recovery).** A cold spawn with no
+  continuity flag mints a `uuid4` and emits `--session-id <UUID>`, so
+  the UUID is known before the first event. Memory-bound runs emit
+  `--resume <last_session_id>` (the UUID `_persist_memory` stored on the
+  memory node after the previous successful run). If `acquire` finds the
+  pooled subprocess has died, it splices `--resume <current_session_uuid>`
+  into the spec so the new subprocess continues the same on-disk JSONL.
 
-`ClaudeTaskSpec` carries `continue_session: bool` and
-`resume_session_id: Optional[str]`. `resume_session_id` wins if both
-are set. `simpleMemory.last_session_id` is display-only metadata —
-`_persist_memory` writes it for the UI but the agent doesn't read it
-back (continuity rides through `--continue` + the warm pool, not a
-ferried UUID).
+`ClaudeTaskSpec` carries `session_id`, `resume_session_id` and
+`continue_session`; precedence in argv is resume, then continue, then
+session-id. `--continue` is never set by the node: the CLI reference says
+it skips sessions created non-interactively (`-p` / stream-json input),
+which is every session the pool creates, so it silently started a fresh
+conversation each batch. A stale `last_session_id` (claude reports
+`No conversation found with session ID`) is cleared by `_persist_memory`
+so the next run spawns fresh.
 
 ## MCP bearer token lifecycle
 
@@ -324,8 +337,8 @@ rule, claude scans `.claude/skills/` inside every `--add-dir` path.
 Two properties fall out:
 
 - **Per-workflow isolation.** Workflow A's wired skills never bleed
-  into workflow B's subprocess even when both spawn with
-  `cwd=repo_root`. The workspace dir is unique per workflow.
+  into workflow B's subprocess: each runs in its own worktree under its
+  own workspace dir.
 - **Live add/remove.** Claude live-watches the skills tree (same
   skills spec, [Live change detection](https://code.claude.com/docs/en/skills#live-change-detection)),
   so warm-reuse turns can toggle skills without respawning. Pool's
@@ -341,10 +354,10 @@ are copied wholesale via `shutil.copytree` so `scripts/` and
 the UI) reconstruct the frontmatter (`name`, `description`,
 `allowed-tools`, `metadata`) + the markdown body. Failure modes
 are non-fatal: a skill that fails to load or write logs at WARN
-and is skipped — the spawn continues. Same helper is called from
-`AICliSession._pre_spawn` (non-pool path) and
-`ClaudeSessionPool._spawn` (pool path), so behaviour is uniform
-across the two transports.
+and is skipped — the spawn continues. The helper is called from
+`ClaudeSessionPool._spawn` (cold spawn) and `_prepare_warm_reuse`
+(diff on warm reuse); `AICliSession._pre_spawn` still calls it for the
+generic path other providers use.
 
 **Migration note.** Pre-cutover code wrote SKILL.md trees into
 `<repo_root>/.claude/skills/` so they accumulated in the user's
@@ -370,12 +383,12 @@ splices the per-workflow workspace
 (`~/.opencompany/workspaces/<workflow_slug>/`, injected into `ctx.raw` by
 `workflow.py:_get_workspace_dir`) into each task's `add_dir` list
 right after `task_list` is built — `interactive_argv` already emits
-`--add-dir <path>` per entry. Runs BEFORE the pool/non-pool branch
-split so both warm-subprocess and one-shot paths get it. Without
-this, the workspace is invisible to claude: memory-bound runs spawn
-with `cwd=repo_root` (stable for `--continue`'s `project_key`
-resolution) and non-memory runs with `cwd=worktree`, neither of which
-sees files dropped by upstream nodes (`fileDownloader`,
+`--add-dir <path>` per entry. Runs BEFORE the pool branch so every
+pooled session gets it. Without this, the workspace is invisible to
+claude: sessions spawn in a git worktree under
+`<workspace>/<node>/` (`wt_session` for bound runs, one per task
+otherwise), which does not see files dropped by upstream nodes
+(`fileDownloader`,
 `documentParser`, code executors, etc.). Mirrors the ai_agent
 pattern ([`services/ai.py:1186`](../server/services/ai.py) in
 `execute_agent`, `:1924` in `execute_chat_agent` —
@@ -409,6 +422,14 @@ on-disk session JSONL via `JsonlWatcher` / `JsonlDirWatcher`. That path
 was abandoned for the pool: `pywinpty`'s ConPTY emulation did not
 deliver keystrokes to claude's Ink TUI on Windows (empirically
 confirmed across four test variants). Stdio pipes + stream-json work
-cross-platform and match the Anthropic-blessed pattern. The non-pooled
-`AICliSession` still uses a PTY on POSIX for its one-shot
-`AICliService.run_batch` path — out of scope for this refactor.
+cross-platform and match the pattern the official Agent SDKs use. The
+non-pooled `AICliSession` was kept as the plain-run path for a while,
+but it never wrote the prompt to the child and a PTY stdin makes the
+CLI reject `--input-format stream-json` (GitHub #133 / #134), so
+`AICliService.run_batch` now routes every Claude task through the pool:
+bound runs get a warm keyed session, unbound runs get an ephemeral
+session per task (`<node_id>:<turn_execution_id>:<index>`) terminated
+after the batch. A child that exits without a `result` wakes
+`send_turn` on stdout EOF with its exit code instead of burning the
+turn timeout. The CLI version is pinned via `package_version` in
+`config/ai_cli_providers.json` (currently 2.1.258).

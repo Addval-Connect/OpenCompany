@@ -282,7 +282,7 @@ describe('nodeSpecToDescription contract', () => {
     expect(def.handles).not.toBe(handles);
   });
 
-  it('retains Context V2 capability and panel hints', () => {
+  it('retains Context capability and panel hints', () => {
     const def = nodeSpecToDescription({
       type: 'contextNode',
       displayName: 'Context',

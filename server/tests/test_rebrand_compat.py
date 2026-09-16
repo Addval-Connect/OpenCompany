@@ -49,7 +49,7 @@ class TestStatePathCompatibility:
 
         assert paths._resolve_data_path(str(canonical)) == canonical.resolve()
 
-    def test_shipped_workflows_do_not_hide_legacy_runtime_state(self, tmp_path):
+    def test_shipped_workflows_do_not_hide_legacy_runtime_state(self, monkeypatch, tmp_path):
         paths = _load_real_paths_module()
         canonical = tmp_path / ".opencompany"
         legacy = tmp_path / ".machina"
@@ -60,12 +60,8 @@ class TestStatePathCompatibility:
         assert paths._resolve_data_path(
             str(canonical), "workflow.db"
         ) == (legacy / "workflow.db").resolve()
-        monkeypatch_root = paths._REPO_ROOT
-        try:
-            paths._REPO_ROOT = tmp_path
-            assert paths.example_workflows_dir() == canonical / "workflows"
-        finally:
-            paths._REPO_ROOT = monkeypatch_root
+        monkeypatch.setenv("OPENCOMPANY_APP_ROOT", str(tmp_path))
+        assert paths.example_workflows_dir() == canonical / "workflows"
 
     def test_legacy_root_function_is_an_alias(self, monkeypatch, tmp_path):
         paths = _load_real_paths_module()
@@ -76,7 +72,7 @@ class TestStatePathCompatibility:
 
     def test_example_workflows_fall_back_to_legacy(self, monkeypatch, tmp_path):
         paths = _load_real_paths_module()
-        monkeypatch.setattr(paths, "_REPO_ROOT", tmp_path)
+        monkeypatch.setenv("OPENCOMPANY_APP_ROOT", str(tmp_path))
         legacy = tmp_path / ".machina" / "workflows"
         legacy.mkdir(parents=True)
 

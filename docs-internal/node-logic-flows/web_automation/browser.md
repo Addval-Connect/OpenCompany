@@ -14,9 +14,11 @@
 Interactive browser automation via the `agent-browser` CLI. The binary is a
 OpenCompany-managed local install resolved by
 [`nodes/browser/_install.py::agent_browser_binary_path`](../../../server/nodes/browser/_install.py)
-(installed via `npm install agent-browser --prefix <package_dir>` on first use,
-same pattern as Claude Code's project-local CLI — NOT a workspace `package.json`
-dependency and NOT invoked through `npx`). Exposes 14 discrete operations (navigate,
+(installed on first use with `bun add --trust` into the shared
+`<DATA_DIR>/packages/` tree via `core.js_runtime.add_package`, the same pattern
+as Claude Code's project-local CLI — NOT a workspace `package.json` dependency
+and NOT invoked through `bun x`; the shim runs on the bun runtime). Exposes 14
+discrete operations (navigate,
 click, type, fill, screenshot, snapshot, get_text, get_html, eval, wait, scroll,
 select, console, errors) plus a `batch` meta-op. The preferred workflow for an
 AI agent is `navigate` -> `snapshot` -> `click`/`fill` using the stable `@eN`
@@ -147,7 +149,7 @@ flowchart TD
 ## Decision Logic
 
 - **Service missing**: `get_browser_service()` returns `None` when the
-  agent-browser binary cannot be resolved (Node toolchain / `npm` unavailable)
+  agent-browser binary cannot be resolved (bun unavailable, or the install failed)
   -> `RuntimeError("agent-browser not installed...")` -> error envelope.
 - **Session resolution**: empty `session` -> `opencompany_<execution_id>` via the
   typed `ctx.execution_id` accessor (handles present-but-None on the agent
@@ -199,9 +201,10 @@ flowchart TD
 ## External Dependencies
 
 - **Credentials**: none.
-- **Services**: `BrowserService` singleton; `npm` on PATH (for first-use
-  install); `agent-browser` installed under `<package_dir("browser")>/npm/`
-  by `nodes/browser/_install.py` (OpenCompany-managed, not a workspace dep).
+- **Services**: `BrowserService` singleton; bun (`OPENCOMPANY_BUN_BIN` or PATH)
+  for the first-use install and as the shim's runtime; `agent-browser`
+  installed into the shared `<DATA_DIR>/packages/` tree by
+  `nodes/browser/_install.py` (OpenCompany-managed, not a workspace dep).
 - **Python packages**: `psutil` (via `kill_tree` for process-tree kill).
 - **Environment variables**: `BROWSER_MAX_INSTANCES` (concurrent session cap,
   default 3), `BROWSER_IDLE_TIMEOUT_MS` (daemon idle auto-shutdown in ms,

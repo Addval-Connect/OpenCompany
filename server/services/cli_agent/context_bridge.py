@@ -7,7 +7,7 @@ the stored conversation for ``(workflow_id, generation, agent_node_id)`` at
 run start, render it into the prompt, and save the exchange back per turn.
 
 The bridge is intentionally absent for legacy ``input-memory`` descriptors so
-already-recorded V1 generations retain their original Simple Memory behavior.
+graphs recorded with that edge retain their original Simple Memory behavior.
 """
 
 from __future__ import annotations

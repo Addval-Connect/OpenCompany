@@ -7,7 +7,7 @@
 | **WS handlers** | `canvas_list` / `canvas_remove` / `canvas_clear` (self-registered; simple_memory security preamble: external socket + owner + graph-ownership checks) |
 | **Tests** | [`server/tests/nodes/test_canvas_node.py`](../../../server/tests/nodes/test_canvas_node.py) |
 | **Skill (if any)** | none |
-| **Dual-purpose tool** | yes - tool name `canvas` (`tool_schema_locked`) |
+| **Dual-purpose tool** | ToolNode - tool name `canvas` (`tool_schema_locked = True`) |
 
 ## Purpose
 

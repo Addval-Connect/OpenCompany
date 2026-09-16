@@ -31,6 +31,10 @@ class CliProviderConfig:
 
     name: str
     package_name: str
+    # Exact npm version the cold install pins (``<package_name>@<version>``).
+    # Empty means unpinned. Bump deliberately: the stream-json wire contract
+    # and flag surface are verified against this version only.
+    package_version: str
     binary_name: str
     login_argv: Tuple[str, ...]
     auth_status_argv: Optional[Tuple[str, ...]]
@@ -81,6 +85,7 @@ def _build_configs() -> Dict[str, CliProviderConfig]:
         configs[name] = CliProviderConfig(
             name=name,
             package_name=prov.get("package_name", ""),
+            package_version=str(prov.get("package_version", "") or ""),
             binary_name=prov.get("binary_name", name),
             login_argv=tuple(prov.get("login_argv", [])),
             auth_status_argv=(tuple(prov["auth_status_argv"]) if prov.get("auth_status_argv") else None),

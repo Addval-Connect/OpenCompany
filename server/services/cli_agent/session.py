@@ -1,5 +1,11 @@
 """One CLI session per task — interactive PTY + on-disk JSONL events.
 
+**Not used for Claude.** ``AICliService.run_batch`` routes every Claude
+task through ``ClaudeSessionPool`` (plain pipes + stream-json): a PTY
+stdin makes the CLI reject ``--input-format stream-json``, and this
+class never wrote the prompt to the child (GitHub #133 / #134). It
+remains the generic PTY + JSONL path for other providers.
+
 Each session is bound to:
   - one provider (Claude or Codex)
   - one task spec (`ClaudeTaskSpec` / `CodexTaskSpec`)
@@ -43,7 +49,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import anyio
 
 from core.logging import get_logger
 from core.paths import safe_path_component
@@ -57,10 +62,11 @@ from services.cli_agent.types import BaseAICliTaskSpec
 logger = get_logger(__name__)
 
 # Claude derives its project_key from cwd by replacing every char that
-# isn't [a-zA-Z0-9.-] with `-`. Verified byte-for-byte against the
-# on-disk `<DATA_DIR>/claude/projects/` listing in the memory-bridge
-# research.
-_PROJECT_KEY_RE = re.compile(r"[^a-zA-Z0-9.-]")
+# isn't [a-zA-Z0-9-] with `-` (dots included: `.opencompany` becomes
+# `-opencompany`). Verified against the on-disk `~/.claude/projects/`
+# listing; keeping `.` in the class watched a directory the CLI never
+# wrote to (GitHub issue #132).
+_PROJECT_KEY_RE = re.compile(r"[^a-zA-Z0-9-]")
 
 # How long to wait for claude to materialise its session JSONL after
 # spawn on a first-run (no `--resume`). Five seconds is generous —
@@ -136,7 +142,7 @@ class AICliSession(BaseProcessSupervisor):
         # incompatible with this — every spawn would land under a
         # brand-new project_key with no prior JSONL.
         self._memory_bound: bool = bool(memory_bound)
-        # Backend Context V2 raw-event sink. It receives each decoded
+        # Backend Context raw-event sink. It receives each decoded
         # provider event before UI logging and before result presentation
         # truncates the assistant text to 4,000 characters.
         self._context_event_sink = context_event_sink
@@ -235,30 +241,9 @@ class AICliSession(BaseProcessSupervisor):
         # 1. Per-task git worktree — skipped for memory-bound runs
         # which use cwd=repo_root to keep claude's project_key stable.
         if not self._memory_bound:
-            self._worktree_dir.parent.mkdir(parents=True, exist_ok=True)
-            wt_proc = await anyio.run_process(
-                [
-                    "git",
-                    "-C",
-                    str(self._repo_root),
-                    "worktree",
-                    "add",
-                    str(self._worktree_dir),
-                    "-b",
-                    self._branch,
-                ],
-                check=False,
-            )
-            if wt_proc.returncode != 0:
-                err = (
-                    (wt_proc.stderr or b"")
-                    .decode(
-                        "utf-8",
-                        errors="replace",
-                    )
-                    .strip()
-                )
-                raise RuntimeError(f"git worktree add failed: {err}")
+            from services.cli_agent.worktree import add_worktree
+
+            await add_worktree(self._repo_root, self._worktree_dir, self._branch)
         else:
             logger.info(
                 "[%s] memory-bound: skipping worktree, using cwd=%s",
@@ -432,10 +417,8 @@ class AICliSession(BaseProcessSupervisor):
         our cwd. ``<OPENCOMPANY_CLAUDE_DIR>/projects/<project_key>/``.
 
         Claude derives ``project_key`` by replacing every non-
-        ``[a-zA-Z0-9.-]`` char in ``str(cwd)`` with ``-``. Verified
-        byte-for-byte against the on-disk
-        ``<DATA_DIR>/claude/projects/`` listing in the memory-bridge
-        research.
+        ``[a-zA-Z0-9-]`` char in ``str(cwd)`` with ``-`` (see
+        ``_PROJECT_KEY_RE``).
         """
         from nodes.agent.claude_code_agent._oauth import OPENCOMPANY_CLAUDE_DIR
 
@@ -796,18 +779,9 @@ class AICliSession(BaseProcessSupervisor):
         # runs; memory-bound spawns ran directly under repo_root).
         if not self._memory_bound:
             try:
-                await anyio.run_process(
-                    [
-                        "git",
-                        "-C",
-                        str(self._repo_root),
-                        "worktree",
-                        "remove",
-                        "--force",
-                        str(self._worktree_dir),
-                    ],
-                    check=False,
-                )
+                from services.cli_agent.worktree import remove_worktree
+
+                await remove_worktree(self._repo_root, self._worktree_dir)
             except Exception as exc:
                 self._logger.debug("[%s] worktree remove: %s", self.label, exc)
 

@@ -113,7 +113,7 @@ async def validate_workflow(
                 }
             )
 
-    # Context V2 topology.  These checks are capability-driven: renderer
+    # Context topology.  These checks are capability-driven: renderer
     # component kinds and legacy AI_AGENT_TYPES are intentionally not used.
     valid_contexts_by_agent: Dict[str, List[str]] = {}
     agents_by_context: Dict[str, List[str]] = {}

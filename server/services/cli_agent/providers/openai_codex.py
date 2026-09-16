@@ -92,12 +92,17 @@ class OpenAICodexProvider:
         if which_codex:
             return Path(which_codex)
 
-        npx = shutil.which("npx")
-        if npx:
-            return Path(npx)
+        # No system codex: `bun x <package>` fetches and runs it on demand
+        # (the npm package wraps a native binary, so the runtime does not
+        # matter). bun comes from OPENCOMPANY_BUN_BIN or PATH.
+        from core.js_runtime import bun_binary
+
+        bun = bun_binary()
+        if bun:
+            return Path(bun)
 
         raise FileNotFoundError(
-            f"Neither {self.binary_name!r} nor 'npx' found in PATH. " f"Install with: npm install -g {self.package_name}"
+            f"Neither {self.binary_name!r} nor 'bun' found in PATH. " f"Install with: bun add -g {self.package_name}"
         )
 
     def interactive_argv(
@@ -125,10 +130,12 @@ class OpenAICodexProvider:
         if which_codex:
             argv: List[str] = [which_codex]
         else:
-            npx = shutil.which("npx")
-            if not npx:
-                raise FileNotFoundError(f"Neither {self.binary_name!r} nor 'npx' found in PATH")
-            argv = [npx, "--yes", self.package_name]
+            from core.js_runtime import bun_binary
+
+            bun = bun_binary()
+            if not bun:
+                raise FileNotFoundError(f"Neither {self.binary_name!r} nor 'bun' found in PATH")
+            argv = [bun, "x", self.package_name]
 
         argv += ["exec", "--json"]
 

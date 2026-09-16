@@ -13,9 +13,9 @@ class TypeScriptExecutorNode(CodeExecutorBase):
     type = "typescriptExecutor"
     display_name = "TypeScript Executor"
     subtitle = "Run TS"
-    description = "Execute TypeScript code via persistent Node.js server with type safety"
+    description = "Execute TypeScript code via the persistent JS executor sidecar (bun) with type safety"
     tool_name = "typescript_code"
-    tool_description = "Execute TypeScript code via persistent Node.js server with type safety. Set output variable with result."
+    tool_description = "Execute TypeScript code via the persistent JS executor sidecar (bun) with type safety. Set output variable with result."
 
     @Operation("execute")
     async def execute_op(self, ctx: NodeContext, params: CodeExecutorParams) -> Any:
@@ -39,7 +39,7 @@ class TypeScriptExecutorNode(CodeExecutorBase):
             )
         except (ClientConnectorError, RuntimeError) as exc:
             raise NodeUserError(
-                "TypeScript executor is unavailable (Node.js sidecar at "
+                "TypeScript executor is unavailable (bun sidecar at "
                 f"{executor_base_url()}). Fall back to python_executor "
                 f"for similar logic. Underlying: {exc}"
             ) from exc

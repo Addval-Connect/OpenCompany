@@ -1,12 +1,14 @@
-"""Cloudflare CLI (`cf`) auto-installer — npm, pinned, project-local.
+"""Cloudflare CLI (`cf`) auto-installer — bun, pinned, project-local.
 
 The official Cloudflare CLI ships as the npm package ``cf`` (a
-Technical Preview — "the next version of Wrangler"). It lands in the
-shared OpenCompany npm tree at :func:`core.paths.packages_dir`
+technical preview, "the next version of Wrangler"). It lands in the
+shared OpenCompany packages tree at :func:`core.paths.packages_dir`
 (``<DATA_DIR>/packages/``), the same single ``package.json`` +
-``node_modules/`` that holds ``@anthropic-ai/claude-code`` / ``vercel``
-/ ``agent-browser``. ``npm install <pkg> --prefix <packages_dir>``
-extends the shared tree idempotently.
+``node_modules/`` that holds ``@anthropic-ai/claude-code`` / ``edgymeow``
+/ ``agent-browser`` / ``vercel``. :func:`core.js_runtime.add_package`
+(``bun add --cwd <packages_dir> <spec>``) extends the shared tree
+idempotently and the bin shim executes on the bun runtime; no Node or
+npm is involved.
 
 Unlike the vercel installer, the system-global ``cf`` is deliberately
 NEVER consulted (the gh philosophy): the preview CLI's command surface
@@ -19,21 +21,19 @@ terminal is visible to this pinned binary too.
 
 Pin ``_NPM_SPEC`` when bumping and re-verify every wrapped command via
 ``cf <cmd> --help-full`` (whatsapp precedent — ``@latest`` makes cold
-installs non-reproducible). cf requires Node >= 22, which is already
-OpenCompany's engines floor.
+installs non-reproducible). cf declares ``engines.node >= 22``; bun
+ignores ``engines`` and runs the CLI on its own runtime (verified on
+bun 1.4 with no Node on PATH, including ``cf auth whoami``).
 """
 
 from __future__ import annotations
 
 import asyncio
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
+from core.js_runtime import add_package, shared_tree_bin
 from core.logging import get_logger
-from core.paths import packages_dir
 
 logger = get_logger(__name__)
 
@@ -57,49 +57,38 @@ def cf_cli_path() -> Optional[Path]:
 
 
 def _shared_tree_bin() -> Path:
-    bin_name = "cf.cmd" if sys.platform == "win32" else "cf"
-    return packages_dir() / "node_modules" / ".bin" / bin_name
+    return shared_tree_bin("cf")
 
 
-def _npm_install() -> Path:
-    """Blocking npm install into the shared tree. Raises on failure."""
-    root = packages_dir()
+def _install() -> Path:
+    """Blocking ``bun add`` into the shared tree. Raises on failure."""
     bin_path = _shared_tree_bin()
-
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        raise RuntimeError("npm not on PATH — install Node.js 22+ (the cf CLI ships via npm)")
-
-    logger.info("[Cloudflare] installing %s into shared tree %s", _NPM_SPEC, root)
-    root.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [npm_cmd, "install", _NPM_SPEC, "--prefix", str(root), "--no-audit", "--no-fund"],
-        capture_output=True,
-        text=True,
-    )
+    logger.info("[Cloudflare] installing %s into the shared packages tree", _NPM_SPEC)
+    result = add_package(_NPM_SPEC)
     if result.returncode != 0 or not bin_path.exists():
-        raise RuntimeError(f"npm install {_NPM_SPEC} failed: {result.stderr.strip()[:500]}")
-
+        raise RuntimeError(f"bun add {_NPM_SPEC} failed: {result.stderr.strip()[:500]}")
     logger.info("[Cloudflare] cf CLI installed at %s", bin_path)
     return bin_path
 
 
 async def ensure_cf_cli() -> Path:
     """Return absolute path to the project-local cf binary, installing
-    the pinned npm release on miss. Idempotent + concurrent-safe."""
+    the pinned release on miss. Idempotent + concurrent-safe."""
     global _cached_path
-    existing = cf_cli_path()
-    if existing:
-        return existing
+    if _cached_path and _cached_path.exists():
+        return _cached_path
 
     async with _install_lock:
-        existing = cf_cli_path()
-        if existing:
-            return existing
-        # npm install blocks for tens of seconds — keep the event loop free.
-        installed = await asyncio.to_thread(_npm_install)
+        if _cached_path and _cached_path.exists():
+            return _cached_path
+        target = _shared_tree_bin()
+        if target.exists():
+            _cached_path = target
+            return target
+        # The install blocks for tens of seconds — keep the event loop free.
+        installed = await asyncio.to_thread(_install)
         _cached_path = installed
         return installed
 
 
-__all__ = ["ensure_cf_cli", "cf_cli_path"]
+__all__ = ["cf_cli_path", "ensure_cf_cli"]

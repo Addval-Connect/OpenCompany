@@ -1,4 +1,4 @@
-"""HTTP client for Node.js code execution server."""
+"""HTTP client for the JS code execution sidecar (runs on bun)."""
 
 from typing import Any, Dict, List, Optional
 import aiohttp
@@ -8,20 +8,20 @@ logger = get_logger(__name__)
 
 
 class NodeJSClient:
-    """Async HTTP client for Node.js executor service."""
+    """Async HTTP client for the JS executor service."""
 
     def __init__(self, base_url: str, timeout: int = 30):
         """Initialize client with base URL and timeout.
 
         Args:
-            base_url: Base URL of Node.js server (composed from NODEJS_EXECUTOR_PORT; defaults live in .env.template)
+            base_url: Base URL of the sidecar (composed from NODEJS_EXECUTOR_PORT; defaults live in .env.template)
             timeout: Default request timeout in seconds
         """
         self._base_url = base_url.rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=timeout)
 
     async def health_check(self) -> Dict[str, Any]:
-        """Check if Node.js server is healthy.
+        """Check if the sidecar is healthy.
 
         Returns:
             Health status dict with status, service, node_version

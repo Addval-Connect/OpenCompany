@@ -173,7 +173,6 @@ class CanvasNode(ToolNode):
     # auto-derivation.
     ui_hints = {
         "isCanvasPanel": True,
-        "isToolPanel": True,
         "isConfigNode": False,
     }
     # Overrides ToolNode's readonly default — canvas writes the durable board.

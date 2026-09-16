@@ -8,6 +8,7 @@ import asyncio
 import orjson
 from typing import Set, Dict, Any, Optional, List
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 from opentelemetry import trace
 
 from core.logging import get_logger
@@ -57,6 +58,14 @@ def _elide_for_cache(output: Any) -> Any:
         ),
     }
 tracer = trace.get_tracer(__name__)
+
+
+def _socket_open(connection: WebSocket) -> bool:
+    """True while both sides of the socket are still CONNECTED."""
+    return (
+        getattr(connection, "client_state", WebSocketState.CONNECTED) is WebSocketState.CONNECTED
+        and getattr(connection, "application_state", WebSocketState.CONNECTED) is WebSocketState.CONNECTED
+    )
 
 
 class StatusBroadcaster:
@@ -232,10 +241,19 @@ class StatusBroadcaster:
 
         async def send_to_client(connection: WebSocket):
             """Send message to a single client."""
+            if not _socket_open(connection):
+                # The client already sent (or received) a close frame; the
+                # endpoint's disconnect() has not run yet. Drop it silently
+                # instead of warning once per broadcast in the gap.
+                disconnected.add(connection)
+                return
             try:
                 await connection.send_text(message_bytes)
             except Exception as e:
-                logger.warning(f"[StatusBroadcaster] Send failed: {e}")
+                if _socket_open(connection):
+                    logger.warning(f"[StatusBroadcaster] Send failed: {e}")
+                else:
+                    logger.debug("[StatusBroadcaster] Send skipped, client closed: %s", e)
                 disconnected.add(connection)
 
         # Execute all sends concurrently with TaskGroup

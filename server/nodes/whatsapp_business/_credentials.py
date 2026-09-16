@@ -19,11 +19,10 @@ from services.plugin.credential import ApiKeyCredential, ProbeResult
 class WhatsAppBusinessCredential(ApiKeyCredential):
     """Graph API bearer token plus the fields the webhook and API need.
 
-    ``apiKey`` is deliberately **not** required at the catalogue level. The
-    Connect button gates on required fields only, so marking the token
-    required would block the browser sign-up path before it can supply one.
-    Runtime resolution still fails loudly when neither path has produced a
-    token.
+    ``apiKey`` is required at the catalogue level (``credential_providers.json``
+    marks it ``required: true``), so the Connect button gates on it along
+    with the other required fields. Runtime resolution still fails loudly
+    when no token has been stored.
     """
 
     id = "whatsapp_business"

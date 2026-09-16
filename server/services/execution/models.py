@@ -353,7 +353,7 @@ class ExecutionContext:
             if target in ai_agent_node_ids and source and target_handle:
                 if target_handle in (
                     "input-context",
-                    "input-memory",  # immutable V1 snapshot compatibility
+                    "input-memory",  # legacy input-memory graph compatibility
                     "input-tools",
                     "input-skill",
                     "input-teammates",

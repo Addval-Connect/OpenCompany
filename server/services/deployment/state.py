@@ -16,9 +16,9 @@ class DeploymentState:
     edges: List[Dict]
     session_id: str
     user_id: str = "owner"
-    # Context V2 cutover metadata. Both must be present for
-    # MachinaWorkflow to select AgentWorkflowV2; legacy/uncontrolled
-    # deployments leave them at zero and retain AgentWorkflow V1.
+    # Conversation scope. Both must be present for MachinaWorkflow to
+    # stamp a Context generation on node activities; legacy/uncontrolled
+    # deployments leave them at zero and run without a Context store.
     graph_version: int = 0
     generation: int = 0
     # Human-readable slug resolved from DB at deploy time. Used to

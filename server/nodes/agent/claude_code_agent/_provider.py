@@ -1,17 +1,19 @@
-"""Anthropic Claude Code CLI provider — interactive TUI mode.
+"""Anthropic Claude Code CLI provider — stream-json over stdio pipes.
 
 Reference implementation for the `AICliProvider` Protocol. OpenCompany
-drives the same interactive `claude` invocation a normal user runs at
-their terminal — not `claude -p` headless. The PTY keeps the process
-alive in TUI mode while we read events from the on-disk session JSONL
-at ``<CLAUDE_CONFIG_DIR>/projects/<project_key>/<session>.jsonl``
-instead of from stdout. See ``docs-internal/claude_code_interactive_mode.md``.
+spawns ``claude`` as a plain subprocess with piped stdin/stdout/stderr
+(``ClaudeSessionPool``) and speaks the CLI's stream-json protocol: one
+``{"type":"user","message":{...}}`` line per turn on stdin, one JSON
+event per line on stdout, ending each turn with ``type == "result"``.
+No PTY, no on-disk JSONL parsing. See
+``docs-internal/claude_code_interactive_mode.md``.
 
-Subprocess: ``claude --permission-mode bypassPermissions
---allowedTools <list> [--model ...] [--append-system-prompt ...]
-[--mcp-config ...] [--strict-mcp-config] [--resume <UUID>]
-[--effort ...] [--add-dir ...] [--disallowedTools ...] [--agent ...]
--- "<prompt>"``
+Subprocess: ``claude --output-format stream-json --input-format
+stream-json --verbose --ide [--mcp-config ...] [--strict-mcp-config]
+--model <m> [--resume <UUID> | --continue | --session-id <UUID>]
+[--allowedTools <list>] --permission-mode <mode>
+[--append-system-prompt ...] [--effort ...] [--add-dir ...]
+[--disallowedTools ...] [--agent ...]``
 
 **Tools + skills are preserved**:
   - ``--mcp-config`` registers OpenCompany's FastMCP server; the spawned
@@ -31,25 +33,29 @@ the keyboard to click "Allow." Behaviorally equivalent to
 mode (``code.claude.com/docs/en/permission-modes``) and is the same
 flag a Composio AO "permissionless" launch sets.
 
-Flags dropped in the interactive cutover (no longer emitted; the
-on-disk JSONL gives us the same data without `-p`):
-``-p / --print``, ``--output-format``, ``--verbose``,
-``--include-partial-messages``, ``--include-hook-events``,
-``--max-turns``, ``--max-budget-usd``, ``--session-id``,
-``--fallback-model``. ``--max-budget-usd`` / ``--max-turns`` become
-external monitors (Phase 2).
+Session identity: a cold spawn with no continuity flag gets a
+host-minted ``--session-id <UUID>`` (``ClaudeSessionPool._spawn``) so the
+UUID is known before the first event; memory-bound runs and crash
+recovery pass ``--resume <UUID>``. ``--continue`` is kept on the spec
+for callers that ask for it, but the CLI resolves it only against
+interactive sessions, so the node never sets it.
+
+Not emitted: ``-p`` / ``--print`` (the Agent SDK does not pass it
+either), ``--include-partial-messages``, ``--include-hook-events``,
+``--max-turns``, ``--max-budget-usd``, ``--fallback-model`` (print-mode
+only; the spec keeps the fields for back-compat), and a positional
+prompt (the prompt travels over stdin).
 
 Binary + auth: shared with the auth surface via
-``._oauth.claude_binary_path()`` — single managed install under
-``<DATA_DIR>/packages/`` and ``CLAUDE_CONFIG_DIR``
-set on the spawn env so the agent picks up the same credentials the
-Login button wrote.
+``._oauth.claude_binary_path()`` — single managed install of the pinned
+``package_version`` under ``<DATA_DIR>/packages/`` and
+``CLAUDE_CONFIG_DIR`` set on the spawn env so the agent picks up the
+same credentials the Login button wrote.
 
-Final event (parsed off disk by ``JsonlWatcher``): ``type == "result"``
-carries ``total_cost_usd``, ``duration_ms``, ``num_turns``,
-``session_id``, and the assistant's ``result`` string — same shape `-p`
-used to write to stdout (Claude Code CHANGELOG 2.1.101 / 2.1.126
-confirms the shared JSONL writer).
+Final event: ``type == "result"`` on stdout carries ``total_cost_usd``,
+``duration_ms``, ``num_turns``, ``session_id``, ``usage`` and the
+assistant's ``result`` string. It is stdout-only — the on-disk session
+JSONL never contains it — so completion is detected from the stream.
 """
 
 from __future__ import annotations
@@ -222,14 +228,18 @@ class AnthropicClaudeProvider:
         #     tracks its own sessions on disk under
         #     ``<CLAUDE_CONFIG_DIR>/projects/<project_key>/`` and
         #     ``--continue`` picks the newest.
-        #   - Neither → no flag (fresh session; claude assigns a new
-        #     UUID which the post-spawn JSONL locator discovers).
-        # ``--session-id`` is intentionally NOT emitted in interactive
-        # mode — the CLI rejects it.
+        #   - ``session_id`` set → ``--session-id <UUID>`` (host-minted
+        #     on cold spawn by ``ClaudeSessionPool._spawn`` so the UUID
+        #     is known before the first event; the CLI requires a valid
+        #     UUID and rejects one that is already in use).
+        #   - None of the three → no flag; claude assigns its own UUID,
+        #     reported on ``system/init``.
         if task.resume_session_id:
             argv += ["--resume", task.resume_session_id]
         elif task.continue_session:
             argv += ["--continue"]
+        elif task.session_id:
+            argv += ["--session-id", task.session_id]
 
         # Allowed tools — STRICTLY scoped to what the operator wired
         # through ``input-tools`` plus OpenCompany's own MCP infrastructure

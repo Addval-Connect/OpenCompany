@@ -1,10 +1,11 @@
 """Claude OAuth — project-local install + the documented `claude auth` subcommands.
 
-The Claude Code CLI lives in the shared OpenCompany npm tree at
-``<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]`` (on-demand
-``npm install`` on first use, alongside ``edgymeow`` /
-``agent-browser`` — one ``package.json`` + ``package-lock.json``
-managed by npm itself). ``CLAUDE_CONFIG_DIR`` points at
+The Claude Code CLI lives in the shared OpenCompany packages tree at
+``<DATA_DIR>/packages/node_modules/.bin/claude[.exe]`` (on-demand
+``bun add`` on first use through :mod:`core.js_runtime`, alongside
+``edgymeow`` / ``agent-browser`` — one ``package.json`` + ``bun.lock``
+managed by bun; the shim runs on the bun runtime, no Node or npm
+involved). ``CLAUDE_CONFIG_DIR`` points at
 ``<DATA_DIR>/claude/`` so the CLI manages its own credentials
 inside the project tree, isolated from the user's own
 ``~/.claude/`` session. The path constants here are composed
@@ -37,11 +38,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
-import subprocess
-import sys
 from typing import Any, Dict
 
+from core.js_runtime import add_package, shared_tree_bin
 from core.logging import get_logger
 from core.paths import data_path, packages_dir
 from services.events.cli import run_cli_command
@@ -60,9 +59,9 @@ logger = get_logger(__name__)
 #
 # ``OPENCOMPANY_CLAUDE_DIR``  -> ``<DATA_DIR>/claude/``     auth state
 #                                                       (CLAUDE_CONFIG_DIR)
-# ``OPENCOMPANY_NPM_ROOT``    -> ``<DATA_DIR>/packages/``   shared npm tree
-#                                                       (``--prefix`` target;
-#                                                       also holds
+# ``OPENCOMPANY_NPM_ROOT``    -> ``<DATA_DIR>/packages/``   shared packages tree
+#                                                       (``bun add --cwd``
+#                                                       target; also holds
 #                                                       ``edgymeow`` /
 #                                                       ``agent-browser``)
 OPENCOMPANY_CLAUDE_DIR = data_path("claude")
@@ -86,32 +85,35 @@ def claude_binary_path() -> str:
     AND the agent spawn (``_provider.py``) so both surfaces use the
     same binary + ``CLAUDE_CONFIG_DIR``-isolated credentials.
 
-    Landed under the shared OpenCompany npm tree at
+    Landed under the shared OpenCompany packages tree at
     ``OPENCOMPANY_NPM_ROOT`` (= ``<DATA_DIR>/packages/``) so a single
-    ``package.json`` + ``package-lock.json`` covers claude /
-    edgymeow / agent-browser.
+    ``package.json`` + ``bun.lock`` covers claude / edgymeow /
+    agent-browser / cf / vercel.
     """
-    bin_name = "claude.cmd" if sys.platform == "win32" else "claude"
-    bin_path = OPENCOMPANY_NPM_ROOT / "node_modules" / ".bin" / bin_name
+    bin_path = shared_tree_bin("claude")
 
     if bin_path.exists():
         return str(bin_path)
 
-    logger.info("Installing Claude Code CLI into shared tree %s", OPENCOMPANY_NPM_ROOT)
-    OPENCOMPANY_NPM_ROOT.mkdir(parents=True, exist_ok=True)
+    # Pinned spec from ``config/ai_cli_providers.json`` (``package_name`` +
+    # ``package_version``), the vercel / cloudflare idiom: an unpinned
+    # install makes cold installs non-reproducible and lets a CLI release
+    # change the stream-json contract underneath a working deployment.
+    from services.cli_agent.config import get_provider_config
 
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        raise FileNotFoundError("npm not found on PATH")
+    cfg = get_provider_config("claude")
+    npm_spec = cfg.package_name if cfg else "@anthropic-ai/claude-code"
+    if cfg and cfg.package_version:
+        npm_spec = f"{npm_spec}@{cfg.package_version}"
 
-    result = subprocess.run(
-        [npm_cmd, "install", "@anthropic-ai/claude-code", "--prefix", str(OPENCOMPANY_NPM_ROOT)],
-        capture_output=True,
-        text=True,
-    )
+    logger.info("Installing %s into shared tree %s", npm_spec, OPENCOMPANY_NPM_ROOT)
+
+    # The package's postinstall stages its native launcher; trust it so
+    # the install matches what `npm install` used to produce.
+    result = add_package(npm_spec, trust=True, root=OPENCOMPANY_NPM_ROOT)
     if result.returncode != 0:
-        logger.error(f"npm install failed: {result.stderr}")
-        raise RuntimeError(f"Failed to install claude-code: {result.stderr}")
+        logger.error(f"bun add {npm_spec} failed: {result.stderr}")
+        raise RuntimeError(f"Failed to install {npm_spec}: {result.stderr}")
 
     if not bin_path.exists():
         raise FileNotFoundError(f"Claude CLI not found at {bin_path} after install")

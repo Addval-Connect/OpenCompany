@@ -185,7 +185,7 @@ class ProxyService:
 
         Args:
             url: Target URL to be proxied
-            parameters: Node parameters (may contain proxyProvider, proxyCountry, etc.)
+            parameters: Node parameters (may contain proxy_provider, proxy_country, etc.)
 
         Returns:
             Proxy URL string for httpx, or None if no proxy should be used

@@ -577,7 +577,8 @@ async def evaluate_trigger_filter_activity(payload: Dict[str, Any]) -> bool:
 async def pause_workflow_on_failure_activity(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Circuit breaker: pause a controlled deployment after a failed run.
 
-    Scheduled by MachinaWorkflow's failure path (patch-gated). All policy
+    Scheduled by MachinaWorkflow's failure path (no ``workflow.patched``
+    guard: the schedule is unconditional for trigger-spawned runs). All policy
     lives in ``services.deployment.handlers.pause_generation_on_failure``
     — including the WORKFLOW_CONTROL_PAUSE_ON_FAILURE knob, evaluated on
     the activity side so flipping it never touches recorded workflow

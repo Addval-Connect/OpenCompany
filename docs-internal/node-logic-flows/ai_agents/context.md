@@ -29,6 +29,19 @@ reference: [agent_context_flow.md](../../agent_context_flow.md).
 
 None (`AgentContextParams` is empty, `extra="forbid"`).
 
+## Outputs (handles)
+
+| Handle | Shape | Description |
+|--------|-------|-------------|
+| `output-context` | context (role `context`, top) | The only declared handle; connects to an agent's `input-context`. `hide_input_handle = True`, `hide_output_handle = False` |
+
+Class facts: `component_kind = "model"`, `group = ("memory",)` (so
+`isConfigNode` auto-derives), `version = 2`. The single
+`@Operation("policy")` ignores its inputs and returns `AgentContextOutput`
+(`{configured: true}`, `extra="forbid"`); conversations stay in the store.
+`ui_hints`: `isContextPanel`, `systemManaged`, `hideInputSection`,
+`hideOutputSection`, `hideRunButton` — all `True`.
+
 ## Behavior
 
 - **Descriptor** ([`_descriptor.py`](../../../server/nodes/context/_descriptor.py)):

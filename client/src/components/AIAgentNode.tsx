@@ -58,8 +58,8 @@ const AIAgentNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnecta
   const spec = useNodeSpec(type || 'aiAgent');
   const handles: SpecHandle[] = (spec?.handles as SpecHandle[] | undefined) ?? [];
   const accentColor = spec?.color || 'var(--node-agent)';
-  const width = (spec?.uiHints as any)?.width ?? 300;
-  const height = (spec?.uiHints as any)?.height ?? 200;
+  const width = spec?.uiHints?.width ?? 300;
+  const height = spec?.uiHints?.height ?? 200;
   const defaultLabel = spec?.displayName || type || 'Agent';
   const subtitle = spec?.subtitle ?? '';
 

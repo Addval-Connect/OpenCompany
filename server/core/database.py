@@ -1,5 +1,6 @@
 """Modern async database service with SQLModel and SQLAlchemy 2.0."""
 
+import asyncio
 import json
 import inspect
 import secrets
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import case, text, func, update, or_
 from contextlib import asynccontextmanager
+
+from core.session_teardown import teardown_session as _teardown_session
 
 from core.config import Settings
 from models.database import (
@@ -375,18 +378,31 @@ class Database:
 
     @asynccontextmanager
     async def get_session(self):
-        """Get async database session."""
+        """Get async database session.
+
+        Teardown (rollback + close) runs under ``asyncio.shield``. When the
+        calling task is cancelled mid-statement -- a WebSocket client that
+        disconnects while its connect-time handlers are still reading --
+        the cancellation would otherwise land inside the pool's
+        reset-on-return rollback; SQLAlchemy then logs "Exception during
+        reset or similar" with a full traceback and discards the
+        connection. Shielding lets the reset finish while the
+        CancelledError still propagates to the caller.
+        """
         if not self.async_session:
             raise RuntimeError("Database not initialized")
 
-        async with self.async_session() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+        session = self.async_session()
+        try:
+            yield session
+        except asyncio.CancelledError:
+            await asyncio.shield(_teardown_session(session, rollback=True))
+            raise
+        except Exception:
+            await asyncio.shield(_teardown_session(session, rollback=True))
+            raise
+        else:
+            await asyncio.shield(_teardown_session(session, rollback=False))
 
     async def _migrate_workflow_controls(self):
         """Backfill control-plane columns when upgrading an early preview DB."""

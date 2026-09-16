@@ -7,17 +7,14 @@ Locks in the user-facing invariants from [docs-internal/ARCHIVE/credentials_pane
 ```bash
 cd client
 npm install            # picks up the new devDependencies
-npm run test           # watch mode
-npm run test:run       # one-shot
+npm run test           # one-shot (vitest run)
+npm run test:watch     # watch mode
 npm run test:coverage  # with v8 coverage report
 ```
 
 ## Layout
 
-| File | Locks in |
-|---|---|
-| `src/hooks/__tests__/useApiKeys.test.ts` | Hook routes to the correct WebSocket message types with the right payload shapes; failure paths return `{isValid: false, error}` without throwing |
-| `src/components/__tests__/CredentialsModal.test.tsx` | Modal renders correctly for representative providers; click → WS message dispatch chain |
+51 test files live beside their subjects, almost all under `__tests__/` directories, across adapters/, assets/icons/, components/ (and its subfolders auth/, onboarding/, parameterPanel/, parameterPanel/canvas/, ui/), contexts/, hooks/, lib/, store/, stores/, types/, utils/. Targeted subsets: `npm run test:credentials`, `npm run test:nodepanels`.
 
 ## Tooling
 

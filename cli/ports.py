@@ -35,9 +35,9 @@ def _ancestor_pids() -> set[int]:
 
     Used by the pattern-matching kill functions below so we never
     terminate our own parent / grandparent. When invoked through the
-    npm bin shim the chain is ``powershell -> node.exe (bin/cli.js)
+    global bin shim the chain is ``powershell -> bun.exe (bin/cli.js)
     -> python.exe (-m cli ...)`` -- if ``kill_orphaned_opencompany_processes``
-    matches ``node.exe`` (its cmdline carries the npm install path),
+    matches ``bun.exe`` (its cmdline carries the install path),
     killing it tears down stdio mid-execution and the Python child
     exits with whatever garbage code Windows assigns to an
     abruptly-orphaned process (observed: 58). Walk up the tree once
@@ -202,9 +202,11 @@ def kill_by_pattern(pattern: str, *, root_dir: str | None = None) -> list[int]:
 def kill_orphaned_opencompany_processes(
     root_dir: str, *, exclude_substring: str | None = None
 ) -> list[int]:
-    """Kill stray python/node processes whose cmdline references the project root."""
+    """Kill stray python/bun processes whose cmdline references the project root."""
     root_norm = root_dir.lower().replace("\\", "/")
-    target_names = {"python", "python3", "python.exe", "node", "node.exe"}
+    # bun runs the JS executor sidecar and the company shim; node is kept
+    # so a sidecar left over from a pre-bun install is still reaped.
+    target_names = {"python", "python3", "python.exe", "bun", "bun.exe", "node", "node.exe"}
     safe_pids = _ancestor_pids()
     killed: list[int] = []
 

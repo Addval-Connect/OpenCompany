@@ -198,8 +198,7 @@ that Resume relies on.
   behaviour.
 - **`WORKFLOW_CONTROL_PAUSE_ON_FAILURE`** (default `true`): circuit
   breaker — when trigger-spawned runs keep failing, MachinaWorkflow
-  schedules `workflow_control.pause_on_failure.v1` (patch
-  `machina-pause-on-failure-v1`) and the deployment pauses so the user
+  schedules `workflow_control.pause_on_failure` and the deployment pauses so the user
   fixes the cause and Resumes, instead of the trigger firing into the same
   error indefinitely. The breaker trips only after
   **`WORKFLOW_CONTROL_PAUSE_ON_FAILURE_THRESHOLD`** (default `3`) failed

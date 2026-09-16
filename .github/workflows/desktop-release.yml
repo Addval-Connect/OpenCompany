@@ -1,0 +1,191 @@
+# Desktop installers for Windows, macOS and Linux, attached to the GitHub
+# Release for the tag. Kept separate from release.yml (registry publish) so a
+# desktop failure never blocks the package release and the strings that
+# cli/tests/test_release_pipeline_config.py locks stay untouched.
+#
+# Unsigned first release: no certificates are read here. Signing is wired
+# later purely through secrets (CSC_LINK / CSC_KEY_PASSWORD for Windows,
+# APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID + a Developer ID
+# cert for macOS) plus flipping the mac flags in desktop/electron-builder.yml.
+#
+# Flow: prepare drafts the GitHub Release from the annotated tag's message
+# (first line = title, rest = notes) -> each matrix leg builds the client +
+# sidecar with the repo toolchain, checks the synced version against the tag,
+# stages the app-root with the pinned runtimes for its target, runs the
+# invariant test and lets electron-builder upload into that one draft -> the
+# finalize job publishes the draft once every leg is green.
+
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload to a draft GitHub Release (otherwise artifacts only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+      # Drafted once, here, so the three legs upload into one release:
+      # electron-builder finds an existing draft by tag and only adds assets,
+      # whereas three legs racing to create it is how duplicate drafts
+      # happen, and a draft electron-builder creates carries no notes. The
+      # notes are the annotated tag's message, the text `git tag -a`
+      # recorded; a lightweight tag falls back to GitHub's generated notes.
+      # Skipped on manual dispatch (no tag): electron-builder drafts as before.
+      - name: Draft the release from the tag message
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $TAG already exists; keeping it"
+            exit 0
+          fi
+          if [ "$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.type)" = tag ]; then
+            sha=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+            gh api "repos/$REPO/git/tags/$sha" --jq .message > tag-message.txt
+            title=$(head -n 1 tag-message.txt)
+            tail -n +2 tag-message.txt | sed '1{/^$/d;}' > notes.md
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "$title" --notes-file notes.md
+          else
+            echo "$TAG is a lightweight tag; drafting with generated notes"
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag --title "OpenCompany $TAG" --generate-notes
+          fi
+
+  build:
+    name: ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            targets: win-x64
+            builder_args: --win --x64
+          - name: macOS arm64 + x64
+            os: macos-14
+            targets: mac-arm64,mac-x64
+            builder_args: --mac --arm64 --x64
+          - name: Linux x64
+            os: ubuntu-22.04
+            targets: linux-x64
+            builder_args: --linux --x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build client and JS executor sidecar
+        # Targeted builds only: `bun run build` would also uv-sync a server
+        # venv and download the Temporal binary, neither of which ships.
+        run: |
+          bun run --filter react-flow-client build
+          bun run --filter opencompany-nodejs-executor build
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Restore runtime downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: desktop/vendor
+          key: desktop-runtimes-${{ runner.os }}-${{ hashFiles('desktop/runtimes.json') }}
+
+      - name: Sync version
+        working-directory: desktop
+        run: bun run sync-version
+
+      # electron-builder uploads into the draft for `v<desktop version>`. A
+      # release commit that forgot to bump the root package.json would ship
+      # installers and an updater feed under the previous version and open a
+      # second draft for that tag; fail here instead.
+      - name: Version must match the tag
+        if: github.event_name == 'push'
+        working-directory: desktop
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(bun -e "console.log(require('./package.json').version)")
+          if [ "v$version" != "$TAG" ]; then
+            echo "desktop/package.json is $version but the tag is $TAG: the release commit must run 'company version sync $TAG'" >&2
+            exit 1
+          fi
+
+      - name: Stage bundle, render icon
+        working-directory: desktop
+        run: |
+          bun run stage -- --target ${{ matrix.targets }}
+          bun run gen-icons
+
+      - name: Typecheck and unit tests
+        working-directory: desktop
+        run: |
+          bun run typecheck
+          bun run test
+
+      - name: Staged-tree invariants
+        working-directory: desktop
+        run: bun run test:invariants
+
+      - name: Build installers
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned: never let electron-builder go looking for a cert.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          PUBLISH: ${{ (github.event_name == 'push' || inputs.publish) && 'always' || 'never' }}
+        run: bun run dist -- ${{ matrix.builder_args }} --publish $PUBLISH
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ matrix.targets }}
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.yml
+            desktop/release/*.blockmap
+          if-no-files-found: error
+
+  finalize:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Undraft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false

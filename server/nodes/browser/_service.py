@@ -11,7 +11,7 @@ agent-browser is a OpenCompany-managed local install (see
 ``nodes/browser/_install.py``) — same pattern as Claude Code's
 project-local CLI. The binary lives at
 ``<package_dir("browser")>/npm/node_modules/.bin/agent-browser[.cmd]``
-and is installed via ``npm install agent-browser --prefix <...>`` on
+and is installed via ``bun add agent-browser`` into the shared packages tree on
 first use. No dependency on the workspace ``package.json`` /
 ``node_modules`` / bun lockfile.
 
@@ -381,7 +381,7 @@ class BrowserService:
 
             return line
         finally:
-            # npx -> node -> agent-browser daemon -> Chromium. Killing only
+            # bun shim -> bun -> agent-browser daemon -> Chromium. Killing only
             # proc.pid leaves the daemon orphaned. psutil.children(recursive=True)
             # walks the tree natively on every platform.
             try:
@@ -438,8 +438,14 @@ async def shutdown_browser_service() -> None:
 
     Called during FastAPI lifespan shutdown. This is the daemon's intended
     cleanup API -- it stops the background process and releases file locks.
+
+    Reads the module singleton directly instead of ``get_browser_service()``:
+    that accessor lazily *installs* agent-browser (``bun add`` over the
+    network) on first call, and a process that never used the browser has
+    no daemon to close. Running the installer at teardown blocked the event
+    loop for as long as npm took and wedged every graceful shutdown.
     """
-    svc = get_browser_service()
+    svc = _instance
     if not svc:
         return
     try:

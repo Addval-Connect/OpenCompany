@@ -1,10 +1,12 @@
-"""aws-cli adapter -- placeholder (the AWS Terraform module is a follow-on).
+"""aws-cli adapter -- still a placeholder.
 
-Implements the ``ProviderCli`` shape so the resolver/wiring is uniform, but
-aborts with a clear message until the ``cli/terraform/aws/`` module lands. The
-real adapter will mirror gcp.py: ``aws sts get-caller-identity`` for auth, the
-default credential chain for Terraform, region from ``aws configure get region``
-/ ``$AWS_REGION``, and a security-group + EC2 instance module.
+The ``cli/terraform/aws/`` module has landed (validated t3.micro setup), but
+this adapter has not been wired to it yet. It implements the ``ProviderCli``
+shape so the resolver/wiring is uniform, and aborts with a clear message
+(exit 1) when selected. The real adapter will mirror gcp.py: ``aws sts
+get-caller-identity`` for auth, the default credential chain for Terraform,
+region from ``aws configure get region`` / ``$AWS_REGION``, and the existing
+security-group + EC2 instance module.
 """
 
 from __future__ import annotations

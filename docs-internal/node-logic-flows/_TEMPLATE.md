@@ -15,7 +15,7 @@ this file must still describe what the code does end-to-end.
 | Field | Value |
 |------|-------|
 | **Category** | <group, e.g. search / ai / android / google> |
-| **Backend handler** | [`server/services/handlers/<file>.py::<handler_fn>`](../../../server/services/handlers/<file>.py) |
+| **Backend handler** | [`server/nodes/<group>/<node>/__init__.py`](../../../server/nodes/<group>/<node>/__init__.py) - `<NodeClass>`; dispatched via `BaseNode.execute()` + the `@Operation("<op>")` method |
 | **Tests** | [`server/tests/nodes/test_<category>.py`](../../../server/tests/nodes/test_<category>.py) |
 | **Skill (if any)** | [`server/skills/<folder>/<skill>/SKILL.md`](../../../server/skills/<folder>/<skill>/SKILL.md) |
 | **Dual-purpose tool** | yes / no - tool name `<tool_name>` if yes |
@@ -85,7 +85,7 @@ flowchart TD
 ## External Dependencies
 
 - **Credentials**: <provider key looked up via `auth_service.get_api_key('<provider>')`>
-- **Services**: <e.g. WhatsApp RPC at `localhost:5683`, agent-browser CLI>
+- **Services**: <e.g. WhatsApp RPC at `localhost:${WHATSAPP_RPC_PORT}`, agent-browser CLI>
 - **Python packages**: <e.g. `httpx`, `xdk`, `apify-client`>
 - **Environment variables**: <if any>
 

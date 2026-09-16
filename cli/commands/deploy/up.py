@@ -4,7 +4,7 @@ Two stages:
   STAGE 1 (cloud CLI): the provider adapter verifies the CLI is installed +
     authenticated, resolves project/region/zone, ensures Terraform auth, and
     enables the required cloud APIs.
-  STAGE 2 (Terraform): generate secrets + owner creds -> (local source) npm
+  STAGE 2 (Terraform): generate secrets + owner creds -> (local source) bun pm
     pack -> write tfvars -> ``terraform init`` + ``apply`` -> read outputs ->
     poll ``/health`` -> print URL + credentials.
 
@@ -30,19 +30,20 @@ from .providers import get_provider
 
 
 def _npm_pack(root: Path) -> str:
-    """Run ``npm pack`` in the repo root; return the abs path to the tarball."""
-    console.log("Packaging local build (npm pack)...")
-    out = capture(["npm", "pack"], cwd=root)
+    """Run ``bun pm pack`` in the repo root; return the abs path to the
+    tarball (the same npm-registry tarball shape ``bun add -g`` installs)."""
+    console.log("Packaging local build (bun pm pack)...")
+    out = capture(["bun", "pm", "pack", "--quiet"], cwd=root)
     if not out:
         error_block(
-            "`npm pack` produced no output.",
-            ["Ensure Node/npm are installed and you are in an OpenCompany checkout."],
+            "`bun pm pack` produced no output.",
+            ["Ensure bun is installed and you are in an OpenCompany checkout."],
         )
         raise typer.Exit(code=1)
     tarball = out.strip().splitlines()[-1].strip()
     path = (root / tarball).resolve()
     if not path.is_file():
-        error_block(f"npm pack reported {tarball!r} but it is not on disk.", [str(path)])
+        error_block(f"bun pm pack reported {tarball!r} but it is not on disk.", [str(path)])
         raise typer.Exit(code=1)
     return str(path)
 
@@ -153,7 +154,7 @@ def up_command(
     console.print()
 
     if url:
-        console.log("The VM is installing OpenCompany (Node + npm + build); this takes a few minutes.")
+        console.log("The VM is installing OpenCompany (bun + uv + Python venv); this takes a few minutes.")
         if _poll_health(url):
             console.print(f"  [bold green]Ready.[/] Open {url} and log in.")
         else:

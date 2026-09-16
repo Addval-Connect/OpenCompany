@@ -48,7 +48,7 @@ class _ConfiguredToolNode(ToolNode, abstract=True):
             "role": "tools",
         },
     )
-    ui_hints = {"isToolPanel": True}
+    ui_hints = {"hideRunButton": True}
     Params = _ConfiguredToolParams
     ToolInput = _ConfiguredToolParams
     Output = _ConfiguredToolOutput

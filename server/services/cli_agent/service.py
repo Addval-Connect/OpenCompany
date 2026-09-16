@@ -38,7 +38,7 @@ from services.cli_agent.context_bridge import (
     SpecializedAgentContextBridge,
     is_context,
 )
-from services.cli_agent.factory import create_cli_provider
+from services.cli_agent.factory import create_cli_provider, get_session_pool
 from services.cli_agent.mcp_server import (
     BatchContext,
     issue_token,
@@ -145,10 +145,9 @@ class AICliService:
         # ``Edit``, ``Glob``, ``Grep``, ``Write``, ``Bash``) can access
         # files produced by upstream nodes (``fileDownloader``,
         # ``documentParser``, ``code`` executors, etc.). Without this
-        # the workspace is invisible to claude: memory-bound runs spawn
-        # with ``cwd=repo_root`` and non-memory runs with
-        # ``cwd=worktree``, neither of which sees the workflow's
-        # workspace files.
+        # the workspace is invisible to claude: every session spawns in a
+        # git worktree under ``<workspace>/<node>/``, which does not see
+        # the workflow's workspace files.
         #
         # Mirrors the ai_agent pattern (``services/ai.py:1899`` —
         # ``config['workspace_dir'] = context.get('workspace_dir', '')``),
@@ -332,40 +331,80 @@ class AICliService:
                         except (KeyError, ValueError):
                             pass
 
-        # Pool branch: when memory is connected to a claude task, route
-        # through ``ClaudeSessionPool`` so successive turns reuse the
-        # warm PTY via ``/clear`` (saves ~1-2 s per turn). The
-        # ``claude_code_agent`` plugin already enforces ``len(tasks)==1``
-        # when memory is wired, so this branch is single-task. The pool
-        # owns the PTY lifetime; the bearer token stays embedded in the
-        # spawned claude's argv across batches (CLI handles its own MCP
-        # auth — we don't issue/unregister per turn).
-        use_pool = (
-            provider_name == "claude"
-            and len(task_list) == 1
-            and (bool(connected_memory) or context_bridge is not None)
+        # Pool branch: every claude task runs through ``ClaudeSessionPool``
+        # — a plain subprocess on stdio pipes speaking stream-json, the
+        # same invocation the Agent SDK uses. ``AICliSession`` (PTY +
+        # on-disk JSONL) never delivered the prompt on this provider and
+        # a PTY stdin makes the CLI reject stream-json input (GitHub
+        # issues #133 / #134), so it is no longer used for claude.
+        #
+        #   - Memory- or Context-bound: one warm session keyed by the
+        #     conversation, released after the turn so later turns reuse
+        #     it. The plugin enforces ``len(tasks)==1`` here. The pool
+        #     owns the bearer token across batches (see the ``finally``).
+        #   - Unbound: one ephemeral session per task keyed by task id,
+        #     terminated once the whole batch is done so the shared
+        #     token is unregistered exactly once (``unregister_batch``
+        #     is idempotent).
+        # A provider that registered a session pool from its plugin folder
+        # (``register_session_pool``) runs pooled; the service never names
+        # providers. Every pooled session runs in a git worktree under the
+        # workflow workspace, branched off ``resolved_repo_root`` — the same
+        # isolation the per-task ``AICliSession`` path uses — so the repo
+        # root itself is never the CLI's cwd. Bound sessions keep one
+        # stable worktree per agent node; ephemeral tasks get their own and
+        # drop it afterwards.
+        session_pool = get_session_pool(provider_name)
+        use_pool = session_pool is not None
+        bound_key = (
+            context_bridge.pool_key
+            if context_bridge is not None
+            else connected_memory["node_id"] if connected_memory else None
         )
+        from core.paths import safe_path_component
+        from services.cli_agent.worktree import add_worktree, remove_worktree
+
+        worktree_parent = Path(workspace_dir).resolve() / safe_path_component(node_id, "node")
+
+        async def run_pooled(task: BaseAICliTaskSpec, session_key: Any, worktree_name: str) -> SessionResult:
+            async with sem:
+                cwd = await add_worktree(
+                    resolved_repo_root,
+                    worktree_parent / f"wt_{worktree_name}",
+                    f"opencompany/{safe_path_component(node_id, 'node')}-{worktree_name}",
+                )
+                return await self._run_pooled_turn(
+                    task=task,
+                    session_key=session_key,
+                    cwd=cwd,
+                    workspace_dir=Path(workspace_dir).resolve(),
+                    defaults=defaults,
+                    mcp_port=port,
+                    mcp_bearer_token=token,
+                    connected_tools=connected_tools or [],
+                    connected_skill_names=list(connected_skill_names or []),
+                    workflow_id=workflow_id,
+                )
+
         results: List[SessionResult]
         try:
-            if use_pool:
-                results = [
-                    await self._run_pooled_turn(
-                        task=task_list[0],
-                        session_key=(
-                            context_bridge.pool_key
-                            if context_bridge is not None
-                            else connected_memory["node_id"]
-                        ),
-                        cwd=resolved_repo_root,
-                        workspace_dir=Path(workspace_dir).resolve(),
-                        defaults=defaults,
-                        mcp_port=port,
-                        mcp_bearer_token=token,
-                        connected_tools=connected_tools or [],
-                        connected_skill_names=list(connected_skill_names or []),
-                        workflow_id=workflow_id,
+            if use_pool and bound_key is not None:
+                results = [await run_pooled(task_list[0], bound_key, "session")]
+            elif use_pool:
+                run_tag = str(turn_execution_id)[:8]
+                ephemeral = [(f"{node_id}:{turn_execution_id}:{i}", f"{run_tag}_{i}") for i in range(len(task_list))]
+                try:
+                    results = await asyncio.gather(
+                        *(run_pooled(t, key, name) for t, (key, name) in zip(task_list, ephemeral)),
+                        return_exceptions=False,
                     )
-                ]
+                finally:
+                    for key, name in ephemeral:
+                        await session_pool.terminate(key)
+                        try:
+                            await remove_worktree(resolved_repo_root, worktree_parent / f"wt_{name}")
+                        except Exception as exc:
+                            logger.debug("[CC-Agent run_batch] worktree remove: %s", exc)
             else:
                 results = await asyncio.gather(
                     *(run_one(t) for t in task_list),
@@ -601,17 +640,15 @@ class AICliService:
         instead of importing directly so the framework stays free of
         any ``services → nodes`` layering violation.
         """
-        from services.cli_agent.factory import get_session_pool
-
         if not isinstance(task, ClaudeTaskSpec):
             raise TypeError("Pooled turns require ClaudeTaskSpec, got " f"{type(task).__name__}")
 
-        pool = get_session_pool("claude")
+        pool = get_session_pool(task.provider)
         if pool is None:
             raise RuntimeError(
-                "No session pool registered for 'claude'. The "
-                "claude_code_agent plugin's __init__.py should call "
-                "register_session_pool('claude', get_session_pool). "
+                f"No session pool registered for {task.provider!r}. The "
+                "provider's plugin __init__.py should call "
+                "register_session_pool(<provider>, get_session_pool). "
                 "Did its module fail to import?"
             )
         await pool.start_reaper()

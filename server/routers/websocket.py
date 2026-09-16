@@ -56,6 +56,27 @@ async def _safe_send(websocket: WebSocket, data: dict):
             logger.debug("[WebSocket] Send skipped (connection closed): %s", e)
 
 
+# How long a disconnecting socket waits for its in-flight handlers before
+# cancelling them. The connect-time init burst is a handful of short DB
+# reads; a client that reconnects ~100 ms later (React Strict Mode double
+# mount, a health probe) used to cancel those mid-statement, which
+# SQLAlchemy reported as "Exception during reset or similar" with a
+# traceback per handler. Long handlers (execute_node parked on an event
+# waiter) are still cancelled once the grace expires.
+_HANDLER_DRAIN_GRACE_SECONDS = 1.0
+
+
+async def _drain_handler_tasks(handler_tasks: Set[asyncio.Task], grace: float = _HANDLER_DRAIN_GRACE_SECONDS) -> None:
+    """Let in-flight handler tasks finish for ``grace`` seconds, then cancel the rest."""
+    tasks = [task for task in handler_tasks if not task.done()]
+    if not tasks:
+        return
+    _done, pending = await asyncio.wait(tasks, timeout=grace)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 # Type for message handlers
 MessageHandler = Callable[[Dict[str, Any], WebSocket], Awaitable[Dict[str, Any]]]
 
@@ -1708,14 +1729,9 @@ async def websocket_status_endpoint(websocket: WebSocket):
             if not isinstance(exc, (WebSocketDisconnect, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                 logger.error(f"[WebSocket] TaskGroup error: {exc}")
     finally:
-        # Cancel any running handler tasks on disconnect
-        for task in list(handler_tasks):
-            if not task.done():
-                task.cancel()
-
-        # Wait for tasks to finish cancellation
-        if handler_tasks:
-            await asyncio.gather(*handler_tasks, return_exceptions=True)
+        # Let short handlers finish, then cancel stragglers (see
+        # _drain_handler_tasks for why this is not an immediate cancel).
+        await _drain_handler_tasks(handler_tasks)
 
         # Cleanup
         _handler_tasks.pop(websocket, None)
@@ -1806,12 +1822,7 @@ async def websocket_internal_endpoint(websocket: WebSocket):
             if not isinstance(exc, (WebSocketDisconnect, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                 logger.error(f"[WebSocket Internal] TaskGroup error: {exc}")
     finally:
-        for task in list(handler_tasks):
-            if not task.done():
-                task.cancel()
-
-        if handler_tasks:
-            await asyncio.gather(*handler_tasks, return_exceptions=True)
+        await _drain_handler_tasks(handler_tasks)
 
 
 @router.get("/ws/info")

@@ -104,8 +104,8 @@ Sarvam runs reasoning **on by default** at `reasoning_effort: "medium"` and
 returns the trace in `message.reasoning_content`. Both halves are already
 handled generically:
 
-- `thinking_type: "effort"` → [`openai.py:99-100`](../server/services/llm/providers/openai.py) sets `params["reasoning_effort"]`
-- `reasoning_content` → [`openai.py:315-322`](../server/services/llm/providers/openai.py) lifts it into a `reasoning` `ContentBlock`, surfacing as `thinking`
+- `thinking_type: "effort"` → [`openai.py:101-104`](../server/services/llm/providers/openai.py) sets `params["reasoning_effort"]`
+- `reasoning_content` → [`openai.py:365-371`](../server/services/llm/providers/openai.py) lifts it into a `reasoning` `ContentBlock`, surfacing as `thinking`
 
 Two keys are **deliberately omitted** from the JSON block, and re-adding either
 is a bug:
@@ -128,7 +128,7 @@ This matters more than it sounds. `OpenAIProvider.fetch_models` calls
 `client.models.list()`; the resulting 404 arrives as an `openai.OpenAIError`,
 which `ChatUnifier.fetch_models` converts to `NodeUserError`, which
 `AIService.fetch_models` **re-raises before reaching its curated fallback**
-([`ai.py:1232`](../server/services/ai.py)). Unhandled, a perfectly valid Sarvam
+([`ai.py:696`](../server/services/ai.py)). Unhandled, a perfectly valid Sarvam
 key would fail validation in the Credentials modal *and* leave the model
 dropdown empty.
 
@@ -216,7 +216,7 @@ duration instead.
 
 ### The mark itself
 
-The three SVGs carry Sarvam's **official mandala mark**, taken verbatim from
+The two SVGs carry Sarvam's **official mandala mark**, taken verbatim from
 their published brand asset
 (`https://assets.sarvam.ai/assets/brand/logos/sarvam-logo-black.svg`) — the
 same geometry they ship as `sarvam.ai/favicon.svg`. Path data was extracted
@@ -289,7 +289,7 @@ Everything Sarvam touches, for reference when adding the next provider:
 
 ## Known limits
 
-- Speech-to-text: 30-second clips only (Batch API not wired); no diarization.
+- Speech-to-text: synchronous endpoint only (Batch API not wired); no timestamps, no diarization.
 - No streaming for chat, TTS or STT — the WebSocket/HTTP-stream surfaces are not wired.
 - Document digitization, pronunciation dictionaries and voice cloning are out of scope.
 - `wiki_grounding` (a Sarvam-specific chat param) is **not exposed**: an extra

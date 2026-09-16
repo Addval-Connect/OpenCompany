@@ -1,9 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Preinstall cleanup script for OpenCompany.
  *
- * Fixes npm ENOTEMPTY error by cleaning up leftover temp directories
- * that npm fails to remove during failed install/uninstall operations.
+ * Gates source checkouts to bun, and fixes npm's ENOTEMPTY error by
+ * cleaning up leftover temp directories that a legacy npm install failed
+ * to remove (a no-op when npm is not installed).
  *
  * @see https://github.com/anthropics/claude-code/issues/7373
  * @see https://bobbyhadz.com/blog/npm-err-code-enotempty
@@ -25,8 +26,9 @@ if (process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true') {
 }
 
 // Enforce bun for source checkouts (bunfig.toml is committed but excluded
-// from the npm tarball by the "files" allowlist, so end-user installs of the
-// published package never carry it and stay on npm).
+// from the published tarball by the "files" allowlist, so a global install
+// of the published package never carries it and this gate never fires
+// there; `bun add -g` runs no dependency lifecycle scripts anyway).
 try {
   statSync(resolve(__dirname, '..', 'bunfig.toml'));
   const agent = process.env.npm_config_user_agent || '';
@@ -38,7 +40,7 @@ try {
     process.exit(1);
   }
 } catch {
-  // No bunfig.toml = end-user tarball install; npm is allowed.
+  // No bunfig.toml = published tarball; nothing to gate.
 }
 
 function getGlobalNodeModules() {

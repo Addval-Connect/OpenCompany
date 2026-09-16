@@ -6,7 +6,7 @@
 | Date | 2026-05-07 |
 | Scope | `services/cli_agent` framework — Claude Code, Codex, Gemini-CLI agents spawned by OpenCompany |
 | Companion code | [`server/services/cli_agent/`](../server/services/cli_agent/), [`server/nodes/agent/claude_code_agent/`](../server/nodes/agent/claude_code_agent/) |
-| Companion docs | [cli_agent_framework.md](./cli_agent_framework.md), [claude_code_agent_architecture.md](./claude_code_agent_architecture.md) |
+| Companion docs | [cli_agent_framework.md](./cli_agent_framework.md), [claude_code_agent_architecture.md](./ARCHIVE/claude_code_agent_architecture.md) |
 
 ## Abstract
 
@@ -263,7 +263,7 @@ Across the official documentation:
 > stdin protocol.
 >
 > Fix is structural, not format-related: when memory is wired, spawn
-> under `cwd=repo_root` so `project_key` is stable across runs, and
+> in one stable per-node worktree so `project_key` is stable across runs, and
 > pass either `--resume <last_session_id>` (subsequent runs) or
 > `--session-id <UUID5(memory_node_id, simpleMemory.session_id)>`
 > (first run). On "No conversation found" error, auto-clear the stale
@@ -288,8 +288,9 @@ stream-json`, `--verbose`, `--ide`, `--model`, `--permission-mode`,
 `--allowedTools <csv>`.
 
 **Conditional:** `--mcp-config <json>` + `--strict-mcp-config` (when
-`mcp_endpoint_url` and `mcp_bearer_token` set), `--continue`/`--resume`
-(memory-bound runs, mutually exclusive), `--append-system-prompt`,
+`mcp_endpoint_url` and `mcp_bearer_token` set), `--resume` /
+`--session-id` (memory-bound runs / cold spawn, mutually exclusive with
+each other and with `--continue`), `--append-system-prompt`,
 `--effort`, `--add-dir`, `--disallowedTools`, `--agent`.
 
 **Never emitted** (`_provider.py:316-320`): `--max-turns`,
@@ -416,13 +417,15 @@ Either works.
 ### 4.8 Memory bridge — `simpleMemory` → `claude_code_agent` (DONE in `ecbe69b`)
 
 **Status:** native claude session continuity works end-to-end. The
-mechanism was later simplified from the UUID5 / `--session-id`
-round-trip described in this section to `--continue` (first cold spawn
-for a memory-wired run) + intra-process stream-json multi-turn against a
-warm subprocess + `--resume <UUID>` for crash recovery — all on a stable
-`cwd=repo_root`. The entry point is
+mechanism is a host-minted `--session-id <uuid4>` on the first cold
+spawn + intra-process stream-json multi-turn against a warm subprocess +
+`--resume <last_session_id>` on later cold spawns and crash recovery —
+all in a stable per-node worktree under the workspace. (An interim `--continue` variant was
+reverted: the CLI resolves `--continue` only against interactive
+sessions, so it never found the pool's non-interactive ones.) The entry
+point is
 [`claude_code_agent/__init__.py::execute_op`](../server/nodes/agent/claude_code_agent/__init__.py)
-(sets `continue_session = bool(memory_data)`) and the warm-subprocess
+(sets `resume_session_id` from `memory_data["last_session_id"]`) and the warm-subprocess
 pool at [`claude_code_agent/_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py).
 Current canonical description:
 [cli_agent_framework.md → Memory bridge](./cli_agent_framework.md#memory-bridge--simplememory--claude_code_agent).
@@ -444,7 +447,7 @@ sample names matched byte-for-byte:
 - `[CC-Agent stderr] No conversation found with session ID: cddd6def-...`
   every spawn → confirmed that ephemeral worktree paths were defeating
   `--resume`.
-- After switching to `cwd=repo_root`: same UUID continues across spawns,
+- After switching to a stable per-node worktree: same UUID continues across spawns,
   `r.session_id` matches `last_session_id` on subsequent runs.
 - `_persist_memory` broadcast addition fixed a UI-staleness issue where
   `memory_content` was correctly written to the DB but the simpleMemory
@@ -498,7 +501,7 @@ documented project-instruction surface.
 | **I-3** `list_changed` notification | **DONE (`b40011e`).** [`workflow_tools._schedule_list_changed_notify`](../server/services/cli_agent/workflow_tools.py) fires after each `add_tool` / `remove_tool` since FastMCP doesn't emit it automatically. | Optional: unit test asserting `session.send_tool_list_changed` is called. |
 | **I-4** Tool-search deferral | **DONE.** `"alwaysLoad": true` set on the `opencompany` server entry in [`claude_code_agent/_provider.py::interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py). | None. |
 | **I-5** Visible-tool filtering | **Gap.** All 7 built-in OpenCompany MCP tools (including `getCredential`, `broadcastLog`) are visible to the model. | Mark internal-only tools `_meta["anthropic/alwaysLoad"]: false` or filter via FastMCP middleware. **Defer** — not breaking today. |
-| **I-6** Native session continuity | **DONE.** [`session.py`](../server/services/cli_agent/session.py) keeps a stable cwd for memory-bound spawns; the warm-subprocess pool at [`claude_code_agent/_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py) preserves the session across turns. [`claude_code_agent/__init__.py`](../server/nodes/agent/claude_code_agent/__init__.py) sets `continue_session = bool(memory_data)` → argv emits `--continue` (first cold spawn) with `--resume <UUID>` reserved for crash recovery. [`service.py:_persist_memory`](../server/services/cli_agent/service.py) appends turns to `memory_content`, saves `last_session_id` (display-only), broadcasts `node_parameters_updated`, and auto-clears stale UUIDs via `_clear_stale_session_id`. See §4.8. | Markdown `memory_content` remains the UI mirror, not the resume channel. |
+| **I-6** Native session continuity | **DONE.** [`session.py`](../server/services/cli_agent/session.py) keeps a stable cwd for memory-bound spawns; the warm-subprocess pool at [`claude_code_agent/_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py) preserves the session across turns. [`claude_code_agent/__init__.py`](../server/nodes/agent/claude_code_agent/__init__.py) sets `resume_session_id = memory_data["last_session_id"]`; argv emits a host-minted `--session-id <uuid4>` on first cold spawn (`_pool.py`) and `--resume <UUID>` on later cold spawns and crash recovery. `--continue` is never emitted; the `continue_session` arm in `_provider.py` is unreachable from the plugin. [`service.py:_persist_memory`](../server/services/cli_agent/service.py) appends turns to `memory_content`, saves `last_session_id` (display-only), broadcasts `node_parameters_updated`, and auto-clears stale UUIDs via `_clear_stale_session_id`. See §4.8. | Markdown `memory_content` remains the UI mirror, not the resume channel. |
 | **System-prompt directive** (Cursor / `CLAUDE.md` pattern) | **DONE (`b40011e`).** Second `--append-system-prompt` listing connected `mcp__opencompany__*` tools. | None. |
 | `--allowedTools` strict MCP-only allowlist | **DONE (superseded R3).** Built-in escape hatches (`Read`/`Edit`/`Bash`/`Glob`/`Grep`/`Write`/`WebSearch`/`WebFetch`) are NOT in the default allowlist; `Skill` is added conditionally (only when a skill is wired). `default_allowed_tools: ""` in [`ai_cli_providers.json`](../server/config/ai_cli_providers.json); allowlist assembled in [`_provider.py::interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py). Gated by `--permission-mode dontAsk`. | None. |
 | Composio-style server-side credentials | **Aligned.** `getCredential` allowlist + `auth_service.get_api_key`. | None. |
@@ -549,20 +552,20 @@ runs (Closes I-6).** Three coupled mechanisms:
    skips `git worktree add`; `cleanup` skips `git worktree remove`.
    Confirms claude's `project_key` is constant across runs.
 
-2. **`--continue` first-run / warm-subprocess multi-turn / `--resume`
-   crash recovery.**
+2. **`--session-id` first-run / warm-subprocess multi-turn / `--resume`
+   later runs and crash recovery.**
    [`claude_code_agent/__init__.py`](../server/nodes/agent/claude_code_agent/__init__.py)
-   sets `continue_session = bool(memory_data)`; the argv-builder
+   sets `resume_session_id` from the memory node's persisted
+   `last_session_id`; the argv-builder
    [`_provider.py::interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py)
-   emits `--continue` on the first cold spawn for a memory-wired run
-   (claude auto-loads the most recent conversation under the stable
-   cwd's `project_key`). Subsequent turns are written as stream-json to
-   the same warm subprocess held by
+   emits `--resume <UUID>` when present, otherwise the pool mints a
+   `uuid4` and emits `--session-id <UUID>` on the cold spawn. Subsequent
+   turns are written as stream-json to the same warm subprocess held by
    [`_pool.py`](../server/nodes/agent/claude_code_agent/_pool.py), which
    preserves the session UUID in-process. If the subprocess dies between
    batches, the pool respawns with `--resume <current_session_uuid>`.
-   `--continue` and `--resume` are mutually exclusive in argv emission.
-   (This supersedes the earlier UUID5 / `--session-id` first-run dance.)
+   `--resume`, `--continue` and `--session-id` are mutually exclusive in
+   argv emission, in that precedence order.
 
 3. **Auto-clear stale `last_session_id`.**
    [`_persist_memory`](../server/services/cli_agent/service.py)
@@ -587,8 +590,8 @@ runs (Closes I-6).** Three coupled mechanisms:
    origin; locked by `tests/test_cloudevents_node_parameters.py`.
 
 5. **Parallel-batch guard.** `len(tasks) > 1` with memory wired raises
-   `NodeUserError` at handler entry — concurrent `--continue` spawns
-   against one project_key would race claude's session resolution.
+   `NodeUserError` at handler entry — concurrent `--resume` spawns
+   against one session would race claude's transcript writes.
 
 Markdown is the UI mirror. The `simpleMemory.memory_content` field
 keeps mirroring conversation turns via

@@ -87,7 +87,7 @@ There are **two distinct storage paths** inside `credentials.db`, and they are n
 
 For secrets the user enters manually in the Credentials modal (OpenAI API key, Anthropic key, Google client ID, Google client secret, Twitter client secret, Brave Search key, etc.).
 
-- Table: `EncryptedAPIKey`
+- Model / table: `EncryptedAPIKey` (`encrypted_api_keys`)
 - Access: `AuthService.store_api_key(provider, key, models=[...], session_id=..., model_params=...)` and `AuthService.get_api_key(provider)`
 - Cache: `AuthService._api_key_cache: Dict[str, ApiKeyCacheEntry]` keyed `{session}_{provider}` (see "Source of Truth" below)
 - **Per-model parameters** (Ollama / LM Studio): the `models` JSON column carries an optional `model_params` subkey alongside the model list — `{"models": [...], "model_params": {model_id: {context_length, vision, supports_tools, ...}}}`. Populated by [`nodes/model/_local_validator.py`](../server/nodes/model/_local_validator.py) from the official SDK probes (`ollama.AsyncClient.ps()` / `lmstudio.AsyncClient.llm.list_loaded()`) so the runtime knows the user's actual loaded n_ctx instead of guessing from `llm_defaults.json`. Read back via `AuthService.get_model_params(provider)` or `CredentialsDatabase.get_api_key_model_params(provider)`. Cloud providers leave this empty — their per-model params live in `model_registry.json` (refreshed from OpenRouter).
@@ -96,7 +96,7 @@ For secrets the user enters manually in the Credentials modal (OpenAI API key, A
 
 For tokens obtained via OAuth 2.0 flows (Google Workspace, Twitter/X, Claude.ai).
 
-- Table: `EncryptedOAuthToken`
+- Model / table: `EncryptedOAuthToken` (`oauth_tokens`)
 - Access: `AuthService.store_oauth_tokens(provider, access_token, refresh_token, ...)` and `AuthService.get_oauth_tokens(provider, customer_id="owner")`
 - Cache: `AuthService._oauth_cache: Dict[str, Dict[str, Any]]`
 
@@ -154,7 +154,7 @@ Dependencies (`server/pyproject.toml`) — the core `cryptography` package is al
 ```toml
 [project]
 dependencies = [
-    "cryptography>=44.0.0",  # Fernet encryption (always required)
+    "cryptography>=50.0.0",  # Fernet encryption (always required)
 ]
 
 [project.optional-dependencies]
@@ -232,5 +232,5 @@ All credential providers come from the backend `get_credential_catalogue` handle
 ## Related Docs
 
 - [DESIGN.md](DESIGN.md) - overall security posture
-- [new_service_integration.md](new_service_integration.md) - where to put credentials for new service integrations
+- [new_service_integration.md](ARCHIVE/new_service_integration.md) - where to put credentials for new service integrations
 - [status_broadcaster.md](status_broadcaster.md) - WebSocket handlers for credentials (get/save/delete)

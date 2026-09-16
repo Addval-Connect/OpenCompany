@@ -234,6 +234,20 @@ class WorkflowService:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Adapter for WorkflowExecutor to call NodeExecutor."""
+        # Conversation scope keys travel as extras so the Context descriptor
+        # builder sees ``generation`` on the in-process path as well.
+        extras = {
+            key: context[key]
+            for key in (
+                "generation",
+                "graphVersion",
+                "root_execution_id",
+                "context_execution_id",
+                "context_session_id",
+                "data_scope_id",
+            )
+            if key in context
+        }
         return await self.execute_node(
             node_id=node_id,
             node_type=node_type,
@@ -244,6 +258,7 @@ class WorkflowService:
             execution_id=context.get("execution_id"),
             workflow_id=context.get("workflow_id"),
             workflow_slug=context.get("workflow_slug"),
+            extras=extras or None,
             user_id=(
                 context.get("user_id")
                 or _parallel_user_id.get()
@@ -279,8 +294,8 @@ class WorkflowService:
             skip_clear_outputs: Skip clearing outputs (for deployment runs)
             workflow_id: Workflow ID for per-workflow status scoping (n8n pattern)
             use_temporal: Force Temporal execution (None = use settings default)
-            graph_version: Normalized graph version for Context V2 cutover
-            generation: Durable deployment generation for Context V2 cutover
+            graph_version: Normalized graph version for the Context topology
+            generation: Durable deployment generation for the Context store
             user_id: Authenticated server-owned user identity
         """
         start_time = time.time()

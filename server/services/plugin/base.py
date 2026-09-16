@@ -1052,6 +1052,16 @@ class BaseNode:
                     # legacy handler so split-schema ToolInput validation
                     # applies on the Temporal path too.
                     "tool_args",
+                    # Conversation scope. MachinaWorkflow stamps these on a
+                    # deployed run; the Context descriptor builder returns
+                    # None without ``generation``, which silently drops the
+                    # ``input-context`` edge for every node that runs as a
+                    # per-type activity (claude_code_agent, rlm_agent).
+                    "generation",
+                    "graphVersion",
+                    "context_execution_id",
+                    "context_session_id",
+                    "data_scope_id",
                 ):
                     if key in context:
                         extras[key] = context[key]

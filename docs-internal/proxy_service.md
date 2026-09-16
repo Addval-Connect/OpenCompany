@@ -76,7 +76,7 @@ httpx.AsyncClient(proxy=proxy_url)
 ## Proxy Nodes (3)
 
 ### proxyRequest
-Direct proxy HTTP request with full controls. Parameters: method, url, headers, body, timeout, proxyProvider, proxyCountry, sessionType (rotating/sticky), stickyDuration, maxRetries, followRedirects. Includes retry/failover loop and result reporting to health scorer.
+Direct proxy HTTP request with full controls. Parameters: method, url, headers, body, timeout, proxy_provider, proxy_country, session_type (rotating/sticky), sticky_duration, max_retries, follow_redirects. Includes retry/failover loop and result reporting to health scorer.
 
 ### proxyConfig
 Dual-purpose node (workflow + AI tool). Operations:
@@ -84,7 +84,7 @@ Dual-purpose node (workflow + AI tool). Operations:
 | Operation | Required Params | Description |
 |-----------|----------------|-------------|
 | `list_providers` | none | List all configured providers |
-| `add_provider` | name, gateway_host, gateway_port, url_template | Add provider with JSON template |
+| `add_provider` | Required: name. Practically also: gateway_host, gateway_port, url_template. | Add provider with JSON template |
 | `update_provider` | name + fields | Update existing provider |
 | `remove_provider` | name | Delete provider |
 | `set_credentials` | name, username, password | Store proxy credentials via AuthService |
@@ -192,7 +192,7 @@ A provider is considered unhealthy when its success rate drops below 30%. The la
 
 ## Provider Selection Priority
 
-1. **Explicit**: `parameters.proxyProvider` specified by user/node
+1. **Explicit**: `parameters["proxy_provider"]` specified by user/node
 2. **Routing rule**: Domain matches a rule with `preferred_providers`
 3. **Best score**: Auto-select highest-scoring healthy provider
 
@@ -269,9 +269,9 @@ On startup, `ProxyService.startup()` loads providers from the DB and `_load_prov
 Environment variables in `server/.env`:
 
 ```bash
-PROXY_ENABLED=true              # Enable proxy service
+PROXY_ENABLED=true              # declared in core/config.py (default false) but NOT a gate; is_enabled() returns _initialized
 PROXY_DEFAULT_COUNTRY=          # Default country code (empty = no default)
-PROXY_BUDGET_DAILY_USD=         # Daily spend limit (empty = unlimited)
+PROXY_BUDGET_DAILY_USD=50            # Daily spend limit in USD (default 50.0; always enforced)
 ```
 
 ## Service Lifecycle

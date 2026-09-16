@@ -1,6 +1,7 @@
 {
   "claude": {
     "package_name": "@anthropic-ai/claude-code",
+    "package_version": "2.1.258",
     "binary_name": "claude",
     "login_argv": ["claude", "login"],
     "auth_status_argv": ["claude", "--print", "-p", "ok"],

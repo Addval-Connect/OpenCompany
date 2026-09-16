@@ -231,13 +231,15 @@ async def test_run_batch_emits_diagnostic_logs_when_workspace_not_git(monkeypatc
 
 @pytest.mark.asyncio
 async def test_run_batch_registers_mcp_batch_on_happy_path(monkeypatch):
-    """Happy path: real resolver, real `register_batch`, but
-    `AICliSession.start` is short-circuited so we don't spawn `claude`.
+    """Happy path: real resolver, real `register_batch`, but the claude
+    session pool is stubbed so we don't spawn `claude`. Every claude
+    task routes through ``ClaudeSessionPool``; an unbound run gets an
+    ephemeral session that is terminated once the batch settles.
     Asserts the `[CC-Agent MCP register_batch]` log fires with the
     expected tool list — proving the diagnostic chain is intact
     end-to-end and the spawned CLI WOULD see the MCP server registered
     for it."""
-    from services.cli_agent import session as session_mod
+    from services.cli_agent import factory as factory_mod
     from services.cli_agent import service as svc_mod
     from services.cli_agent import mcp_server as mcp_mod
     from services.cli_agent.protocol import SessionResult
@@ -251,26 +253,47 @@ async def test_run_batch_registers_mcp_batch_on_happy_path(monkeypatch):
     monkeypatch.setattr(mcp_mod, "logger", mcp_logger)
 
     started = {"count": 0}
+    terminated: list = []
 
-    async def _fake_start(self):  # noqa: ANN001
-        started["count"] += 1
-        self._completed = True
+    class _StubPool:
+        async def start_reaper(self):
+            pass
 
-    async def _fake_wait(self, timeout):  # noqa: ANN001, ARG002
-        return SessionResult(
-            task_id=self.task_id,
-            provider=self._provider.name,
-            prompt=getattr(self._task, "prompt", ""),
-            success=True,
-            response="stub",
-        )
+        async def acquire(self, session_key, **kwargs):  # noqa: ANN001
+            started["count"] += 1
+            return SimpleNamespace(memory_node_id=session_key)
 
-    async def _fake_cleanup(self):  # noqa: ANN001
-        pass
+        async def send_turn(self, session, prompt, **kwargs):  # noqa: ANN001
+            return SessionResult(
+                task_id="t_stub",
+                provider="claude",
+                prompt=prompt,
+                success=True,
+                response="stub",
+            )
 
-    monkeypatch.setattr(session_mod.AICliSession, "start", _fake_start)
-    monkeypatch.setattr(session_mod.AICliSession, "wait_for_completion", _fake_wait)
-    monkeypatch.setattr(session_mod.AICliSession, "cleanup", _fake_cleanup)
+        async def release(self, session):  # noqa: ANN001
+            pass
+
+        async def terminate(self, session_key):  # noqa: ANN001
+            terminated.append(session_key)
+
+    stub_pool = _StubPool()
+    monkeypatch.setattr(factory_mod, "get_session_pool", lambda name: stub_pool)
+    monkeypatch.setattr(svc_mod, "get_session_pool", lambda name: stub_pool)
+
+    # Pooled sessions run in a git worktree under the workspace; stub the
+    # git calls so the test never touches the real checkout.
+    from services.cli_agent import worktree as worktree_mod
+
+    added: list = []
+
+    async def fake_add(repo_root, worktree_dir, branch):  # noqa: ANN001
+        added.append(worktree_dir)
+        return worktree_dir
+
+    monkeypatch.setattr(worktree_mod, "add_worktree", fake_add)
+    monkeypatch.setattr(worktree_mod, "remove_worktree", AsyncMock())
 
     svc = get_ai_cli_service()
     workspace = Path(__file__).resolve().parents[3]  # the repo root (a git repo)
@@ -318,3 +341,11 @@ async def test_run_batch_registers_mcp_batch_on_happy_path(monkeypatch):
     # gather, not just the abort path):
     assert started["count"] == 1
     assert result.n_succeeded == 1
+    # Unbound run: the ephemeral pooled session is torn down after the batch.
+    assert len(terminated) == 1
+    assert terminated[0].startswith("ccode_test_happy:")
+    # It ran in its own worktree under the workspace, never in the repo root.
+    assert len(added) == 1
+    assert added[0].parent == workspace / "ccode_test_happy"
+    assert added[0].name.startswith("wt_")
+    assert worktree_mod.remove_worktree.await_count == 1

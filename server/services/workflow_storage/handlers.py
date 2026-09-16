@@ -42,7 +42,7 @@ async def _context_topology_errors(
     edges: list[Dict[str, Any]],
     parameters_by_id: Dict[str, Dict[str, Any]],
 ) -> list[Dict[str, Any]]:
-    """Run the shared validator and retain only Context V2 invariants."""
+    """Run the shared validator and retain only Context invariants."""
 
     from services.workflow_validator import validate_workflow
 

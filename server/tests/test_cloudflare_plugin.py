@@ -109,10 +109,12 @@ def test_npm_spec_is_pinned():
 
 async def test_ensure_cf_cli_installs_into_shared_tree(monkeypatch, tmp_path):
     """The system-global cf is never consulted — the binary comes from
-    the pinned npm install in the shared packages tree."""
+    the pinned ``bun add`` into the shared packages tree."""
+    from core import js_runtime
+
     bin_dir = tmp_path / "node_modules" / ".bin"
     bin_dir.mkdir(parents=True)
-    fake_bin = bin_dir / ("cf.cmd" if cf_install.sys.platform == "win32" else "cf")
+    fake_bin = bin_dir / js_runtime.bin_shim_name("cf")
 
     calls = {"installs": 0}
 
@@ -122,8 +124,8 @@ async def test_ensure_cf_cli_installs_into_shared_tree(monkeypatch, tmp_path):
         return fake_bin
 
     monkeypatch.setattr(cf_install, "_cached_path", None)
-    monkeypatch.setattr(cf_install, "packages_dir", lambda: tmp_path)
-    monkeypatch.setattr(cf_install, "_npm_install", fake_install)
+    monkeypatch.setattr(cf_install, "shared_tree_bin", lambda name: bin_dir / js_runtime.bin_shim_name(name))
+    monkeypatch.setattr(cf_install, "_install", fake_install)
 
     resolved = await cf_install.ensure_cf_cli()
     assert resolved == fake_bin
@@ -134,14 +136,14 @@ async def test_ensure_cf_cli_installs_into_shared_tree(monkeypatch, tmp_path):
 
 
 def test_cf_binary_never_resolved_from_system_path():
-    # Project-local contract: PATH lookup is allowed for npm itself,
-    # never for the cf binary.
+    # Project-local contract: PATH lookup is allowed for bun itself
+    # (inside core.js_runtime), never for the cf binary.
     src_install = inspect.getsource(cf_install)
     src_service = inspect.getsource(cf_service)
-    assert 'which("cf")' not in src_install
+    assert "which(" not in src_install
     assert "which(" not in src_service
     # resolution goes through the shared-tree shim only
-    assert "node_modules" in inspect.getsource(cf_install._shared_tree_bin)
+    assert 'shared_tree_bin("cf")' in inspect.getsource(cf_install._shared_tree_bin)
 
 
 # --- operations (no auth pre-flight — Stripe pattern) ---------------------------
@@ -576,9 +578,10 @@ def test_login_flow_short_circuits_when_already_logged_in():
 
 
 def test_completion_never_kills_the_login_process():
-    # The installed binary is an npm .cmd shim on Windows: killing it
-    # orphans the node child, which keeps holding callback port 8877
-    # and breaks every later login. cf enforces its own login timeout.
+    # The installed binary is a bun bin shim on Windows (a launcher .exe
+    # that runs the CLI in a child bun process): killing it orphans that
+    # child, which keeps holding callback port 8877 and breaks every
+    # later login. cf enforces its own login timeout.
     src = inspect.getsource(cf_handlers._complete_login)
     assert ".kill(" not in src
     assert ".terminate(" not in src

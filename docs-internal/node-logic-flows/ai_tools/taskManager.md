@@ -1,9 +1,82 @@
 # Task Manager (`taskManager`)
 
+| Field | Value |
+|------|-------|
+| **Category** | tool / ai |
+| **Backend handler** | [`server/nodes/tool/task_manager/__init__.py::TaskManagerNode.manage`](../../../server/nodes/tool/task_manager/__init__.py) |
+| **Tests** | [`server/tests/nodes/test_task_manager_delegation_bridge.py`](../../../server/tests/nodes/test_task_manager_delegation_bridge.py) |
+| **Skill (if any)** | [`server/skills/assistant/task-manager/SKILL.md`](../../../server/skills/assistant/task-manager/SKILL.md) |
+| **Dual-purpose tool** | ToolNode - tool name `task_manager` |
+
 Task Manager is the durable control plane intrinsically bound to
 `orchestrator_agent` and `ai_employee`. It is hidden from the palette and Agent
 Builder, so users cannot remove the lead's task capability. Historical explicit
 nodes remain readable and protected from deletion.
+
+## Inputs (handles)
+
+| Handle | Connection type | Required | Purpose |
+|--------|-----------------|----------|---------|
+| `input-main` | main | no | Declared (left, role `main`); the `manage` op reads scope from `ctx.raw`, not from upstream data |
+
+`output-tool` (top, role `tools`) is the only output handle; connect it to a
+team lead's `input-tools`. `ui_hints` = `isTaskManagerPanel`,
+`hideInputSection`, `hideOutputSection`, `hideRunButton` (all `True`);
+`needs_canvas = True`.
+
+## Parameters
+
+`TaskManagerParams` (`extra="allow"`, so `revision` survives as an alias for
+`expected_revision`). No field carries `displayOptions.show`; which fields
+matter is decided per `operation` inside `_execute_task_manager`.
+
+| Name | Type | Default | Required | displayOptions.show | Description |
+|------|------|---------|----------|---------------------|-------------|
+| `operation` | `assign_task` / `list_tasks` / `get_task` / `modify_task` / `cancel_task` / `retry_task` / `reassign_task` / `accept_task` / `finish_team` / `mark_done` / `inspect_task_trace` | `list_tasks` | no | - | Operation to run; `mark_done` is a deprecated alias for `accept_task` |
+| `task_id` | string | `None` | no | - | Target task. Required by `get_task`, `inspect_task_trace`, `modify_task`, `cancel_task`, `retry_task`, `reassign_task`; `accept_task` / `mark_done` may omit it when exactly one submitted task exists |
+| `title` | string (max 500) | `None` | no | - | Task title; required by `assign_task`, editable via `modify_task` |
+| `mission` | string (max 10000) | `None` | no | - | Task mission; required by `assign_task`, editable via `modify_task` |
+| `context` | object | `None` | no | - | Free-form context stored on the task and forwarded to the assignee |
+| `acceptance_criteria` | object | `None` | no | - | Acceptance criteria stored on the task |
+| `depends_on` | string[] | `None` | no | - | Task ids this task waits on (`assign_task`) |
+| `assignee_node_id` | string | `None` | no | - | Connected teammate node id (`assign_task` / `reassign_task`); with `delegate_name`, must resolve to exactly one connected teammate |
+| `delegate_name` | string | `None` | no | - | Teammate `delegate_tool_name`, alternative to `assignee_node_id` |
+| `expected_revision` | int (ge 0) | `None` | no | - | Optimistic-concurrency revision for mutations; read from the task when omitted |
+| `reason` | string (max 2000) | `None` | no | - | Cancellation reason (`cancel_task`) |
+| `status_filter` | string | `None` | no | - | `list_tasks` status filter |
+| `include_history` | boolean | `false` | no | - | `list_tasks`: include prior executions' durable history |
+| `attempt` | int (ge 0) | `None` | no | - | `inspect_task_trace`: attempt to inspect |
+| `cursor` | string | `None` | no | - | `inspect_task_trace`: opaque page cursor |
+| `limit` | int (ge 1, le 100) | `50` | no | - | `inspect_task_trace`: page size |
+| `detail` | `summary` / `failures` / `timeline` / `search` | `summary` | no | - | `inspect_task_trace` detail mode |
+| `query` | string (max 200) | `None` | no | - | `inspect_task_trace`: search text (required when `detail=search`) |
+| `search_mode` | `literal` / `all_terms` / `any_terms` | `literal` | no | - | `inspect_task_trace`: search matching |
+| `case_sensitive` | boolean | `false` | no | - | `inspect_task_trace`: case-sensitive search |
+| `context_lines` | int (ge 0, le 5) | `2` | no | - | `inspect_task_trace`: neighbouring events returned around each match |
+| `scan_limit` | int (ge 1, le 500) | `250` | no | - | `inspect_task_trace`: max events scanned per call |
+| `categories` | (`failure` / `activity` / `child` / `signal` / `timer` / `workflow`)[] | `None` | no | - | `inspect_task_trace`: event category filter |
+
+## Outputs (handles)
+
+| Handle | Shape | Description |
+|--------|-------|-------------|
+| `output-tool` | object | Tool result returned to the LLM (`TaskManagerOutput`, `extra="allow"`) |
+
+### Output payload
+
+```ts
+{
+  success: boolean;      // always true on the success path
+  operation?: string;    // echoed operation
+  task?: object;         // get_task, assign_task and every mutation
+  tasks?: object[];      // list_tasks
+  team?: object;         // finish_team
+}
+```
+
+`extra="allow"` lets per-operation extras through: `count` (`list_tasks`),
+`trace` (`inspect_task_trace`), `delegation` + `delegation_request`
+(`assign_task`), and `delegation_request` on `retry_task` / `reassign_task`.
 
 ## Scope and authorization
 

@@ -35,12 +35,13 @@ above (Wave 14):
 
   - ``<DATA_DIR>/claude/``           Claude Code auth state (CLAUDE_CONFIG_DIR)
   - ``<DATA_DIR>/packages/``         Single shared OpenCompany install
-    root. Holds one ``package.json`` + ``package-lock.json`` +
-    ``node_modules/`` covering every OpenCompany-managed npm package
-    (``@anthropic-ai/claude-code``, ``edgymeow``, ``agent-browser``).
-    Each plugin's ``_install.py`` runs
-    ``npm install <pkg> --prefix <packages_dir>`` to extend the tree
-    idempotently — npm itself manages the dep graph.
+    root. Holds one ``package.json`` + ``bun.lock`` + ``node_modules/``
+    covering every OpenCompany-managed npm-registry package
+    (``@anthropic-ai/claude-code``, ``edgymeow``, ``agent-browser``,
+    ``cf``, ``vercel``). Each plugin's ``_install.py`` calls
+    ``core.js_runtime.add_package`` (``bun add --cwd <packages_dir>``)
+    to extend the tree idempotently — bun manages the dep graph and
+    runs the bin shims on its own runtime; no Node or npm.
   - ``<DATA_DIR>/packages/stripe/``    Stripe CLI binary (non-npm)
   - ``<DATA_DIR>/packages/temporal/``  Temporal CLI binary (non-npm,
                                         pooch-managed)
@@ -61,8 +62,9 @@ under ``<DATA_DIR>/`` means a single ``mv ~/.opencompany /backup``
 carries the entire OpenCompany footprint.
 
 Out of scope: globally-installed binaries (Himalaya — system
-package manager) and npm `package.json` deps managed by bun (none
-remain after the WhatsApp migration).
+package manager) and the dev workspace's own `package.json` deps
+(none of the runtime packages remain there after the WhatsApp
+migration).
 
 Shipped example workflows live at ``<repo>/.opencompany/workflows/`` —
 git-tracked seed JSONs auto-imported on first launch by
@@ -99,6 +101,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from core.approot import app_root, example_workflows_root
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -120,8 +123,8 @@ def safe_path_component(value: str, fallback: str = "item") -> str:
     return cleaned if cleaned.strip(".") else fallback
 
 
-# Repo root: server/core/paths.py -> parents[2] is the project root.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# The app tree root is resolved by ``core.approot`` (``OPENCOMPANY_APP_ROOT``
+# override for relocated bundles) — never climbed from ``__file__`` here.
 _CANONICAL_STATE_DIR = ".opencompany"
 _LEGACY_STATE_DIR = ".machina"
 
@@ -146,8 +149,13 @@ def _has_runtime_state(root: Path) -> bool:
 
 
 def project_root() -> Path:
-    """Absolute path of the OpenCompany git repo root."""
-    return _REPO_ROOT
+    """Absolute path of the OpenCompany application tree root.
+
+    The git checkout root in development, the npm package root for a
+    global install, or the bundle's ``app-root/`` for the desktop app
+    (``OPENCOMPANY_APP_ROOT``). See :mod:`core.approot`.
+    """
+    return app_root()
 
 
 def _resolve_data_path(base: str, subpath: str = "") -> Path:
@@ -308,7 +316,7 @@ def example_workflows_dir() -> Path:
     directory has not been created yet. Neither path is under
     :func:`opencompany_root`.
     """
-    canonical = project_root() / _CANONICAL_STATE_DIR / "workflows"
+    canonical = example_workflows_root() / "workflows"
     legacy = project_root() / _LEGACY_STATE_DIR / "workflows"
     return canonical if canonical.exists() or not legacy.exists() else legacy
 

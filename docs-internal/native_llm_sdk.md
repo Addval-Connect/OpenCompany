@@ -97,7 +97,7 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 
 | Provider | Key Models | Context | Max Output | Thinking | Temp Range |
 |----------|-----------|---------|-----------|----------|------------|
-| **OpenAI** | GPT-5.6 Sol/Terra/Luna (+ `-pro`; default `gpt-5.6-sol`), GPT-5.5/5.4 | 1.05M | 128K | effort | omitted for reasoning models |
+| **OpenAI** | GPT-6 Astra (+ `-pro`), GPT-5.6 Sol/Terra/Luna (+ `-pro`; default `gpt-5.6-sol`), GPT-5.5/5.4 | 1.05M | 128K | effort | omitted for reasoning models |
 | **OpenAI** | GPT-4.1 | ~1.05M | 32K | none | 0-2 |
 | **Anthropic** | Claude Opus 5 (default `claude-opus-5`), Fable 5.1 / 5, Sonnet 5 | 1M | 128K | adaptive | omitted (`temperature` / `top_p` / `top_k` rejected — `sampling_params_removed`) |
 | **Anthropic** | Claude Opus 4.8/4.7 | 1M | 128K | adaptive | omitted (`sampling_params_removed`) |
@@ -106,7 +106,7 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 | **AWS Bedrock** | The same Claude generations, as inference profiles (`us.anthropic.claude-opus-5`, `global.anthropic.claude-sonnet-5`, `us.anthropic.claude-haiku-4-5-*`) | 1M (Opus/Sonnet 5); 200K (Haiku 4.5) | 128K; 64K (Haiku) | budget | 0-1 |
 | **Google** | Gemini 3.8-flash (default), 3.7/3.6/3.5-flash, 3.5-flash-lite, 3.1-pro-preview/flash-lite, 3-flash-preview, 2.5-pro/flash/flash-lite | 1M | 64K | budget (`thinking_level` on 3.x when set explicitly) | 0-2 |
 | **xAI** | Grok 4.20/4.20-multi-agent, 4.5, 4.3, 3 | 131K-2M | 131K | model/provider dependent | 0-2 |
-| **DeepSeek** | deepseek-v4-flash, deepseek-v4-pro (deepseek-chat/reasoner legacy) | 1M | 64K | thinking modes | 0-2 |
+| **DeepSeek** | deepseek-v4-flash (default), deepseek-v4.1-flash, deepseek-v4-pro (deepseek-chat/reasoner legacy) | 1M | 64K | thinking modes | 0-2 |
 | **Kimi** | kimi-k3 (default), kimi-k2.6, kimi-k2.5, kimi-k2.7-code | 1M (K3); 256K (K2) | 131K (K3); 32K/96K (K2) | K2 provider default explicitly disabled unless requested | K2 fixed 0.6; K3 0-1 |
 | **Mistral** | mistral-large/medium/small-latest, codestral-latest | 256K | 131K | none | 0-1.5 |
 | **Groq** | GPT-OSS-120b/20b, Qwen3-32b, legacy Llama 3.x tiers | 131K | 32K-131K | effort (GPT-OSS), format (Qwen3) | 0-2 |
@@ -314,7 +314,7 @@ Adding a new OpenAI-compatible provider requires a config entry:
   "models_endpoint": "https://api.deepseek.com/models",
   "base_url": "https://api.deepseek.com",
   "max_output_tokens": { "_default": 8192 },
-  "context_length": { "_default": 128000 },
+  "context_length": { "_default": 131072 },
   "temperature_range": [0.0, 2.0]
 }
 ```
@@ -349,15 +349,15 @@ ChatUnifier.chat(provider=..., Message[], ToolDef[])
         |
         +--> registry.get_provider(name)
         +--> official SDK or OpenAI-compatible base URL
-        +--> LLMResponse(assistant_message=lossless MessageWireV2)
+        +--> LLMResponse(assistant_message=lossless MessageWire)
 ```
 
 `run_native_agent_loop` appends the provider's exact assistant envelope before
 executing tools. This preserves Gemini thought signatures, Anthropic signed and
 redacted thinking blocks, and OpenAI reasoning continuation state across
-in-process and Temporal turns. Executions record `llm_engine=native` and wire
-version 2. A markerless prepare result identifies a pre-cutover history, which
-is refused rather than executed (see the end of this document).
+in-process and Temporal turns. There is one wire standard (`MessageWire`) and
+no engine or wire-version discriminator is recorded (see the end of this
+document).
 
 ## Thinking and Reasoning
 
@@ -572,15 +572,12 @@ the plugin folder or add a `visuals.json` entry (`"openrouterChatModel":
 
 ## Temporal migration and dependency lifecycle
 
-`agent.prepare_payload` records `llm_engine` and `message_wire_version`.
-The marker is a discriminator, not a switch: there is one engine.
-
-A history recorded before the native cutover carries neither field, and its
-messages are in a retired wire format the native `messages_from_wire` reader
-cannot interpret. `execute_llm_step` refuses such a payload with a
-non-retryable `ApplicationError(type="InvalidAgentLLMEngine")` rather than
-reinterpreting the messages and corrupting the conversation. The operator fix
-is to Reset the deployment, which starts a fresh generation.
+`agent.prepare_payload` builds the payload; there is one engine and one wire
+standard. The `llm_engine` / `message_wire_version` discriminators and the
+`InvalidAgentLLMEngine` refusal path from the cutover period were purged, and
+`tests/llm/test_single_wire_standard.py` fails the build if any of those
+identifiers reappear in production source. Pre-cutover deployments are handled
+by Reset, which starts a fresh generation.
 
 `tests/llm/test_langchain_removed.py` enforces the dependency end state via an
 AST walk over production sources, the `pyproject.toml` declarations, runtime

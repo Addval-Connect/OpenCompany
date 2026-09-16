@@ -230,7 +230,7 @@ Send email via SMTP. Group: `['email', 'tool']`. Two outputs (`main`, `tool`).
 | `provider` | options | yes | `gmail`, `outlook`, `yahoo`, `icloud`, `protonmail`, `fastmail`, `custom` |
 | `to` | string | yes | Recipient(s), comma-separated |
 | `subject` | string | yes | |
-| `body` | string | yes | Plain text or HTML (per `body_type`) |
+| `body` | string | no | Plain text or HTML (per `body_type`) |
 | `cc` | string | no | |
 | `bcc` | string | no | |
 | `body_type` | options | no | `text` (default) or `html` |
@@ -355,6 +355,12 @@ Status is shown via `getSpecialStatus(item)` returning `{ connected: !!emailStor
 
 ```json
 {
+  "cli": {
+    "binary": "himalaya",
+    "homepage": "https://github.com/pimalaya/himalaya",
+    "install_url": "https://github.com/pimalaya/himalaya/releases",
+    "timeout_seconds": 60
+  },
   "defaults": {
     "provider": "gmail",
     "folder": "INBOX",
@@ -390,8 +396,8 @@ Status is shown via `getSpecialStatus(item)` returning `{ connected: !!emailStor
     },
     "fastmail": { "...": "..." },
     "custom": {
-      "imap_host": "", "imap_port": 993, "imap_encryption": "tls",
-      "smtp_host": "", "smtp_port": 465, "smtp_encryption": "tls",
+      "imap_host": "", "imap_port": "", "imap_encryption": "",
+      "smtp_host": "", "smtp_port": "", "smtp_encryption": "",
       "auth_note": "Enter your mail server details"
     }
   }

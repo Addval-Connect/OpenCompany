@@ -14,12 +14,12 @@ warm OS file cache, with bytecode pre-compile applied:
 | Metric | Value | Source |
 |---|---|---|
 | Application startup complete | **2.90 s** | `start.log` 14:38 (post-`e77215c`, May 6 2026) |
-| HTTP `ready on port 5678` | **3.17 s** | same |
+| HTTP `ready on port $PYTHON_BACKEND_PORT` | **3.17 s** | same |
 | First WebSocket client connected | **8.29 s** | same |
 | Status broadcasters fully settled | **12.27 s** | same |
 | AIService import (warm) | **703 ms** | same — was ~31 s on v0.0.75 |
 | Application startup complete (cold, post-`company clean` first launch) | **21.5 s** | `cold.txt` 18:44 (2026-07-14, post boot-delay fixes; was **71 s** the same day pre-fix) |
-| LLM provider registration (all 12, cold) | **17 ms** | same — was 44.6 s pre-fix (eager SDK imports) |
+| LLM provider registration (all 13, cold) | **17 ms** | same — was 44.6 s pre-fix (eager SDK imports) |
 | Vite production build | **~16 s** | last `vite build` run |
 | Vite main bundle | **234 KB gz** | `client/dist/assets/index-*.js` |
 
@@ -42,7 +42,7 @@ timestamped console output right after the switch to bun@1.4.0:
 | Metric | Pre-bun (table above) | Post-bun |
 |---|---|---|
 | `company start` — Application startup complete | 2.90 s | ~3.6 s |
-| `company start` — `ready on port 5678` | 3.17 s | 4.56 s |
+| `company start` — `ready on port $PYTHON_BACKEND_PORT` | 3.17 s | 4.56 s |
 | `company dev` — Vite `ready in` | — | 8.4 s |
 | `company dev` — backend Application startup complete | — | 12.4 s |
 
@@ -51,16 +51,17 @@ workspace and launches the `company` CLI; everything after spawn
 (uvicorn imports, lifespan, Vite on Node 22) is byte-identical. The
 extra ~0.7 s sits entirely in the import phase — "all imports complete"
 at 3.29 s vs 1.98 s in the May timeline, and the routers + plugin-walker
-segment at 1.83 s vs 0.84 s — because the walker now loads **184**
+segment at 1.83 s vs 0.84 s — because the walker now loads **185**
 plugin modules against the **137** it walked in May. Lifespan cost is
 unchanged.
 
 **Counting rule for every plugin figure in this document.** The numbers
-(137 in May, 152 in July, 184 in September 2026) are the walker's
+(137 in May, 152 in July, 185 in September 2026) are the walker's
 *module* count — the `node plugins loaded: N modules` log line from
 `server/nodes/__init__.py`, i.e. `len(nodes._DISCOVERED)`, which
-includes `_*.py` helpers and per-folder submodules. They are **not**
-node-type counts: `len(services.node_registry.NODE_METADATA)` is 147
+counts every non-private module and subpackage (`_*.py` helpers and
+`_*/` subpackages are skipped by `_discover()`). They are **not**
+node-type counts: `len(services.node_registry.NODE_METADATA)` is 148
 today, spread across 37 group folders under `server/nodes/`. Both are
 computed from the tree; neither is hand-maintained here. The dev-mode rows were never benchmarked before (Vite and
 uvicorn compete for I/O during a dev boot, so they are not comparable
@@ -92,7 +93,7 @@ corresponding `start.log` measurement.
 | 2026-05-04 | Lazy LangChain imports in `services/ai.py` (BaseMessage stays eager; everything else moves into local imports) | **~30 s** AIService cold import | `74b75b6` | inline plan |
 | 2026-05-05 | `tsgo` for client `--noEmit` typecheck | ~6 s in CI gate | `0b45fb1` | [release_build_pipeline.md](release_build_pipeline.md) |
 | 2026-05-05 | Vite `manualChunks` (split reactflow / radix / lobehub-icons / TanStack Query / markdown stack) + `target: 'es2022'` | main bundle 232 KB gz, 7 vendor chunks separately cached | `0b45fb1` | same |
-| 2026-05-05 | Pre-bundle Node.js sidecar with esbuild (`tsx src/index.ts` → `node dist/index.js`) | ~500 ms-1 s of tsx startup per server boot | `0b45fb1` | same |
+| 2026-05-05 | Pre-bundle the JS executor sidecar with esbuild (`tsx src/index.ts` → `node dist/index.js`); since superseded by `bun build --target=bun` → `bun dist/index.js` when bun became the only shipped JS runtime | ~500 ms-1 s of tsx startup per server boot | `0b45fb1` | same |
 | 2026-05-05 | Scoped `python -O -m compileall` over project source dirs (excludes `.venv/`, `tests/`) | 3-5 s on warm-disk imports | `0b45fb1` | same |
 | 2026-05-05 | Test coverage: 12 build-orchestrator + 32 config-contract tests under `cli/tests/` | n/a (regression guard) | `0f1e55e` | same |
 | 2026-05-06 | Frontend WS reconnect → PartySocket; auth bootstrap → TanStack Query; CloudEvents envelope typed | **~20 s** (eliminates +12 s WS drop + +7 s reconnect cycle on cold start) | `e77215c` | inline plan |
@@ -129,7 +130,7 @@ T+2.25 — Lifespan startup
        ├── Compaction service (0.12 s)
        └── All services initialized (2.63 s)
 T+2.90 — Application startup complete ◀ HTTP-ready point
-T+3.17 — `ready on port 5678` (uvicorn accepting)
+T+3.17 — `ready on port $PYTHON_BACKEND_PORT` (uvicorn accepting)
 T+3.85 — Temporal worker started (background)
         ├── ... (auth state propagates to FE; React mounts; queries fire)
 T+8.29 — First WebSocket client connected ◀ UI-interactive point
@@ -148,12 +149,12 @@ same-day pre-fix cold boot in parentheses:
 ```
 T+0.00 — port-free begin
 T+2.6  — container: core imports done          (was 10.2 s → 1.2 s segment)
-T+3.2  — AIService imported, 12 providers in 17 ms  (was 44.6 s segment)
+T+3.2  — AIService imported, 13 providers in 17 ms  (was 44.6 s segment)
 T+8.7  — 152 node plugins loaded               (was 10.8 s → 4.7 s segment)
 T+11.9 — Lifespan startup begin                (3.2 s gap: CLI-agent MCP mount)
 T+21.5 — Application startup complete          (lifespan 9.6 s: fresh-DB init 4.4 s,
                                                 salt/PBKDF2 + encryption ~3 s — see follow-ups)
-T+22.2 — ready on port 5678                    (pre-fix: probe timed out at 30 s,
+T+22.2 — ready on port $PYTHON_BACKEND_PORT    (pre-fix: probe timed out at 30 s,
                                                 line never printed)
 T+27    — Temporal worker registered; worker_start span 7.6 s wall but OFF-LOOP:
           broadcaster refreshes + WhatsApp RPC handshake interleave mid-hash
@@ -166,7 +167,7 @@ T+51    — example workflows imported (still inline — see follow-ups)
 
 ## The remaining +5 s gap (HTTP-ready → first WS connect)
 
-`ready on port 5678` at +3.17 s, first WS connect at +8.29 s. Backend
+`ready on port $PYTHON_BACKEND_PORT` at +3.17 s, first WS connect at +8.29 s. Backend
 is idle in this window; the cost lives on the frontend. Likely
 contributors:
 
@@ -204,7 +205,7 @@ optimisations above; sum is what hurts.
 
 | # | Bottleneck | Cost | Class | Notes |
 |---|---|---|---|---|
-| 1 | Plugin walker at import time (152 modules under `server/nodes/` at the July measurement, 184 today — see the counting rule above; ~2 s warm / ~4.7 s cold, dominated by `nodes/google`'s eager `googleapiclient` import) | ~2 s | Backend | `_HANDLER_REGISTRY` populates via `BaseNode.__init_subclass__` at import. Lazy `googleapiclient` is the cheap win (see follow-ups); full lazy-loading of the walker is the big-blast-radius option. |
+| 1 | Plugin walker at import time (152 modules under `server/nodes/` at the July measurement, 185 today — see the counting rule above; ~2 s warm / ~4.7 s cold, dominated by `nodes/google`'s eager `googleapiclient` import) | ~2 s | Backend | `_HANDLER_REGISTRY` populates via `BaseNode.__init_subclass__` at import. Lazy `googleapiclient` is the cheap win (see follow-ups); full lazy-loading of the walker is the big-blast-radius option. |
 | 2 | TanStack Query auth bootstrap retry window | ~3-5 s | Frontend | See "remaining +5 s gap" above. |
 | 3 | AIService/native orchestration import graph | ~0.7 s | Backend | Historical May baseline; new agent execution uses native `Message` / `AgentToolSpec` values and provider registration remains lazy. Re-measure before attributing this cost further. |
 | 4 | Status-broadcaster refresh (`refresh_all_services`, 2.6 s) | ~2.6 s | Backend | Runs after `Application startup complete`, doesn't block server-ready. WhatsApp + Telegram are the long tails. |
@@ -258,7 +259,7 @@ company start > start.log 2>&1
 Then extract phase markers:
 
 ```bash
-grep -E "Freeing ports|Importing FastAPI|AIService imported|All imports complete|Lifespan startup begin|Application startup complete|ready on port 5678|StatusBroadcaster\] Client connected|broadcaster.refresh_all_services" start.log
+grep -E "Freeing ports|Importing FastAPI|AIService imported|All imports complete|Lifespan startup begin|Application startup complete|ready on port ${PYTHON_BACKEND_PORT}|StatusBroadcaster\] Client connected|broadcaster.refresh_all_services" start.log
 ```
 
 ### Bundle size + chunk shape
@@ -297,6 +298,8 @@ These were observed and fixed; the lessons are durable.
 - **`if (event.code !== 1000)` magic numbers** scattered through the WS lifecycle. Replaced with `WS_CLOSE.NORMAL_CLOSURE` from [connectionConfig.ts](../client/src/lib/connectionConfig.ts) per RFC 6455 §7.4.1.
 - **Inline `chunkSizeWarningLimit: 1500`** silently masking bundle bloat. Lowered to 850 KB so future regressions surface at `vite build` time.
 
+- **Setting `PYTHONPYCACHEPREFIX` without pre-warming it.** With a prefix set, CPython ignores every in-tree `__pycache__` — site-packages included — so the first boot recompiles ~20k files (measured 32 s vs 2.9 s warm). The desktop shell needs the prefix because its bundle is read-only, and pays the cost once during provisioning with `python -m compileall -q -j 0 <venv> <server>` under the same prefix (`desktop/src/main/provision.ts`). The CLI path does not set a prefix and keeps uv's `compile-bytecode = true` output in-tree.
+
 ## Open follow-ups
 
 Tracked but explicitly **not** in any active plan.
@@ -309,7 +312,7 @@ Tracked but explicitly **not** in any active plan.
 | Plugin walker lazy-loading | ~0.5-0.8 s on server-ready | Would need to defer registration until first NodeSpec request rather than at module-import time. Touches every `BaseNode` subclass — biggest blast radius of the candidates. |
 | Retire legacy Temporal history adapters after the rollback / retention window | negligible startup impact | New executions already use native messages and the compatibility imports are lazy. This is dependency and maintenance cleanup, not a measured cold-start win. |
 | `+5 s` HTTP-ready → first-WS-connect gap | up to 5 s | Diagnostics needed (see "remaining +5 s gap"). May reveal nothing actionable. |
-| Supervisor backend `ready_timeout` (default 30 s, shortest of the three services) | cosmetic | The probe is inert (one-shot, no restart/gating) but a >30 s boot prints an alarming "timed out waiting for port 5678" and skips the ready line. Post-fix boots fit the window; revisit only if cold boots regress past 30 s. |
+| Supervisor backend `ready_timeout` (default 30 s, shortest of the three services) | cosmetic | The probe is inert (one-shot, no restart/gating) but a >30 s boot prints an alarming "timed out waiting for port $PYTHON_BACKEND_PORT" and skips the ready line. Post-fix boots fit the window; revisit only if cold boots regress past 30 s. |
 | Standalone Nuitka / PyOxidizer release binary | full Python interpreter init (~0.4 s) + `.pyc` regeneration on cold disk | User explicitly declined when scoping the build pipeline; revisit if "ship a single binary" becomes a product requirement. |
 
 ## References

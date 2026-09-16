@@ -9,8 +9,9 @@ Two independent auth paths, either is sufficient:
   FIXED 86-scope set (only ``dns_analytics:read`` for analytics — no
   Web Analytics/RUM or zone-analytics scopes, and no way to request
   more).
-* **API token** — the optional ``cloudflare_api_token`` api-key row,
-  pasted in the credentials modal and injected as the
+* **API token** — the optional canonical ``apiKey`` field (stored under
+  the provider id ``cloudflare``; exposed to the node as
+  ``cloudflare_api_token``), pasted in the credentials modal and injected as the
   ``CLOUDFLARE_API_TOKEN`` env var on every CLI invocation (token takes
   precedence over CLI login, per cf's documented resolution order).
   This is the only path to endpoints outside the OAuth scope set

@@ -50,7 +50,7 @@ Reuses (do not duplicate):
 - `services/skill_loader.py` — `scan_skills` / `load_skill` consumed by MCP `listSkills` / `getSkill`
 - `services/auth.py` — `AuthService.get_api_key` consumed by MCP `getCredential`
 - `services/credential_registry.py` — deep-merge `extends` for `_cli_base` entry
-- `nodes/agent/claude_code_agent/_oauth.py` — Claude `auth login` / `auth status` / `auth logout` wrappers, npm install into the shared OpenCompany tree at `<DATA_DIR>/packages/` (binary resolves to `<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]`), `CLAUDE_CONFIG_DIR=<DATA_DIR>/claude/`. The `login` spawn passes `stdin=PIPE` (un-written) so the native CLI's stdin reader blocks instead of EOFing — keeps its localhost OAuth callback server alive until the browser flow completes
+- `nodes/agent/claude_code_agent/_oauth.py` — Claude `auth login` / `auth status` / `auth logout` wrappers, `bun add` (via `core/js_runtime.add_package`, `trust=True`) into the shared OpenCompany packages tree at `<DATA_DIR>/packages/` (binary resolves to `<DATA_DIR>/packages/node_modules/.bin/claude[.exe]` and runs on bun), `CLAUDE_CONFIG_DIR=<DATA_DIR>/claude/`. The `login` spawn passes `stdin=PIPE` (un-written) so the native CLI's stdin reader blocks instead of EOFing — keeps its localhost OAuth callback server alive until the browser flow completes
 - `nodes/stripe/_handlers.py` — pattern reference for marker-token + catalogue broadcast
 
 ## Provider abstraction (mirrors `services/llm/`)
@@ -99,7 +99,7 @@ the interactive billing bucket (entrypoint `claude-vscode`, NOT
 `sdk-cli`) since `-p` / `--print` is never emitted.
 
 ```
-~/.opencompany/packages/node_modules/.bin/claude[.cmd]
+~/.opencompany/packages/node_modules/.bin/claude[.exe]   # bun's bin shim; runs on bun
   --output-format stream-json     # events on stdout
   --input-format stream-json      # user turns to stdin as JSON
   --verbose                       # required with stream-json for full event detail
@@ -124,15 +124,23 @@ back-compat; they're silently dropped in `interactive_argv`.
 
 All flags documented at
 [code.claude.com/docs/en/cli-reference](https://code.claude.com/docs/en/cli-reference).
-Worktree, lockfile, and bearer-token MCP server are wired in
-`nodes/agent/claude_code_agent/_pool.py:_spawn` (pool path) and
-`services/cli_agent/session.py:_pre_spawn` (non-pool path); the `--ide`
-flag tells the CLI to discover that lockfile via `CLAUDE_IDE_LOCK`.
+Skill materialisation and the bearer-token MCP server are wired in
+`nodes/agent/claude_code_agent/_pool.py:_spawn`. **Every Claude run
+routes through the pool** (`AICliService.run_batch`): memory- or
+Context-bound runs get one warm session keyed by the conversation;
+unbound runs get one ephemeral session per task keyed by
+`<node_id>:<turn_execution_id>:<index>` and terminated once the batch
+settles. `AICliSession` (PTY + on-disk JSONL watcher) is no longer used
+for Claude — a PTY stdin makes the CLI reject stream-json input, and
+that path never wrote the prompt (GitHub issues #133 / #134).
 
-The non-pooled `AICliSession` path (one-shot prompt-in-argv runs that
-don't need session reuse) still uses PTY (`ptyprocess` POSIX /
-`pywinpty>=3.0.3` Windows) and remains out of scope for the
-subprocess+stream-json refactor.
+Session identity follows the CLI reference: a cold spawn mints
+`--session-id <uuid4>` so the UUID is known before the first event;
+memory-bound runs pass `--resume <last_session_id>` (persisted on the
+memory node by `_persist_memory`). `--continue` is not used because the
+CLI skips non-interactively created sessions when resolving it. A child
+that exits without a `result` event wakes `send_turn` on stdout EOF and
+reports the exit code instead of burning the turn timeout.
 
 Factory — a registry lookup, not a hardcoded branch per provider. Each plugin
 calls `register_provider(name, factory)` on import (claude from
@@ -228,13 +236,13 @@ Steps:
 
 1. Run `claude auth status`. If it exits 0, write the marker + broadcast and return immediately (idempotent re-click).
 2. Otherwise schedule `_finalize_claude_login()` (in `nodes/agent/claude_code_agent/_handlers.py`), which calls `run_claude_login()` from `_oauth.py`:
-   - OpenCompany-managed install of `@anthropic-ai/claude-code` into the shared npm tree at `<DATA_DIR>/packages/` via `npm install --prefix <packages_dir>` (same tree as `edgymeow` / `agent-browser`; skipped if already installed). Binary resolves to `<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]`.
+   - OpenCompany-managed install of `@anthropic-ai/claude-code` into the shared packages tree at `<DATA_DIR>/packages/` via `core.js_runtime.add_package("<package_name>@<package_version>", trust=True)` — `bun add --cwd <packages_dir> --no-progress --trust <spec>` (same tree as `edgymeow` / `agent-browser` / `cf` / `vercel`; skipped if already installed; `--trust` because the package's postinstall stages its native launcher, which bun otherwise blocks). The exact version is pinned in `server/config/ai_cli_providers.json` (`package_version`, the vercel / cloudflare idiom) because the stream-json contract and flag surface are verified against that version only. Binary resolves to `<DATA_DIR>/packages/node_modules/.bin/claude[.exe]` and runs on bun — no Node or npm involved (claude-code 2.1.258 verified on bun with no Node on PATH).
    - `claude auth login` via `run_cli_command(..., env={..., CLAUDE_CONFIG_DIR=<DATA_DIR>/claude/}, stdin=asyncio.subprocess.PIPE)` — same way the VSCode Claude Code extension delegates to the binary. Anthropic doesn't expose `--print-url` or a programmatic OAuth helper (issue [anthropics/claude-code#7100](https://github.com/anthropics/claude-code/issues/7100), closed "not planned"), so we let the CLI open the user's browser via its own OS-level call. `stdin=PIPE` is **load-bearing** for claude-code >= 2.1.162's native binary: it reads stdin while waiting for the browser callback, and an inherited (closed) stdin EOFs it into an early exit that kills the localhost callback server before the redirect arrives — `stdin=PIPE` (never written) makes the read block so the server stays up.
 3. Schedule a background task that polls `claude auth status` every 2s up to 600s. On exit-0, write the synthetic `"cli-managed"` marker via `auth_service.store_oauth_tokens("claude_code", ...)` and broadcast `credential_catalogue_updated`. The catalogue's `stored` flag flips and the existing `OAuthConnect.tsx` primitive renders the modal as Connected.
 
 **Logout**: runs `claude auth logout`, drops the marker via `auth_service.remove_oauth_tokens()`, and broadcasts.
 
-**Codex login**: not yet wired. The handler returns a graceful error pointing the user at `npm install -g @openai/codex` + `codex login` manual flow. Follow-up: mirror `nodes/agent/claude_code_agent/_oauth.py` for codex with a `HOME=<DATA_DIR>/codex/` env redirect (Codex has no `CONFIG_DIR` equivalent).
+**Codex login**: not yet wired. The handler returns a graceful error pointing the user at `bun add -g @openai/codex` + `codex login` manual flow (the provider itself falls back to `bun x @openai/codex` when no system `codex` is on PATH). Follow-up: mirror `nodes/agent/claude_code_agent/_oauth.py` for codex with a `HOME=<DATA_DIR>/codex/` env redirect (Codex has no `CONFIG_DIR` equivalent).
 
 **Frontend**: no changes. The existing `client/src/components/credentials/primitives/OAuthConnect.tsx:42-44` already documents and supports the Stripe-style fieldless-CLI case (`config.fields = []`, `kind: "oauth"`, `stored` flag drives Connected state).
 
@@ -291,13 +299,13 @@ Shared by every CLI provider plugin. Imports nothing from `nodes/`.
 | `mcp_server.py` | FastMCP sub-app mounted at `/mcp/ide` (JSON-RPC endpoint `/mcp/ide/mcp`) with bearer-token middleware + 7 infrastructure tools (`getWorkspaceFiles`, `listSkills`, `getSkill`, `readSkillResource`, `searchSkillResource`, `getCredential`, `broadcastLog`) + `rebind_batch` for warm-reuse context updates. |
 | `context_bridge.py` | `SpecializedAgentContextBridge` — RFC-0002 Context continuity for specialized providers (`resolve` / `augment_prompt` / `record_turn`); shared with RLM and Vertex. |
 | `workflow_tools.py` | Per-batch MCP tool exposure (`mcp__opencompany__<node_type>`) + handler scope check + `tools/list_changed` notify. |
-| `session.py` | `AICliSession(BaseProcessSupervisor)` — generic non-pool path (still PTY on POSIX). |
-| `service.py` | `AICliService.run_batch()` — dispatcher; routes to pool when memory-bound via `factory.get_session_pool(provider_name)`. |
+| `session.py` | `AICliSession(BaseProcessSupervisor)` — generic PTY + JSONL path for non-claude providers; not used for claude. |
+| `service.py` | `AICliService.run_batch()` — dispatcher; every claude task goes to the pool via `factory.get_session_pool(provider_name)` (warm keyed session when bound, ephemeral per-task session otherwise). |
 | `_cli_auth.py` | CLI-agnostic `mark_logged_in` / `mark_logged_out` / `broadcast_credential_event` + `"cli-managed"` marker token. Shared by claude + codex handlers. |
 | `_handlers.py` | Codex WS handlers (`codex_cli_login` / `codex_cli_logout`). Claude's moved to the plugin folder. |
 | `providers/openai_codex.py` | Codex provider — sandbox-first, no session continuity. Will move when codex_agent adopts the per-folder layout. |
 | `providers/google_gemini.py` | v2 stub. |
-| `jsonl_watcher.py` | Still used by the non-pooled `AICliSession` (out-of-scope path). |
+| `jsonl_watcher.py` | Used only by `AICliSession`; no claude caller. |
 
 ### Claude plugin — `server/nodes/agent/claude_code_agent/`
 
@@ -369,7 +377,7 @@ the reference implementation). Four self-registration calls in
 
 ## Memory bridge — `simpleMemory` → `claude_code_agent`
 
-> See [memory_lifecycle.md](./memory_lifecycle.md) for the shared markdown surface (every agent uses the same `parse_memory_markdown` / `append_to_memory_markdown` / `trim_markdown_window` helpers to maintain `simpleMemory.memory_content`). This section documents what's UNIQUE to `claude_code_agent`: the markdown is the UI mirror, not the resume channel.
+> See [memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) for the shared markdown surface (every agent uses the same `parse_memory_markdown` / `append_to_memory_markdown` / `trim_markdown_window` helpers to maintain `simpleMemory.memory_content`). This section documents what's UNIQUE to `claude_code_agent`: the markdown is the UI mirror, not the resume channel.
 
 Connecting a `simpleMemory` node to a `claude_code_agent` makes the
 spawned `claude` subprocess resume its prior session natively across runs.
@@ -390,15 +398,19 @@ every spawn → fresh project_key every run → `--resume <UUID>` looked
 under a brand-new directory with zero prior JSONL ("No conversation
 found with session ID").
 
-The fix: when memory is wired, spawn under `cwd=repo_root` and skip
-the worktree entirely. Same cwd every run → same project_key → claude
-finds its own JSONL.
+The fix: when memory is wired, spawn in one stable worktree per agent
+node (`<workspace>/<node>/wt_session`) instead of a fresh per-task one.
+Same cwd every run → same project_key → claude finds its own JSONL.
+Pooled sessions never run in the repo root itself: claude reads
+CLAUDE.md from cwd upward, and the checkout that contains DATA_DIR
+would otherwise ride into every session.
 
 ### Argv contract
 
 | Run state | Argv emitted | Why |
 |---|---|---|
-| First cold spawn under a memory-wired node | `--continue` | Claude auto-loads the most recent conversation under cwd's `project_key` (per [code.claude.com/docs/en/cli-reference](https://code.claude.com/docs/en/cli-reference)). No UUID round-trip needed — claude tracks its own latest session per cwd on disk. |
+| First cold spawn, no stored session | `--session-id <uuid4>` | `ClaudeSessionPool._spawn` mints the UUID so it is known before the first event; `_persist_memory` stores it on the memory node as `last_session_id`. |
+| Cold spawn under a memory-wired node with a stored session | `--resume <last_session_id>` | Resume by UUID, never `--continue`: per [code.claude.com/docs/en/cli-reference](https://code.claude.com/docs/en/cli-reference) `--continue` skips sessions created non-interactively (`-p` / stream-json), which is every session the pool creates. |
 | Subsequent turn, SAME warm subprocess | nothing argv-level — stream-json line on `proc.stdin` | The pool keeps the subprocess alive between turns. Claude maintains the conversation in-process; same `session_id` across turns (verified end-to-end). |
 | Crash recovery (subprocess died between batches) | `--resume <captured_uuid>` | `ClaudeSessionPool.acquire` detects `process.returncode is not None`, captures the dead session's `current_session_uuid`, and respawns with `--resume`. Same `cwd=repo_root` → same `project_key` → claude finds the same JSONL it was writing before the crash. Mutually exclusive with `--continue`. |
 
@@ -406,39 +418,42 @@ Argv emission lives in
 [`nodes/agent/claude_code_agent/_provider.py:interactive_argv`](../server/nodes/agent/claude_code_agent/_provider.py).
 The `ClaudeTaskSpec` carries `continue_session: bool` and
 `resume_session_id: Optional[str]`. `claude_code_agent.execute_op` sets
-`continue_session = bool(memory_data)` for the cold-spawn case; the
+`resume_session_id` from the memory node's `last_session_id` and leaves
+`continue_session` at its `False` default (`claude_code_agent/__init__.py`); the
 pool's crash-recovery path injects `resume_session_id =
 session.current_session_uuid` into the spec before respawning.
-`--session-id <UUID5>` (the pre-cutover UUID-round-trip primitive) is
-intentionally NOT emitted in interactive mode — claude rejects it.
+The pre-cutover UUID5 derivation is gone; the `--session-id` emitted today is
+a fresh `uuid4` minted by `ClaudeSessionPool._spawn` on cold start (claude
+rejects a UUID already in use).
 
 ### Plumbing
 
 ```
-ClaudeCodeAgentNode.execute_op                      (__init__.py:291-330)
+ClaudeCodeAgentNode.execute_op                      (__init__.py:263-330)
   ├─ collect_agent_connections() → context_data (first tuple element)
-  │    ├─ V2 graphs: a Context descriptor (kind == "context") → context_v2,
+  │    ├─ Context node wired: a Context descriptor (kind == "context") → context_descriptor,
   │    │   handed to AICliService as connected_context and bridged through
   │    │   SpecializedAgentContextBridge; memory_data stays None
-  │    └─ immutable V1 snapshots: the legacy Memory descriptor → memory_data
+  │    └─ legacy input-memory graphs: the recorded Memory descriptor → memory_data
   │        {node_id, session_id, memory_content, window_size,
   │         long_term_enabled, last_session_id (display-only)}
-  ├─ continue_session = bool(memory_data)
+  ├─ resume_session_id = memory_data.get("last_session_id")
   ├─ ClaudeTaskSpec(..., continue_session=continue_session,
   │                      resume_session_id=None)
   └─ AICliService.run_batch(..., connected_memory=memory_data,
                             broadcaster=...)
        └─ For context/memory-wired single-task runs, route through ClaudeSessionPool
-          (service.py:343-358 — use_pool = claude AND one task AND
-           (connected_memory OR a Context bridge)):
-            ├─ pool.acquire(session_key, spec, cwd=repo_root, env, ...)
-            │    session_key = context_bridge.pool_key on V2 graphs (the
+          (service.py:357-363 — use_pool = the provider registered a session pool;
+           bound_key = context_bridge.pool_key, else connected_memory["node_id"],
+           else None. Unbound batches still run pooled, one ephemeral session per task.)
+            ├─ pool.acquire(session_key, spec, cwd=<workspace>/<node>/wt_session, env, ...)
+            │    session_key = context_bridge.pool_key when a Context node is wired (the
             │    RFC-0002 conversation key, so a Reset's generation bump
             │    fences the warm subprocess), else the legacy
             │    connected_memory["node_id"]
             │    ├─ cold: spawn `claude --output-format stream-json
             │    │         --input-format stream-json --verbose --ide
-            │    │         --continue ...` as subprocess with stdio pipes;
+            │    │         --session-id <uuid> | --resume <uuid> ...` as subprocess with stdio pipes;
             │    │         no PTY. stdout_reader_task parses each event line
             │    │         and dispatches to _handle_stream_event.
             │    └─ warm reuse: return the existing PooledClaudeSession;
@@ -481,9 +496,9 @@ ClaudeCodeAgentNode.execute_op                      (__init__.py:291-330)
 
 ### Parallel-batch guard
 
-Memory continuity requires serial execution — N concurrent `--continue`
-spawns against the same `project_key` would race claude's
-session-resolution. When `memory_data` is wired AND `len(tasks) > 1`,
+Memory continuity requires serial execution — N concurrent `--resume`
+spawns against the same session would race claude's transcript
+writes. When `memory_data` is wired AND `len(tasks) > 1`,
 `claude_code_agent` raises `NodeUserError("Memory-bound batches must
 run one task at a time. ...")` at handler entry.
 
@@ -491,7 +506,8 @@ run one task at a time. ...")` at handler entry.
 
 `memory_content` (the markdown surface the simpleMemory UI shows) is
 a **display mirror**, not the resume channel. Claude's own JSONL on
-disk is what `--continue` and `--resume` load from. `_persist_memory`
+disk is what `--resume` loads from; `last_session_id` on the memory
+node is the resume handle. `_persist_memory`
 appends each successful run's prompt + response to `memory_content`
 via `append_to_memory_markdown` so the UI shows the conversation grow
 live. User edits to `memory_content` do NOT influence claude's next
@@ -501,19 +517,19 @@ To reset both: click the simpleMemory's clear button or invoke the
 `clear_memory` WS handler — backend wipes `memory_content` to the
 default placeholder AND clears `last_session_id` in one DB write.
 Claude's on-disk JSONL is left alone (orphan, harmless). The next run
-spawns fresh with `--continue` against a project_key that has no
-matching prior session, and claude assigns a brand-new UUID.
+has no `last_session_id`, so the pool mints a new `--session-id` and
+claude starts a brand-new session.
 
 ### Logs to watch
 
 ```
-[Claude Code memory] memory_node=<id> -> --continue
-   (claude auto-finds latest session under cwd)
+[Claude Code memory] memory_node=<id> -> --resume <UUID>
+   (or "fresh session (no last_session_id yet)" on the first run)
 
 [CC-Agent run_batch] enter ... memory=<memory_node_id> ...
 
 [ClaudeSessionPool] spawned new session memory_node=<id> pid=<N>
-   (cold spawn — argv carries --continue or --resume <UUID>)
+   (cold spawn — argv carries --session-id <UUID> or --resume <UUID>)
 [ClaudeSessionPool] warm reuse memory_node=<id> pid=<N> uuid=<UUID>
    (intra-process turn — stream-json on stdin)
 
@@ -569,7 +585,7 @@ Plugin contract: `tests/test_plugin_contract.py` + `tests/test_node_spec.py` —
 
 Live verification (needs a real Claude install + auth):
 
-1. Empty `~/.opencompany/claude/` + `~/.opencompany/packages/`. Open Credentials Modal → click "Login with Claude Code CLI". Confirm the npm install runs (visible in backend logs), `~/.opencompany/packages/node_modules/.bin/claude[.cmd]` appears, browser opens for Anthropic OAuth. Modal flips Connected within ~2s of CLI exit (background `claude auth status` poll detects success). The browser tab should render the CLI's own "Signed in" success page (this needs the `stdin=PIPE` spawn — without it the native binary exits early and the tab is left on the bare `localhost/callback` URL).
+1. Empty `~/.opencompany/claude/` + `~/.opencompany/packages/`. Open Credentials Modal → click "Login with Claude Code CLI". Confirm the `bun add` runs (visible in backend logs), `~/.opencompany/packages/node_modules/.bin/claude[.exe]` appears, browser opens for Anthropic OAuth. Modal flips Connected within ~2s of CLI exit (background `claude auth status` poll detects success). The browser tab should render the CLI's own "Signed in" success page (this needs the `stdin=PIPE` spawn — without it the native binary exits early and the tab is left on the bare `localhost/callback` URL).
 2. Refresh the page. Modal stays Connected (`auth_service.get_oauth_tokens("claude_code")` still returns the marker; idempotent re-click also stays Connected).
 3. Click Disconnect. Modal flips Disconnected (`claude auth logout` clears CLI creds + marker dropped).
 4. Add a `claude_code_agent` node, set `tasks=[{prompt:"echo A"},{prompt:"echo B"},{prompt:"echo C"}]`, run. Three distinct `claude:<task_id>` Terminal streams interleaved. Three distinct session_ids. Three worktrees created and removed. `summary.wall_clock_ms < sum(duration_ms)` (proves parallelism).
@@ -578,11 +594,11 @@ Live verification (needs a real Claude install + auth):
 
 ## Risks / open considerations
 
-- **Codex login not yet wired.** v1 returns a graceful error directing the user to `npm install -g @openai/codex` + `codex login`. Follow-up: a codex `_oauth.py` mirroring `nodes/agent/claude_code_agent/_oauth.py` with a `HOME=<DATA_DIR>/codex/` env redirect (Codex has no `CONFIG_DIR` env; `HOME` redirect is risky on Windows, so Windows may need a different strategy or accept user-global Codex auth).
+- **Codex login not yet wired.** v1 returns a graceful error directing the user to `bun add -g @openai/codex` + `codex login`. Follow-up: a codex `_oauth.py` mirroring `nodes/agent/claude_code_agent/_oauth.py` with a `HOME=<DATA_DIR>/codex/` env redirect (Codex has no `CONFIG_DIR` env; `HOME` redirect is risky on Windows, so Windows may need a different strategy or accept user-global Codex auth).
 - **Gemini deferred.** `factory.create_cli_provider("gemini")` raises `NotImplementedError` (the one name-specific branch left in the factory, kept so the dropdown can grey it out). v2 work: implement the provider, register it from a `nodes/agent/gemini_cli_agent/` plugin folder, and drop that branch. ~430 LoC. No abstraction changes needed.
 - **`--include-partial-messages`** assumes a recent Claude CLI; older versions fall back gracefully via the parser's `parse_event` returning `None` for unknown shapes.
 - **Native-binary stdin sensitivity.** claude-code >= 2.1.162 ships a native binary that reads stdin during `auth login`. We spawn it with `stdin=asyncio.subprocess.PIPE` (never written) so the read blocks and the OAuth callback server stays alive; an inherited/closed stdin EOFs the binary into an early exit that drops the browser callback. If a future CLI version changes its stdin contract this is the spot to revisit.
 - **Marker token written without verifying CLI is actually functional** — we trust `claude auth status`'s exit code. If Anthropic invalidates the token server-side and the CLI hasn't re-checked, the modal still shows Connected until the next session attempt's `detect_auth_error` catches it.
 - **MCP SDK is pre-1.0-stable.** Pinned at `mcp>=1.0.0`. The surface is isolated in `mcp_server.py` so an SDK breaking change touches one file.
-- **Concurrent install safety.** `_oauth.py:claude_binary_path` doesn't currently use a lock — two simultaneous login clicks within 2s could race the npm install into the shared tree. Low-risk in practice (modal debounces clicks); a follow-up could add an `asyncio.Lock`.
+- **Concurrent install safety.** `_oauth.py:claude_binary_path` doesn't currently use a lock — two simultaneous login clicks within 2s could race the `bun add` into the shared tree. Low-risk in practice (modal debounces clicks); a follow-up could add an `asyncio.Lock`.
 - **Worktree leak on hard crash.** Out-of-scope cleanup pass; document.

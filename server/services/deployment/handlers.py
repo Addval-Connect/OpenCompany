@@ -1383,7 +1383,7 @@ async def _rearm_generation(control) -> None:
         "nodes": nodes,
         "edges": edges,
         "generation": control.generation,
-        # Snapshots created before Context V2 deliberately retain version 0,
+        # Snapshots created before the Context topology deliberately retain version 0,
         # so a process restart cannot mutate their Temporal command sequence.
         "graphVersion": int(
             snapshot.get("graphVersion")

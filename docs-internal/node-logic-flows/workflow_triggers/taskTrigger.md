@@ -57,16 +57,13 @@ Declared `TaskTriggerOutput` fields:
   result?: string;     // Present when status='completed'
   error?: string;      // Present when status='error'
   workflow_id?: string;
-  team_id?: string;
-  execution_id?: string;
-  root_execution_id?: string;
-  trace_id?: string;
 }
 ```
 
 `TaskTriggerOutput` is `model_config extra="allow"`, so the producer's extra
-fields (`agent_node_id`, `parent_node_id`) pass through to downstream nodes at
-runtime even though they are not declared on the model. Wrapped in the standard
+fields (`agent_node_id`, `parent_node_id`, `team_id`, `execution_id`,
+`root_execution_id`, `trace_id`) pass through to downstream nodes at runtime
+even though they are not declared on the model. Wrapped in the standard
 envelope.
 
 ## Logic Flow

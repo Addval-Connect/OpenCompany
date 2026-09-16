@@ -12,7 +12,10 @@ The database is separate from the main application database (workflow.db) to:
 
 import hashlib
 import logging
+import asyncio
 from contextlib import asynccontextmanager
+
+from core.session_teardown import teardown_session
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -151,9 +154,24 @@ class CredentialsDatabase:
 
     @asynccontextmanager
     async def get_session(self):
-        """Get async database session."""
-        async with self._session_factory() as session:
+        """Get async database session.
+
+        Same cancellation-safe teardown as ``core.database.Database``:
+        rollback + close run under ``asyncio.shield`` so a cancelled
+        caller (a WebSocket client disconnecting during the connect-time
+        credential probes) cannot interrupt the pool's reset rollback.
+        """
+        session = self._session_factory()
+        try:
             yield session
+        except asyncio.CancelledError:
+            await asyncio.shield(teardown_session(session, rollback=True))
+            raise
+        except Exception:
+            await asyncio.shield(teardown_session(session, rollback=True))
+            raise
+        else:
+            await asyncio.shield(teardown_session(session, rollback=False))
 
     # --- Metadata Operations ---
 

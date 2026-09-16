@@ -102,11 +102,21 @@ container lookup, deliberately not memoised. In handlers/services use
 ### Auth Middleware (`server/middleware/auth.py`)
 Protects all routes except public paths:
 ```python
-PUBLIC_PATHS = frozenset([
-    "/health", "/docs", "/openapi.json", "/redoc",
-    "/api/auth/status", "/api/auth/login", "/api/auth/register", "/api/auth/logout",
-    "/ws/internal",   # Internal WebSocket for Temporal workers
-])
+PUBLIC_PATHS = frozenset(
+    [
+        "/health",
+        "/health/ready",  # readiness probe for the desktop shell splash / CI
+        "/api/desktop/shutdown",  # desktop shell; gated by X-Desktop-Token, not the cookie
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/api/auth/status",
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/logout",
+        "/ws/internal",  # Internal WebSocket for Temporal workers
+    ]
+)
 
 # Path prefixes that are public. ``/mcp/`` is the CLI-agent MCP server, which
 # enforces its own per-batch bearer-token auth (cookies don't apply to it), so
@@ -234,7 +244,8 @@ Recorded explicitly because each of these is easy to assume is handled.
   `tests/auth/test_auth_middleware.py` fails if a new router breaks it.
 
 `core/config.py` carries the `vite_auth_enabled` field (required because
-Pydantic Settings uses `extra="forbid"`). It also exposes `DEV_SECRET_LITERALS`
+`Settings` reads it to gate the auth middleware in `middleware/auth.py`;
+`model_config` uses `extra="ignore"`, so stale `.env` vars do not raise). It also exposes `DEV_SECRET_LITERALS`
 and `dev_secret_offenders()`: server startup (lifespan) logs a non-fatal error
 banner when `SECRET_KEY` / `JWT_SECRET_KEY` / `API_KEY_ENCRYPTION_KEY` still
 carry the dev template placeholders while auth is enabled or `DEPLOYMENT_MODE`
@@ -318,7 +329,7 @@ useEffect(() => {
 ## Dependencies
 ```
 # server/pyproject.toml
-bcrypt>=4.1.0
+bcrypt>=4.2.0
 pyjwt>=2.13.0
 email-validator>=2.0.0
 ```
