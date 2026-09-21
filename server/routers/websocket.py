@@ -1651,6 +1651,9 @@ async def websocket_status_endpoint(websocket: WebSocket):
     # Plugin-owned handlers resolve namespace ownership from trusted
     # connection state. Client payloads cannot choose a Memory/Context owner.
     websocket.state.user_id = authenticated_user_id
+    websocket.state.active_namespace = (
+        payload.get("active_namespace", "default") if not auth_disabled else "default"
+    )
 
     broadcaster = get_status_broadcaster()
     await broadcaster.connect(websocket)
