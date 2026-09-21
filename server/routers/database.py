@@ -135,7 +135,8 @@ async def get_all_workflows(request: Request, database: Database = Depends(lambd
             current["examples_loaded"] = True
             await database.save_user_settings(current, user_id)
 
-        workflows = await database.get_all_workflows(owner_user_id=owner)
+        active_namespace = getattr(request.state, "active_namespace", None)
+        workflows = await database.get_all_workflows(owner_user_id=owner, namespace=active_namespace)
         return {
             "success": True,
             "workflows": [

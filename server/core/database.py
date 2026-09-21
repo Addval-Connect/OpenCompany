@@ -125,6 +125,7 @@ class Database:
             await self._migrate_generation_scoped_runtime_data()
             await self._migrate_tenant_namespaces()
             await self._migrate_user_namespaces()
+            await self._migrate_workflow_namespace()
             await self._migrate_workflow_owner()
 
             logger.info("Database initialized successfully")
@@ -789,6 +790,7 @@ class Database:
         description: Optional[str] = None,
         context_id_aliases: Optional[Dict[str, str]] = None,
         owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> bool:
         """Save or update workflow.
 
@@ -826,6 +828,7 @@ class Database:
                         description=description,
                         data=data,
                         owner_user_id=effective_owner,
+                        namespace=namespace or "default",
                     )
                     session.add(existing)
 
@@ -876,10 +879,15 @@ class Database:
             logger.error("Failed to get workflow", workflow_id=workflow_id, error=str(e))
             return None
 
-    async def get_all_workflows(self, owner_user_id: Optional[str] = None) -> List[Workflow]:
-        """Get workflows, optionally filtered to one owner.
+    async def get_all_workflows(
+        self,
+        owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+    ) -> List[Workflow]:
+        """Get workflows, optionally filtered to one owner and/or namespace.
 
         Pass ``owner_user_id`` to return only that principal's workflows.
+        Pass ``namespace`` to return only workflows in that namespace.
         Callers that know the principal (WS ``get_all_workflows`` handler,
         REST database router) must always pass it; internal system calls that
         genuinely need the full list (boot-time reconciliation, example loader)
@@ -890,6 +898,8 @@ class Database:
                 stmt = select(Workflow).order_by(Workflow.updated_at.desc())
                 if owner_user_id is not None:
                     stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
+                if namespace is not None:
+                    stmt = stmt.where(Workflow.namespace == namespace)
                 result = await session.execute(stmt)
                 return result.scalars().all()
 
@@ -4494,6 +4504,23 @@ class Database:
                     pass  # users table not yet created (fresh test DB)
         except Exception as exc:
             logger.error("_migrate_user_namespaces failed", error=str(exc))
+            raise
+
+    async def _migrate_workflow_namespace(self) -> None:
+        """Add 'namespace' column to workflows; backfill existing rows to 'default'."""
+        try:
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA table_info(workflows)"))
+                cols = {row[1] for row in result.fetchall()}
+                if "namespace" not in cols:
+                    await conn.execute(text(
+                        "ALTER TABLE workflows ADD COLUMN namespace VARCHAR(255) NOT NULL DEFAULT 'default'"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_workflows_namespace ON workflows(namespace)"
+                    ))
+        except Exception as exc:
+            logger.error("_migrate_workflow_namespace failed", error=str(exc))
             raise
 
     async def list_user_namespaces(self, user_id: str) -> List[Dict[str, Any]]:

@@ -458,6 +458,9 @@ async def handle_save_workflow(data: Dict[str, Any], websocket: WebSocket) -> Di
         # Stored only for new workflows (save_workflow is a no-op on
         # update for owner_user_id so the column never changes on rename).
         "owner_user_id": _trusted_owner_id(websocket, existing),
+        # Namespace from the caller's active JWT claim — only set on new
+        # workflows (existing workflows keep their original namespace).
+        "namespace": getattr(existing, "namespace", None) or getattr(websocket.state, "active_namespace", "default"),
     }
     if _supports_context_archive_outbox(database):
         save_kwargs["context_id_aliases"] = normalization.aliases
@@ -655,10 +658,13 @@ async def handle_get_all_workflows(data: Dict[str, Any], websocket: WebSocket) -
     from constants import OWNER_PRINCIPAL_ID
 
     database = container.database()
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
+    state = getattr(websocket, "state", None)
+    caller = str(getattr(state, "user_id", None) or OWNER_PRINCIPAL_ID)
+    active_namespace = getattr(state, "active_namespace", None)
+    workflows = await database.get_all_workflows(
+        owner_user_id=caller,
+        namespace=active_namespace,
     )
-    workflows = await database.get_all_workflows(owner_user_id=caller)
     return {
         "success": True,
         "workflows": [

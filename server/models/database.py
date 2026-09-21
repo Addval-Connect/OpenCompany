@@ -102,6 +102,11 @@ class Workflow(SQLModel, table=True):
     # backfilled by _migrate_workflow_owner(); new rows receive the
     # save_workflow caller's principal.  Never empty after the migration.
     owner_user_id: str = Field(default="owner", max_length=255, index=True)
+    # Namespace this workflow belongs to. Existing rows default to "default"
+    # (backfilled by _migrate_workflow_namespace). New workflows inherit the
+    # active_namespace from the caller's JWT so switching namespaces shows
+    # only that namespace's workflows.
+    namespace: str = Field(default="default", max_length=255, index=True)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
