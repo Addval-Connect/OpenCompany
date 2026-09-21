@@ -162,7 +162,10 @@ async def get_workflow(workflow_id: str, request: Request, database: Database = 
     try:
         from types import SimpleNamespace
 
-        ws_shim = SimpleNamespace(state=SimpleNamespace(user_id=_request_owner(request)))
+        ws_shim = SimpleNamespace(state=SimpleNamespace(
+            user_id=_request_owner(request),
+            active_namespace=getattr(request.state, "active_namespace", None),
+        ))
         result = await handle_get_workflow(
             {"workflow_id": workflow_id},
             websocket=ws_shim,  # type: ignore[arg-type]
