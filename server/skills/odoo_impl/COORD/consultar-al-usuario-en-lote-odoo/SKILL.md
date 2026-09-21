@@ -58,31 +58,46 @@ con él; A1-A5 nunca preguntan, solo devuelven `pendientes[]` en el resultado de
 ## Salida
 
 ```
-Proyecto acme — Instancia staging — Etapa: diseño de blueprint (A2)
-Tengo 4 dudas antes de seguir:
+Proyecto acme — Instancia staging — Etapa: carga A5
+Tengo 4 puntos antes de seguir. Para cada uno te indico qué pasó y qué propongo — solo necesito tu
+confirmación o ajuste.
 
-BLOQUEANTES
+BLOQUEANTES (detienen la etapa completa)
 
-1) Módulo no instalado
-   El blueprint necesita `l10n_cl_edi` para los tipos de documento electrónico, pero la
-   introspección del 2026-08-10 no lo reporta instalado.
-   ¿Lo instalamos en staging antes de seguir, o el alcance excluye facturación electrónica?
+1) Módulo no instalado — l10n_cl_edi
+   El blueprint necesita `l10n_cl_edi` para tipos de documento electrónico, pero la instancia lo
+   reporta `uninstalled`.
+   ► PROPUESTA: Instalarlo desde Configuración → Apps en la instancia staging antes de continuar.
+     Cuando esté instalado, avísame y relanzo A1 (introspección puntual) + A5 en los archivos detenidos.
+   ¿Confirmas que lo instalarás, o el alcance excluye facturación electrónica?
 
-2) Campo inexistente (05-plantillas/20_res.partner.csv, columna l10n_cl_activity_description)
-   `fields_get` de res.partner no reporta ese campo.
-   Opciones: (a) omitir la columna  (b) instalar l10n_cl_edi y reintroducirla  (c) usar otro campo
+2) Xmlid de empresa faltante — plan de cuentas (10_account.account.csv)
+   El CSV usa `adv_ecominera.company_ecominera` en company_ids para las 268 cuentas, pero ese xmlid
+   no existe en la instancia. Con `load()` transaccional, el batch completo falla.
+   ► PROPUESTA A (recomendada): Crear el xmlid apuntando a la empresa principal:
+       ir.model.data.create({module:"adv_ecominera", name:"company_ecominera", model:"res.company", res_id:1})
+     Después cargo las 268 cuentas sin tocar el CSV.
+   ► PROPUESTA B: Reemplazar en el CSV `adv_ecominera.company_ecominera` → `base.main_company`.
+   ¿Confirmas Propuesta A, o hay una empresa distinta a id=1 que corresponde?
 
-CLASIFICACIÓN
+CONSTRAINT (detiene un archivo)
 
-3) HU-021 "Aprobación de orden de venta por margen" (01-analisis/matriz-brechas.csv, fila 21)
-   No hay configuración estándar que cubra aprobación por margen calculado.
-   Opciones: (a) desarrollo  (b) parametrizable con reglas de aprobación estándar  (c) fuera de alcance
+3) Cuenta "Resultado del ejercicio" colisiona con l10n_cl (10_account.account.csv, código 999999)
+   Odoo solo permite una cuenta con tipo `current_year_earnings` por compañía. `l10n_cl` ya creó la
+   cuenta 891000 "Utilidades del ejercicio". El CSV trae 999999 con el mismo tipo → batch rechazado.
+   ► PROPUESTA A (recomendada): Excluir 999999 del CSV. La cuenta 891000 de l10n_cl ya cumple la función.
+   ► PROPUESTA B: Reclasificar 999999 a tipo `income` o `equity` en el CSV.
+   ► PROPUESTA C: Reemplazar 891000 con 999999 (requiere write en la cuenta existente + ajuste de xmlid).
+   ¿Cuál aplica para este cliente?
 
-FILAS
+FILAS (errores de dato del consultor)
 
-4) Referencia no resuelta (31_product.template.csv, fila 7, columna categ_id/id)
-   `adv_acme.categ_insumo` no existe. El archivo 27 define `adv_acme.categ_insumos` (plural).
-   ¿Es un typo del archivo, o falta la categoría?
+4) RUT con DV incorrecto (20_res.partner.csv, filas 14, 67, 203)
+   Fila 14: 76.543.210-K (DV calculado: 3)  Fila 67: 77.891.234-5 (DV calculado: 9)  Fila 203: 12.345.678-0 (DV calculado: 8)
+   Las otras 233 filas están ok y ya las cargué.
+   ► PROPUESTA: Corriges los 3 RUT en el archivo fuente y me mandas la versión corregida. Recargo solo
+     esas filas.
+   ¿Ok?
 ```
 
 ## Casos de borde

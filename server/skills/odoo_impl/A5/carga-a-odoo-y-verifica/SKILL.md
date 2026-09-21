@@ -4,7 +4,7 @@ description: >-
   Runbook completo del Agente A5: aplica la configuración por RPC, carga los archivos validados con
   load() en orden de dependencias, verifica con read-back, y ejecuta los casos de QA de cada flujo.
   ÚNICO punto de escritura del sistema. Ejecuta los pasos en orden.
-allowed-tools: odoo_jsonrpc file_read file_modify fs_search sandboxed_python javascript_code
+allowed-tools: odoo_jsonrpc file_read file_modify fs_search sandboxed_python javascript_code write_todos
 metadata:
   agente: A5
   tipo: MIX
@@ -56,6 +56,82 @@ corrida). Nunca toques `introspeccion.json`.
 
 Del `blueprint.yaml`, los objetos `fuente: configuracion` los escribes tú directo, en el orden `nn`.
 Pocos registros, valores decididos en el diseño.
+
+## Prechecks obligatorios para `account.account` (plan de cuentas)
+
+Antes de cargar cualquier archivo que incluya `account.account`, ejecuta estos tres checks. Cada uno
+que falle genera un pendiente con **propuesta de corrección concreta** — no reintentes el `load` sin
+que el consultor haya respondido.
+
+### Check 1 — xmlid de la empresa
+
+El CSV casi siempre referencia la empresa con un xmlid del proyecto (ej. `adv_ecominera.company_ecominera`).
+Si ese xmlid no existe en la instancia, **todo el batch de 200-500 cuentas se cae completo** porque
+`load()` es transaccional.
+
+```python
+# Verifica si el xmlid de empresa del CSV existe
+odoo_jsonrpc(model="ir.model.data", method="search_read",
+  domain=[["module","=","<prefijo_proyecto>"],["name","=","company_<slug>"]],
+  fields=["id","res_id","model"])
+# Si devuelve vacío → el xmlid no existe
+```
+
+Si no existe, **no inventes** ni uses `base.main_company` directamente. En su lugar genera el
+pendiente `xmlid_empresa_faltante` con esta propuesta lista para aprobar:
+
+```
+PROBLEMA: El CSV usa '<prefijo>.company_<slug>' como company_ids, pero ese xmlid no existe en la instancia.
+PROPUESTA: Crear el xmlid apuntando a la empresa principal (res_id=1):
+  model="ir.model.data", method="create",
+  values={"module":"<prefijo>","name":"company_<slug>","model":"res.company","res_id":1}
+ACCIÓN REQUERIDA: Confirmar que res_id=1 es la empresa correcta para este proyecto.
+          Si hay varias empresas, indicar el id de la que corresponde.
+```
+
+Con la confirmación del consultor, ejecutas el `create` de `ir.model.data` y cargas el CSV.
+
+### Check 2 — constraint `current_year_earnings` (`l10n_cl`)
+
+Odoo solo permite **una** cuenta por compañía con `user_type_id` (o `account_type` en v17+) igual a
+`current_year_earnings`. `l10n_cl` la instala automáticamente; si el CSV del proyecto trae otra,
+`load()` rechaza el batch completo con `There can only be one account of type...`.
+
+```python
+# ¿Ya existe una cuenta current_year_earnings?
+odoo_jsonrpc(model="account.account", method="search_read",
+  domain=[["account_type","=","equity_unaffected"]],   # v17+
+  fields=["code","name","id"])
+# Para v16: domain=[["user_type_id.type","=","equity_unaffected"]]
+```
+
+Si devuelve al menos una cuenta → cualquier cuenta del CSV con ese tipo es un conflicto. Genera
+el pendiente `constraint_cuenta_resultado` con propuesta concreta:
+
+```
+PROBLEMA: Ya existe la cuenta '<code> - <name>' (id=X) con tipo current_year_earnings (instalada por l10n_cl).
+          El CSV incluye la cuenta '<code_csv> - <name_csv>' con el mismo tipo → el batch falla completo.
+PROPUESTA A (recomendada): Excluir '<code_csv>' del archivo de carga; la cuenta de l10n_cl ya cumple la función.
+PROPUESTA B: Reclasificar '<code_csv>' a tipo 'income' o 'equity' en el CSV antes de cargar.
+ACCIÓN REQUERIDA: Confirmar cuál propuesta aplica, o indicar si '<code_csv>' debe reemplazar a '<code>'.
+```
+
+### Check 3 — xmlids de `company_ids` / `company_id` en analíticos y diarios
+
+El mismo problema del Check 1 afecta a `account.analytic.account`, `account.journal`, y cualquier
+modelo que use `company_ids/id` o `company_id/id` con un xmlid del proyecto.
+
+```python
+# Lista todos los xmlids del prefijo proyecto que apuntan a res.company
+odoo_jsonrpc(model="ir.model.data", method="search_read",
+  domain=[["module","=","<prefijo_proyecto>"],["model","=","res.company"]],
+  fields=["name","res_id"])
+```
+
+Si la lista está vacía y el CSV usa `<prefijo>.company_*`, todos los archivos que referencien empresa
+están bloqueados. Un solo pendiente agrupa todos los modelos afectados.
+
+---
 
 **Los módulos se verifican primero — y no los instalas tú.** Un modelo o un campo que solo existe con
 un módulo instalado no es un error de dato: es `E510`. **Instalar módulos por RPC no es posible en esta
@@ -340,6 +416,12 @@ taxonomía y aplica lo que corresponde del bucle:
   `parcial`. Un `E400` que no entiendes → `administrar-casos-de-borde-odoo`.
 - `E300` / `E320`: el archivo queda `diferido`. No apartes filas — vuelve a intentarlo entero cuando su
   dependencia esté cargada.
+- `E400` con mensaje de constraint (`There can only be one...`, `duplicate key`, `violates not-null`,
+  `new row violates check constraint`) → es `regla_negocio`. **No reintentes.** El pendiente incluye:
+  - El mensaje literal de Odoo.
+  - Las filas afectadas (código, nombre).
+  - La propuesta de corrección concreta (ej. excluir, reclasificar, actualizar en vez de crear).
+  El consultor aprueba o ajusta la propuesta; tú ejecutas su decisión.
 - `E500` → detén la carga completa y devuelve el control.
 
 Traduce siempre el `record` del mensaje (índice 0-based **dentro del lote**) a número de fila del CSV

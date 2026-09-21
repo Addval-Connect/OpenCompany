@@ -4,7 +4,7 @@ description: >-
   Qué hacer con un rechazo de Odoo que no es un error de dato: clasificar el mensaje, decidir si se
   corrige, se escala o se detiene, y recuperar el estado tras un lote fallido. Úsala solo cuando la
   carga o el QA devuelven algo que el runbook de A5 no cubre.
-allowed-tools: odoo_jsonrpc file_read file_modify sandboxed_python javascript_code
+allowed-tools: odoo_jsonrpc file_read file_modify sandboxed_python javascript_code write_todos
 metadata:
   agente: A5
   tipo: MIX
