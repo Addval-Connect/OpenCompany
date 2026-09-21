@@ -1417,6 +1417,34 @@ async def handle_refresh_model_registry(data: Dict[str, Any], websocket: WebSock
         return {"success": False, "error": str(e)}
 
 
+@ws_handler()
+async def handle_get_user_namespaces(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+    """List namespaces the current user can access."""
+    database = container.database()
+    user_id = getattr(websocket.state, "user_id", None)
+    namespaces = await database.list_user_namespaces(str(user_id) if user_id else "")
+    active = getattr(websocket.state, "active_namespace", "default")
+    return {"namespaces": namespaces, "active": active}
+
+
+@ws_handler("namespace")
+async def handle_switch_namespace(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+    """Signal the client to reload with a new namespace.
+
+    The actual JWT re-issue happens via POST /api/auth/switch-namespace;
+    this handler validates the assignment and returns a reload signal.
+    """
+    namespace = (data.get("namespace") or "").strip()
+    if not namespace:
+        return {"ok": False, "error": "namespace required"}
+    database = container.database()
+    user_id = getattr(websocket.state, "user_id", None)
+    ok = await database.is_user_in_namespace(str(user_id) if user_id else "", namespace)
+    if not ok:
+        return {"ok": False, "error": "not_assigned"}
+    return {"ok": True, "namespace": namespace, "requires_reload": True}
+
+
 # ============================================================================
 # Message Router
 # ============================================================================

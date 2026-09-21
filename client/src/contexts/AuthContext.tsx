@@ -30,7 +30,7 @@
  *   `can_register` fell back to false, hiding the Register link entirely.
  */
 
-import React, { createContext, useContext, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_CONFIG } from '../config/api';
 import { AUTH_RETRY } from '../lib/connectionConfig';
@@ -51,6 +51,14 @@ export interface AuthStatus {
   can_register: boolean;
 }
 
+export interface NamespaceInfo {
+  namespace: string;
+  display_name: string;
+  status: string;
+  role: string;
+  temporal_provisioned: boolean;
+}
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
@@ -67,6 +75,12 @@ interface AuthContextType {
   submitError: string | null;
   /** Message shown when logout could not be confirmed server-side. */
   logoutError: string | null;
+  /** Namespaces accessible to the current user. */
+  userNamespaces: NamespaceInfo[];
+  /** Namespace currently active for this session (from the JWT). */
+  activeNamespace: string;
+  /** Switch to a different namespace — causes a full page reload. */
+  switchNamespace: (namespace: string) => Promise<void>;
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string, displayName: string) => Promise<boolean>;
   logout: () => Promise<void>;
@@ -220,6 +234,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const authMode: 'single' | 'multi' = data?.auth_mode ?? 'single';
   const canRegister = data?.can_register ?? false;
   const isAuthenticated = user !== null;
+
+  const [userNamespaces, setUserNamespaces] = useState<NamespaceInfo[]>([]);
+  const [activeNamespace, setActiveNamespace] = useState<string>('default');
+
+  // Fetch namespaces once per authenticated session.
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setUserNamespaces([]);
+      setActiveNamespace('default');
+      return;
+    }
+    let cancelled = false;
+    fetch(`${getApiBase()}/namespaces`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled || !body) return;
+        setUserNamespaces(body.namespaces ?? []);
+        setActiveNamespace(body.active ?? 'default');
+      })
+      .catch(() => {/* best-effort */});
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
+
+  const switchNamespace = useCallback(async (namespace: string) => {
+    await fetch(`${getApiBase()}/switch-namespace`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ namespace }),
+    });
+    window.location.reload();
+  }, []);
   const isLoading = authQuery.isPending;
   const error = authQuery.isError ? 'Failed to connect to server' : null;
 
@@ -352,13 +398,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     error,
     submitError,
     logoutError,
+    userNamespaces,
+    activeNamespace,
+    switchNamespace,
     login,
     register,
     logout,
     checkAuth,
     resetAuthErrors,
   }), [user, isAuthenticated, isLoading, isSubmitting, authMode, canRegister, error,
-       submitError, logoutError, login, register, logout, checkAuth, resetAuthErrors]);
+       submitError, logoutError, userNamespaces, activeNamespace, switchNamespace,
+       login, register, logout, checkAuth, resetAuthErrors]);
 
   return (
     <AuthContext.Provider value={value}>

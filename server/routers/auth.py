@@ -3,6 +3,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from core.auth_cookies import get_session_token, session_cookie_names
@@ -180,8 +181,12 @@ async def login(
     # throttled by their own earlier typos.
     login_limiter.reset(limit_key)
 
+    # Resolve the user's active namespace (defaults to 'default' if not set)
+    database = container.database()
+    active_namespace = await database.get_active_namespace_for_user(str(user.id))
+
     # Create token and set cookie
-    token = user_auth.create_access_token(user)
+    token = user_auth.create_access_token(user, active_namespace=active_namespace)
     response.set_cookie(
         key=settings.jwt_cookie_name,
         value=token,
@@ -250,3 +255,58 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
     return {"id": user.id, "email": user.email, "display_name": user.display_name, "is_owner": user.is_owner}
+
+
+@router.get("/namespaces")
+async def get_user_namespaces(request: Request):
+    """List namespaces accessible to the authenticated user."""
+    database = container.database()
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    namespaces = await database.list_user_namespaces(str(user_id))
+    active = getattr(request.state, "active_namespace", "default")
+    return {"namespaces": namespaces, "active": active}
+
+
+class SwitchNamespaceRequest(BaseModel):
+    namespace: str
+
+
+@router.post("/switch-namespace")
+async def switch_namespace(
+    request_body: SwitchNamespaceRequest,
+    request: Request,
+    response: Response,
+    user_auth: UserAuthService = Depends(get_user_auth_service),
+    settings: Settings = Depends(get_settings),
+):
+    """Issue a new JWT with the chosen namespace and update the session cookie.
+
+    The client must do a full page reload after this call so all
+    in-memory state (workflows, credentials, Temporal connections) are
+    re-initialised against the new namespace.
+    """
+    namespace = request_body.namespace.strip()
+    if not namespace:
+        raise HTTPException(status_code=400, detail="namespace required")
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    database = container.database()
+    token = await user_auth.switch_namespace(
+        user_id=str(user_id),
+        namespace=namespace,
+        database=database,
+    )
+    if token is None:
+        raise HTTPException(status_code=403, detail="Not assigned to that namespace")
+    response.set_cookie(
+        key=settings.jwt_cookie_name,
+        value=token,
+        httponly=True,
+        secure=settings.jwt_cookie_secure,
+        samesite=settings.jwt_cookie_samesite,
+        max_age=settings.jwt_expire_minutes * 60,
+    )
+    return {"ok": True, "namespace": namespace}
