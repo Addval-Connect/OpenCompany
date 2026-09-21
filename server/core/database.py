@@ -896,10 +896,13 @@ class Database:
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).order_by(Workflow.updated_at.desc())
-                if owner_user_id is not None:
-                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 if namespace is not None:
+                    # Namespace is the ownership boundary: everyone in the
+                    # namespace sees all its workflows regardless of creator.
                     stmt = stmt.where(Workflow.namespace == namespace)
+                elif owner_user_id is not None:
+                    # Single-namespace fallback: filter by creator.
+                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalars().all()
 
