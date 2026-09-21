@@ -554,11 +554,15 @@ async def handle_get_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dic
 
     database = container.database()
     workflow_id = str(data["workflow_id"])
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
-    )
+    state = getattr(websocket, "state", None)
+    caller = str(getattr(state, "user_id", None) or OWNER_PRINCIPAL_ID)
+    active_namespace = getattr(state, "active_namespace", None)
     recovered_archives, pending_archives = await _drain_context_archive_outbox(database, workflow_id)
-    workflow = await database.get_workflow(workflow_id, owner_user_id=caller)
+    workflow = await database.get_workflow(
+        workflow_id,
+        owner_user_id=caller,
+        namespace=active_namespace,
+    )
     if workflow:
         workflow_data = workflow.data or {}
         from services.workflow_context_migration import (

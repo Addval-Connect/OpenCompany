@@ -858,19 +858,28 @@ class Database:
             return False
 
     async def get_workflow(
-        self, workflow_id: str, owner_user_id: Optional[str] = None
+        self,
+        workflow_id: str,
+        owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> Optional[Workflow]:
         """Get workflow by ID.
 
-        When ``owner_user_id`` is provided, the workflow is returned only if
-        its ``owner_user_id`` column matches — callers that know the principal
-        (WS handlers, HTTP routes) should always pass it so an ID-guessing
-        attack returns the same "not found" as a real miss.
+        Access predicate (namespace takes priority over owner_user_id):
+        - ``namespace``: return the workflow only if it belongs to that
+          namespace — the caller is a namespace member, so any workflow in
+          the namespace is accessible regardless of who created it.
+        - ``owner_user_id`` (fallback when no namespace): return only if the
+          workflow was created by that principal (original single-namespace
+          behaviour; guards against ID-guessing attacks).
+        - Neither provided: internal calls that need the record unconditionally.
         """
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
-                if owner_user_id is not None:
+                if namespace is not None:
+                    stmt = stmt.where(Workflow.namespace == namespace)
+                elif owner_user_id is not None:
                     stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalar_one_or_none()
