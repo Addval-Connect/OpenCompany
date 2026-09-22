@@ -180,13 +180,17 @@ async def cross_check_credentials(requirements: Dict[str, Any], auth_service) ->
     return missing
 
 
-async def check_name_conflict(name: str, database) -> Dict[str, Any]:
+async def check_name_conflict(name: str, database, namespace: Optional[str] = None) -> Dict[str, Any]:
     """Returns ``{has_conflict, suggested_name}`` for a proposed workflow
     name. Suggestion format: ``"<name> (imported)"`` with a numeric suffix
     if that itself collides — mirrors the conflict-resolution pattern in
     ``client/src/utils/workflow.ts`` callers.
+
+    When ``namespace`` is provided, conflict is only checked within that
+    namespace so that importing "IAuditor" into a different namespace
+    from where it already exists is not a conflict.
     """
-    existing = await database.get_all_workflows()
+    existing = await database.get_all_workflows(namespace=namespace)
     existing_names = {(getattr(w, "name", "") or "").lower() for w in existing}
     has_conflict = (name or "").lower() in existing_names
     suggested: Optional[str] = None
@@ -312,8 +316,9 @@ async def import_workflow(
     # 3. Cross-check stored credentials.
     missing_credentials = await cross_check_credentials(requirements, auth_service)
 
-    # 4. Name conflict check.
-    name_check = await check_name_conflict(proposed_name, database)
+    # 4. Name conflict check — scoped to the target namespace so a workflow
+    #    with the same name in another namespace is not a false conflict.
+    name_check = await check_name_conflict(proposed_name, database, namespace=namespace)
 
     # 5. If anything needs user confirmation, return preview without saving.
     needs_preview = (bool(missing_credentials) and not force_credentials) or name_check["has_conflict"]
