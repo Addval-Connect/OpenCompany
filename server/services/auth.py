@@ -100,9 +100,14 @@ class AuthService:
         """
         from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
 
-        if customer_id == DEFAULT_CREDENTIAL_CUSTOMER_ID:
+        # "owner" (auth-disabled) and "default" (the default namespace) both map
+        # to the empty prefix so existing credentials stay byte-identical across
+        # the auth-enabled → namespace migration.
+        if customer_id in (DEFAULT_CREDENTIAL_CUSTOMER_ID, "default"):
             return ""
-        return f"t:{customer_id}:"
+        # Non-default namespaces get an "ns:" prefix to avoid colliding with the
+        # legacy "t:{user_id}:" per-user rows (which the migration clears).
+        return f"ns:{customer_id}:"
 
     def _bump_catalogue_version(self) -> None:
         """Notify the credential registry that a credential has changed.

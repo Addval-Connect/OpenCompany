@@ -127,6 +127,7 @@ class Database:
             await self._migrate_user_namespaces()
             await self._migrate_workflow_namespace()
             await self._migrate_workflow_owner()
+            await self._migrate_credentials_to_namespace()
 
             logger.info("Database initialized successfully")
 
@@ -4534,6 +4535,41 @@ class Database:
         except Exception as exc:
             logger.error("_migrate_workflow_namespace failed", error=str(exc))
             raise
+
+    async def _migrate_credentials_to_namespace(self) -> None:
+        """Migrate per-user credential rows to the default namespace slot.
+
+        Old format: session_id = 't:1:default'  (legacy per-user prefix)
+        New format: session_id = 'default'       (default namespace, no prefix)
+
+        All rows with a 't:{user_id}:*' prefix belonged to the default namespace
+        (there was only one namespace before this migration), so they are safely
+        moved to the unprefixed slot.  The credentials.db engine is NOT the same
+        SQLAlchemy engine as self.engine — open it directly via aiosqlite.
+        """
+        import os
+        import aiosqlite
+
+        try:
+            creds_path = self.settings.credentials_db_resolved
+            if not os.path.exists(creds_path):
+                return
+            async with aiosqlite.connect(creds_path) as db:
+                # Migrate encrypted_api_keys: strip 't:{x}:' prefix from session_id
+                await db.execute(
+                    "UPDATE encrypted_api_keys "
+                    "SET session_id = SUBSTR(session_id, INSTR(SUBSTR(session_id, 3), ':') + 3) "
+                    "WHERE session_id LIKE 't:%:%'"
+                )
+                await db.commit()
+                rows = await db.execute(
+                    "SELECT COUNT(*) FROM encrypted_api_keys WHERE session_id LIKE 't:%:%'"
+                )
+                remaining = (await rows.fetchone())[0]
+                if remaining == 0:
+                    logger.info("credentials migration: all t:x: prefixed rows moved to default")
+        except Exception as exc:
+            logger.warning("_migrate_credentials_to_namespace failed", error=str(exc))
 
     async def list_user_namespaces(self, user_id: str) -> List[Dict[str, Any]]:
         """All namespaces accessible to user_id, with namespace status info."""

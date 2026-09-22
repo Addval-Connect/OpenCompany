@@ -484,6 +484,7 @@ async def handle_execute_node(data: Dict[str, Any], websocket: WebSocket) -> Dic
             outputs=data.get("outputs", {}),  # Upstream node outputs for data flow
             extras=invocation_extras or None,
             user_id=user_id,
+            credential_customer_id=getattr(websocket.state, "active_namespace", "default"),
         )
 
         if result.get("success"):

@@ -62,14 +62,18 @@ async def get_google_credentials(
 
     else:
         auth_service = get_auth_service()
-        tokens = await auth_service.get_oauth_tokens("google", customer_id="owner")
+        # Resolve the namespace: context carries "credential_customer_id" when the
+        # node execution was started in a non-default namespace.  Fall back to
+        # "default" (= same slot as "owner") for single-namespace deployments.
+        ns = context.get("credential_customer_id") or "default"
+        tokens = await auth_service.get_oauth_tokens("google", customer_id=ns)
 
         if not tokens or not tokens.get("access_token"):
             raise ValueError("Google Workspace not connected. Please authenticate via Credentials.")
 
         access_token = tokens["access_token"]
         # refresh_token is read from DB directly (RFC 9700; not cached).
-        refresh_token = await auth_service.get_oauth_refresh_token("google", customer_id="owner")
+        refresh_token = await auth_service.get_oauth_refresh_token("google", customer_id=ns)
 
     auth_service = get_auth_service()
     client_id = await auth_service.get_api_key("google_client_id") or ""
@@ -127,13 +131,13 @@ async def _try_refresh_and_persist(
 
     # Persist refreshed token back to the correct store
     if account_mode == "owner":
-        tokens = await auth_service.get_oauth_tokens("google", customer_id="owner")
+        tokens = await auth_service.get_oauth_tokens("google", customer_id=customer_id)
         await auth_service.store_oauth_tokens(
             provider="google",
             access_token=creds.token,
             refresh_token=creds.refresh_token or "",
             email=tokens.get("email") if tokens else None,
             name=tokens.get("name") if tokens else None,
-            customer_id="owner",
+            customer_id=customer_id,
         )
         logger.debug("Proactively refreshed and persisted Google access token")
