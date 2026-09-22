@@ -213,6 +213,8 @@ async def import_workflow(
     force_credentials: bool = False,
     auth_service,
     database,
+    namespace: Optional[str] = None,
+    owner_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Orchestrate the full import: validate -> cross-check -> name check
     -> (preview if confirmations needed) -> remap -> save.
@@ -376,6 +378,8 @@ async def import_workflow(
         slug=slug,
         description=workflow.get("description"),
         data=normalized_data,
+        namespace=namespace or "default",
+        owner_user_id=owner_user_id,
     )
     if not saved:
         return {"success": False, "error": "save_failed", "report": report}
