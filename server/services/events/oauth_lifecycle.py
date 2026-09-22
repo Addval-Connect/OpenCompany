@@ -138,7 +138,17 @@ def make_oauth_lifecycle_handlers(
         from services.oauth_utils import get_redirect_uri
 
         auth_service = container.auth_service()
-        client_id = await auth_service.get_api_key(f"{provider}_client_id")
+        # OAuth app credentials (client_id / client_secret) are instance-level
+        # but stored under the saving user's credential_customer_id.  Try the
+        # caller's customer first so the key is found regardless of whether the
+        # user who saved it was the owner principal or an authenticated user.
+        caller_customer = str(
+            getattr(getattr(websocket, "state", None), "user_id", None) or "owner"
+        )
+        client_id = (
+            await auth_service.get_api_key(f"{provider}_client_id", credential_customer_id=caller_customer)
+            or await auth_service.get_api_key(f"{provider}_client_id")
+        )
         if not client_id:
             return {
                 "success": False,
