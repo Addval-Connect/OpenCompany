@@ -143,11 +143,19 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
     store = get_idempotency_store("credentials")
     provider = data["provider"].lower()
 
-    # Credential owner is the authenticated WS principal, not the client
-    # payload.  Auth disabled → "owner" (OWNER_PRINCIPAL_ID = DEFAULT_CREDENTIAL_CUSTOMER_ID).
-    credential_customer_id = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or "owner"
-    )
+    # Instance-level OAuth app credentials (client_id / client_secret) are
+    # shared by the whole deployment — always store them under "owner" so every
+    # read path (oauth_factory, login handler, _auth_helper) finds them with the
+    # default customer regardless of which authenticated user saved them.
+    _INSTANCE_LEVEL_SUFFIXES = ("_client_id", "_client_secret")
+    if any(provider.endswith(s) for s in _INSTANCE_LEVEL_SUFFIXES):
+        credential_customer_id = "owner"
+    else:
+        # Per-user credentials use the authenticated WS principal.
+        # Auth disabled → "owner" (OWNER_PRINCIPAL_ID = DEFAULT_CREDENTIAL_CUSTOMER_ID).
+        credential_customer_id = str(
+            getattr(getattr(websocket, "state", None), "user_id", None) or "owner"
+        )
 
     async def _do_save() -> Dict[str, Any]:
         auth_service = container.auth_service()
