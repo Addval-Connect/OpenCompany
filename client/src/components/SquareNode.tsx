@@ -9,6 +9,7 @@ import { useWebSocket, useWhatsAppStatus, useNodeStatus } from '../contexts/WebS
 import { isNodeInBackendGroup, resolveNodeDescription, useNodeSpec } from '../lib/nodeSpec';
 import { NodeIcon } from '../assets/icons';
 import { AI_MODEL_PROVIDER_MAP } from '../lib/aiModelProviders';
+import { credentialProviderId } from '../lib/credentialProviderId';
 import { useProviderStored } from '../hooks/useCatalogueQuery';
 import type { NodeSpecHandle } from '../adapters/nodeSpecToDescription';
 
@@ -23,13 +24,6 @@ const hasToolGroup = (definition: any): boolean => {
 // (icon component, credential key) lives in the icon registry below.
 // The map of node types itself comes from the backend NodeSpec registry.
 const AI_MODEL_NODE_TYPES = AI_MODEL_PROVIDER_MAP;
-
-const CREDENTIAL_TO_PROVIDER: Record<string, string> = {
-  googleMapsApi: 'google_maps',
-  openaiApi: 'openai',
-  anthropicApi: 'anthropic',
-  googleAiApi: 'gemini',
-};
 
 const REACT_POSITION: Record<NodeSpecHandle['position'], Position> = {
   top: Position.Top,
@@ -120,7 +114,7 @@ const SquareNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnectab
     if (spec?.handles?.length) return spec.handles;
 
     // Cold-cache / legacy fallback. Once a NodeSpec arrives its declared
-    // topology replaces this list wholesale, including Context V2 handles.
+    // topology replaces this list wholesale, including Context handles.
     const fallback: NodeSpecHandle[] = [];
     if (!spec?.hideInputHandle) {
       fallback.push({
@@ -188,15 +182,14 @@ const SquareNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnectab
     [id, setRenamingNodeId]
   );
 
-  // Provider id for legacy credentialed nodes (non-AI, non-maps). AI
-  // model nodes route through `aiProviderId` above, Google Maps through
-  // `googleMapsKeyStatus` — both read from WS-context apiKeyStatuses.
-  const providerId = useMemo<string>(() => {
-    const credName = definition?.credentials?.[0]?.name;
-    if (credName && CREDENTIAL_TO_PROVIDER[credName]) return CREDENTIAL_TO_PROVIDER[credName];
-    if (type?.includes('map') || type?.includes('location')) return 'google_maps';
-    return '';
-  }, [definition?.credentials, type]);
+  // Catalogue provider of the node's first declared credential: the
+  // plugin credential id itself, or a mapped legacy name. Its `stored`
+  // flag is `hasApiKey` below; AI model nodes add the validation state
+  // from `aiProviderId`, Google Maps from `googleMapsKeyStatus`.
+  const providerId = useMemo<string>(
+    () => credentialProviderId(definition?.credentials?.[0]?.name, type),
+    [definition?.credentials, type],
+  );
 
   // "Is a credential configured for this provider?" reads from the
   // server-driven catalogue (single source of truth — the `stored`

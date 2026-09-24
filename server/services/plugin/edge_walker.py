@@ -194,8 +194,8 @@ async def collect_agent_connections(
     needs from its connected nodes.
 
     Returns ``(context, skills, tools, input, task)``. The first item is an
-    Agent Context reference/policy descriptor for V2 graphs; immutable V1
-    snapshots may still yield their legacy Memory descriptor.
+    Agent Context reference/policy descriptor; legacy ``input-memory``
+    graphs may still yield their recorded Memory descriptor.
     docstring for behaviour notes.
     """
     nodes = context.get("nodes")
@@ -253,7 +253,7 @@ async def collect_agent_connections(
                 if built:
                     context_data = built
         elif target_handle == "input-memory":
-            # Immutable V1 workflow snapshots retain their recorded behavior.
+            # Legacy input-memory graphs retain their recorded behavior.
             if source_node.get("type") == "simpleMemory":
                 context_data = await _build_memory_entry(
                     node_id,

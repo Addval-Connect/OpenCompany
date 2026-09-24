@@ -1,0 +1,93 @@
+# Fast checks for the desktop shell on pull requests that touch it or the
+# backend's desktop-host contract. No installers are built here; that is
+# desktop-release.yml's job.
+
+name: Desktop CI
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "server/core/approot.py"
+      - "server/core/desktop.py"
+      - "server/core/env_defaults.py"
+      - "server/routers/desktop.py"
+      - "server/main.py"
+      - ".github/workflows/desktop-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build client and JS executor sidecar
+        run: |
+          bun run --filter react-flow-client build
+          bun run --filter opencompany-nodejs-executor build
+
+      - name: Provision a backend venv for the smoke test
+        working-directory: server
+        run: uv sync --frozen --no-dev --extra docs
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Restore runtime downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: desktop/vendor
+          key: desktop-runtimes-${{ runner.os }}-${{ hashFiles('desktop/runtimes.json') }}
+
+      - name: Stage bundle
+        working-directory: desktop
+        run: bun run stage
+
+      - name: Typecheck, unit tests, invariants
+        working-directory: desktop
+        run: |
+          bun run typecheck
+          bun run test
+          bun run test:invariants
+
+      - name: Build shell
+        working-directory: desktop
+        run: bun run build
+
+      - name: Electron smoke (Linux, headless X)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: xvfb-run --auto-servernum -- bun run test:e2e
+
+      - name: Electron smoke (Windows)
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        run: bun run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: desktop/playwright-report
+          if-no-files-found: ignore

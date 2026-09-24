@@ -1,5 +1,6 @@
 """Modern async database service with SQLModel and SQLAlchemy 2.0."""
 
+import asyncio
 import json
 import inspect
 import secrets
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import case, text, func, update, or_
 from contextlib import asynccontextmanager
+
+from core.session_teardown import teardown_session as _teardown_session
 
 from core.config import Settings
 from models.database import (
@@ -231,6 +234,13 @@ class Database:
                     await conn.execute(text("ALTER TABLE user_settings ADD COLUMN agent_recursion_limit INTEGER DEFAULT 200"))
                     logger.info("Added agent_recursion_limit column to user_settings")
 
+                if "tool_result_max_chars" not in columns:
+                    # The model field's default is the source of truth; existing
+                    # rows need a real value because the client parser rejects null.
+                    default_chars = int(UserSettings.model_fields["tool_result_max_chars"].default)
+                    await conn.execute(text(f"ALTER TABLE user_settings ADD COLUMN tool_result_max_chars INTEGER DEFAULT {default_chars}"))
+                    logger.info("Added tool_result_max_chars column to user_settings")
+
                 if "max_concurrent_subagents" not in columns:
                     await conn.execute(text("ALTER TABLE user_settings ADD COLUMN max_concurrent_subagents INTEGER DEFAULT 3"))
                 if "max_delegation_depth" not in columns:
@@ -378,18 +388,31 @@ class Database:
 
     @asynccontextmanager
     async def get_session(self):
-        """Get async database session."""
+        """Get async database session.
+
+        Teardown (rollback + close) runs under ``asyncio.shield``. When the
+        calling task is cancelled mid-statement -- a WebSocket client that
+        disconnects while its connect-time handlers are still reading --
+        the cancellation would otherwise land inside the pool's
+        reset-on-return rollback; SQLAlchemy then logs "Exception during
+        reset or similar" with a full traceback and discards the
+        connection. Shielding lets the reset finish while the
+        CancelledError still propagates to the caller.
+        """
         if not self.async_session:
             raise RuntimeError("Database not initialized")
 
-        async with self.async_session() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+        session = self.async_session()
+        try:
+            yield session
+        except asyncio.CancelledError:
+            await asyncio.shield(_teardown_session(session, rollback=True))
+            raise
+        except Exception:
+            await asyncio.shield(_teardown_session(session, rollback=True))
+            raise
+        else:
+            await asyncio.shield(_teardown_session(session, rollback=False))
 
     async def _migrate_workflow_controls(self):
         """Backfill control-plane columns when upgrading an early preview DB."""
@@ -2243,6 +2266,7 @@ class Database:
                     "auto_add_skill_for_tools": settings.auto_add_skill_for_tools,
                     "auto_rebind_tools_after_canvas_change": settings.auto_rebind_tools_after_canvas_change,
                     "agent_recursion_limit": settings.agent_recursion_limit,
+                    "tool_result_max_chars": settings.tool_result_max_chars,
                     "max_concurrent_subagents": settings.max_concurrent_subagents,
                     "max_delegation_depth": settings.max_delegation_depth,
                     "created_at": settings.created_at.isoformat() if settings.created_at else None,

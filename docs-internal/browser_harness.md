@@ -35,7 +35,7 @@ The node's `doctor` operation runs `browser-harness doctor` and returns the full
 
 | | `browser` (agent-browser) | `browserHarness` |
 |---|---|---|
-| Engine | npm CLI + bundled Chrome-for-Testing (or system browser) | user's real Chrome over raw CDP |
+| Engine | npm-registry CLI (`agent-browser`, `bun add`ed into the shared packages tree and run on bun) + bundled Chrome-for-Testing (or system browser) | user's real Chrome over raw CDP |
 | Interaction | accessibility tree, `@eN` refs | screenshots + coordinate clicks + `js()` |
 | Sessions | named sessions, instance cap, idle timeout | one shared browser (daemon-held CDP socket) |
 | Agent surface | 15 structured operations | freeform Python against helpers |

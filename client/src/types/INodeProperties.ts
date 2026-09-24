@@ -276,6 +276,14 @@ export interface INodeUIHints {
    * `resolveNodeDescription` — the adapter drops uiHints' siblings and this
    * value must match what the server will actually allow. */
   executionTimeoutMs?: number;
+  /** Canvas node box size in px, declared by the plugin (agents via
+   * `STD_SIZE`, social send/receive). `AIAgentNode` reads them; absent
+   * hints fall back to 300x200. */
+  width?: number;
+  height?: number;
+  /** InputSection: the start node's user-authored JSON blob is the
+   * upstream "output" to show (Wave 10.G.5). */
+  hasInitialDataBlob?: boolean;
 }
 
 export interface INodeTypeDescription {

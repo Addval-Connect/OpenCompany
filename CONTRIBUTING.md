@@ -17,11 +17,11 @@ See [SETUP.md](docs-internal/SETUP.md) for environment setup and [SCRIPTS.md](do
 
 At a glance:
 
-- **132 workflow nodes** across 27 populated palette groups (live count: `len(services.node_registry.NODE_METADATA)` *after* importing `nodes` — a bare `server/nodes/**/__init__.py` glob both over-counts helper packages and under-counts groups that hold several node types in one package; group list: `server/nodes/groups.py`)
+- **148 workflow nodes** across 33 populated palette groups (34 registered in `server/nodes/groups.py`) (live count: `len(services.node_registry.NODE_METADATA)` *after* importing `nodes` — a bare `server/nodes/**/__init__.py` glob both over-counts helper packages and under-counts groups that hold several node types in one package)
 - **13 native LLM providers** (11 cloud providers plus Ollama and LM Studio; 12 standalone chat-model nodes because xAI is selected directly by agent nodes)
 - **Specialized AI agents** with the Agent Teams delegation pattern — SSOT is the `AI_AGENT_TYPES` frozenset in `server/constants.py`, which spans the base/specialized/team-lead agents plus the CLI-backed (`claude_code_agent`, `rlm_agent`) and Vertex-hosted (`vertex_managed_agent`) variants; `codex_agent` is a sibling CLI-agent plugin
 - **WebSocket-first API** replacing most REST endpoints (live handler count = `MESSAGE_HANDLERS` + plugin registries)
-- **73 built-in skills** across 18 folders, editable in-UI with SKILL.md defaults on disk (live count: glob `server/skills/**/SKILL.md`)
+- **78 built-in skills** across 18 folders, editable in-UI with SKILL.md defaults on disk (live count: `find server/skills -name SKILL.md | wc -l`)
 - **Two execution modes** with automatic fallback: Temporal distributed, sequential
 
 ## How Workflows Execute
@@ -40,6 +40,27 @@ Direct chat completions and every new agent execution use the native SDK layer i
 
 Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [native_llm_sdk.md](docs-internal/native_llm_sdk.md) - [agent_teams.md](docs-internal/agent_teams.md) - [memory_compaction.md](docs-internal/memory_compaction.md) - [cli_agent_framework.md](docs-internal/cli_agent_framework.md)
 
+## More Diagrams
+
+Fourteen source-backed architecture and product-panel diagrams live next to the ones above in [docs/diagrams/](docs/diagrams/). Each carries the source files it was drawn from in its `<desc>`.
+
+| Diagram | What it shows |
+|---|---|
+| [System context](docs/diagrams/system-context.svg) | Who uses OpenCompany and which external capabilities it orchestrates |
+| [Runtime and trust topology](docs/diagrams/runtime-trust-topology.svg) | Browser, desktop and CLI clients, the authenticated REST / WebSocket / MCP / webhook surfaces, Temporal and the lazy sidecars |
+| [Workflow execution routing](docs/diagrams/workflow-execution-routing.svg) | Temporal, parallel and sequential branches converging on the NodeExecutor pipeline |
+| [Durable deployment and events](docs/diagrams/durable-deployment-events.svg) | Generation snapshots, WorkflowControlWorkflow, push / poll / cron triggers, CloudEvents dispatch |
+| [Plugin, agent and team composition](docs/diagrams/plugin-agent-team-composition.svg) | How plugins become chat-model and agent nodes, assemble context, skills and tools, and form teams |
+| [Persistence and secret plane](docs/diagrams/persistence-secret-plane.svg) | workflow.db versus the encrypted credentials.db boundary |
+| [Workspace anatomy](docs/diagrams/workspace-anatomy.svg) | Immutable id to mutable slug directories, contained I/O, CLI worktrees and materialized skills |
+| [Node configuration anatomy](docs/diagrams/node-configuration-anatomy.svg) | The Input / Parameters / Output modal, local draft, save-before-run and correlated output |
+| [Credentials architecture](docs/diagrams/credentials-architecture.svg) | Server-owned catalogue, WebSocket handlers, AuthService and encrypted storage |
+| [Team operations](docs/diagrams/team-operations.svg) | Task Manager lifecycle from blocked and queued through submission, review and finish |
+| [Agent context versus memory](docs/diagrams/agent-context-memory.svg) | The stored conversation (RFC-0002) beside the explicit Memory tool |
+| [Master Skill editor](docs/diagrams/master-skill-editor.svg) | Skill sources, the catalogue and instruction panes, expansion and runtime badges |
+| [Workspace files](docs/diagrams/workspace-files.svg) | The Gallery node panel: WebSocket listing, HTTP content and the FileRef output |
+| [Runtime observability dock](docs/diagrams/runtime-observability-dock.svg) | Chat, Console and Terminal producers, retention and the dock UI |
+
 ## Repository Map
 
 | Directory | What lives here | Start reading |
@@ -48,7 +69,7 @@ Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [nati
 | `client/src/components/` | React Flow canvas, parameter panel, modals | [CLAUDE.md](CLAUDE.md) |
 | `server/services/` | WorkflowService, NodeExecutor, AI service | [DESIGN.md](docs-internal/DESIGN.md) |
 | `server/services/handlers/` | Cross-cutting orchestration only (`tools.py` AI-tool dispatch + delegation, `triggers.py`, `todo.py`) — per-node handlers live inside the plugins since Wave 11 | [node_creation.md](docs-internal/node_creation.md) |
-| `server/services/llm/` | Native LLM SDK layer (12 providers) | [native_llm_sdk.md](docs-internal/native_llm_sdk.md) |
+| `server/services/llm/` | Native LLM SDK layer (13 providers) | [native_llm_sdk.md](docs-internal/native_llm_sdk.md) |
 | `server/services/execution/` | Decide pattern, DLQ, recovery, conditions | [DESIGN.md](docs-internal/DESIGN.md) |
 | `server/services/temporal/` | Distributed execution via Temporal | [TEMPORAL_ARCHITECTURE.md](docs-internal/TEMPORAL_ARCHITECTURE.md) |
 | `server/routers/websocket.py` | WebSocket endpoint + core `MESSAGE_HANDLERS` (plugins register more via `ws_handler_registry`) | [status_broadcaster.md](docs-internal/status_broadcaster.md) |
@@ -57,6 +78,7 @@ Deep dives: [agent_architecture.md](docs-internal/agent_architecture.md) - [nati
 | `server/config/` | llm_defaults.json, pricing.json, model_registry.json, email_providers.json, google_apis.json, credential_providers.json, ai_cli_providers.json, node_allowlist.json | [pricing_service.md](docs-internal/pricing_service.md), [node_allowlist.md](docs-internal/node_allowlist.md) |
 | `server/tests/` | Contract-test invariants + per-category node tests + `NodeTestHarness` | [tests/nodes/_harness.py](server/tests/nodes/_harness.py), [tests/credentials/README.md](server/tests/credentials/README.md) |
 | `client/src/` (styling + themes) | Tailwind tokens, shadcn primitives, the 12-theme contract | [frontend_architecture.md](docs-internal/frontend_architecture.md), [theme_system.md](docs-internal/theme_system.md) |
+| `desktop/` | Electron desktop shell — a standalone bun package (not a root workspace member) that bundles uv + Python + bun (no Node, no npm), provisions the backend venv on first launch and hosts the backend-served SPA in a native window | [desktop_app.md](docs-internal/desktop_app.md), [desktop_host_contract.md](docs-internal/desktop_host_contract.md) |
 | `docs-internal/` | In-repo architecture deep dives (50+ files) | Index below |
 
 ## How to Contribute Features
@@ -123,10 +145,11 @@ The diagram above shows the full lifecycle of a workflow node: one self-containe
 - **Import sanity:** `uv run pytest --collect-only` (from `server/`) is the live plugin-count invariant — it fails if any plugin errors at import.
 - **Credential tests** follow the numbered-invariant style documented in [server/tests/credentials/README.md](server/tests/credentials/README.md).
 - Run everything: `uv run pytest` from `server/`, `bun run --filter react-flow-client test` from the repo root, `uv run pytest cli/tests` from the repo root.
+- **Desktop shell:** from `desktop/`, `bun run typecheck && bun run test && bun run test:invariants` (the last needs `bun run stage` first), and `bun run build && bun run test:e2e` for the Playwright Electron smoke. In an editor-hosted terminal unset `ELECTRON_RUN_AS_NODE` before launching Electron by hand.
 
 ## Local Dev Quick Reference
 
-Development from source uses **bun** (not npm). The `scripts/preinstall.js` hook enforces this when `bunfig.toml` is present (it keys on the file plus a `bun` user agent; end-user npm tarball installs are unaffected because `bunfig.toml` is not shipped in the package). Install bun once from https://bun.sh — Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`; macOS/Linux: `curl -fsSL https://bun.sh/install | bash`.
+Development from source uses **bun** (not npm) — the same bun that end users install with (`bun add -g @zeenie-ai/opencompany`) and that everything shipped runs on. The `scripts/preinstall.js` hook enforces this when `bunfig.toml` is present (it keys on the file plus a `bun` user agent; end-user `bun add -g` installs never trigger it — a global add runs no lifecycle scripts, and `bunfig.toml` is not shipped in the tarball anyway). Install bun once from https://bun.sh — Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`; macOS/Linux: `curl -fsSL https://bun.sh/install | bash`.
 
 ```bash
 bun install            # install workspace dependencies
@@ -138,11 +161,15 @@ bun run --filter react-flow-client typecheck:tsc # second opinion under tsc 5.9 
 uv run pytest          # run backend tests (from server/, uv-managed venv)
 ```
 
+The desktop shell has its own package: `cd desktop && bun install && bun run stage && bun run dev` (see [desktop/README.md](desktop/README.md)). It is not a root workspace member, so root `bun install` does not touch it.
+
+`server/uv.lock` is committed. After changing `server/pyproject.toml`, run `uv lock` in `server/` and commit the lock too; CI fails with `uv lock --check` otherwise, and the desktop app installs from the lock with `--frozen`.
+
 **Known differences from pnpm** (the workspace migrated from pnpm@9 to bun@1.4):
 
 - **No strict-peer-dependencies equivalent.** bun never errors on peer conflicts, so the check that kept client `typescript` inside typescript-eslint's peer range is gone from install time — the CLI test locking client `typescript` to `^5` (`cli/tests/test_release_pipeline_config.py`) is now the only guard.
-- **Dependabot's `bun` ecosystem does version updates only — no security-update PRs.** Alerts still fire; remediation goes through the top-level `overrides` block in the root `package.json` (the pins formerly under `pnpm.overrides`).
-- **`--bun` is not enabled anywhere.** Node 22 remains the runtime for vite/vitest/eslint/the sidecar. A trial of `--bun` for `vite dev` only is a documented follow-up once the package-manager migration proves stable — never for vitest/eslint (known bun-runtime breakage: oven-sh/bun#20762, #13346).
+- **Dependabot is disabled (no PRs of any kind).** Alerts still show in the Security tab; remediation is a hand bump, through the top-level `overrides` block in the root `package.json` for transitive JS pins (the pins formerly under `pnpm.overrides`) or `uv lock --upgrade-package` for the server. See [ci_cd.md](docs-internal/ci_cd.md) "Dependency update policy".
+- **`--bun` is not enabled anywhere — but Node is dev/CI-only now.** Everything shipped runs on bun: the `company` shim (`bin/cli.js`, `#!/usr/bin/env bun`), the JS executor sidecar (`bun build --target=bun` bundle), the plugin CLIs `bun add`ed into `~/.opencompany/packages/` (`server/core/js_runtime.py`) and the end-user install itself. Node (CI installs 22) is kept only so bun can run vite / vitest / eslint / playwright / electron-builder on it via their node shebangs when it is present — vitest and eslint have open bugs on the bun runtime (oven-sh/bun#20762, #13346) — and `company build` reports Node as optional (bun runs the build tools itself when it is absent). A trial of `--bun` for `vite dev` only remains a documented follow-up; never for vitest/eslint.
 
 Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.md](docs-internal/SCRIPTS.md)
 
@@ -152,7 +179,7 @@ Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.
 |---|---|
 | [DESIGN.md](docs-internal/DESIGN.md) | Execution engine architecture, design patterns, execution modes |
 | [TEMPORAL_ARCHITECTURE.md](docs-internal/TEMPORAL_ARCHITECTURE.md) | Distributed execution via Temporal activities |
-| [workflow-schema.md](docs-internal/workflow-schema.md) | Workflow JSON schema and node catalog (live count = glob `server/nodes/**/__init__.py`) |
+| [workflow-schema.md](docs-internal/workflow-schema.md) | Workflow JSON schema and node catalog (live count = `len(services.node_registry.NODE_METADATA)` after importing `nodes`) |
 | [ROADMAP.md](docs-internal/ARCHIVE/ROADMAP.md) | *Archived* status snapshot; current state is in DESIGN.md and the Temporal docs |
 | [SETUP.md](docs-internal/SETUP.md) | Development environment setup |
 | [SCRIPTS.md](docs-internal/SCRIPTS.md) | bun/shell scripts and CLI verbs reference |
@@ -178,6 +205,8 @@ Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.
 | [pricing_service.md](docs-internal/pricing_service.md) | LLM and API cost tracking |
 | [proxy_service.md](docs-internal/proxy_service.md) | Residential proxy provider management |
 | [ci_cd.md](docs-internal/ci_cd.md) | GitHub Actions workflows |
+| [desktop_app.md](docs-internal/desktop_app.md) | Electron desktop shell: bundled runtimes, first-run provisioning, packaging, updates, CI |
+| [desktop_host_contract.md](docs-internal/desktop_host_contract.md) | The backend's side of being owned by a GUI shell: relocatable app root, readiness, watchdogs, shutdown route |
 | [node_creation.md](docs-internal/node_creation.md) | How to create new nodes |
 | [memory_lifecycle.md](docs-internal/ARCHIVE/memory_lifecycle.md) | *Archived* pre-RFC-0002 markdown memory model; see agent_context_flow.md and memory_compaction.md |
 | [tool_building_pipeline.md](docs-internal/tool_building_pipeline.md) | Canonical home for `_build_tool_from_node`, tool discovery, per-type Temporal dispatch |
@@ -192,7 +221,7 @@ Full setup and scripts reference: [SETUP.md](docs-internal/SETUP.md) - [SCRIPTS.
 | [authentication.md](docs-internal/authentication.md) | JWT/cookie auth — modes, middleware, frontend bootstrap |
 | [errors.md](docs-internal/errors.md) | Known errors and troubleshooting |
 | [performance.md](docs-internal/performance.md) | Cold-start measurements, optimisation history, anti-patterns |
-| [release_build_pipeline.md](docs-internal/release_build_pipeline.md) | npm-distribution build pipeline (TypeScript 7 native-Go type-check, esbuild sidecar, bytecode) |
+| [release_build_pipeline.md](docs-internal/release_build_pipeline.md) | Registry-tarball build pipeline (TypeScript 7 native-Go type-check, `bun build` sidecar, bytecode; bun is the only shipped JS runtime) |
 | [Skill Creation Guide](server/skills/GUIDE.md) | How to create new skills |
 
 ## Community

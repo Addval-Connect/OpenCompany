@@ -6,7 +6,7 @@ Locks in the invariants enumerated in [docs-internal/ARCHIVE/credentials_panel.m
 
 ```bash
 cd server
-uv pip install -e ".[test]"
+uv sync   # the dev dependency group (pytest, respx, ...) installs by default
 uv run pytest tests/credentials/ -v
 
 # Coverage report on the three critical modules
@@ -24,6 +24,8 @@ uv run pytest tests/credentials/ --cov=core.encryption --cov=core.credentials_da
 | `test_twitter_oauth.py` | Invariants 9, 10 — PKCE state single-use, code_challenge = base64url(sha256(verifier)) |
 | `test_google_oauth.py` | Invariant 11 — `access_type=offline`, `prompt=consent` |
 | `test_websocket_handlers.py` | Invariants 1, 5, 6 — WS message types, snake_case `has_key`, distinct provider-defaults handler |
+| `test_credential_broadcasts.py` | Credential-change broadcast contract — every credential-mutation handler emits `update_api_key_status` and/or `broadcast_credential_event` |
+| `test_credential_catalogue_shape.py` | `credential_providers.json` top-level shape and provider placement — every provider lives under `providers`, cross-checked against the registered credential classes |
 
 ## Fixtures
 

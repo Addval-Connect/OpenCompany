@@ -10,8 +10,8 @@ Interactions API and bridges the OpenCompany canvas into it:
   the local aiAgent loop), then answered via ``function_result`` inputs
   on a chained follow-up create.
 - Conversation + sandbox continuity lives in the backend Context store as an
-  opaque interaction/environment provider binding. Immutable V1 generations
-  retain their recorded Simple Memory parameter bridge.
+  opaque interaction/environment provider binding. Legacy ``input-memory``
+  graphs retain their recorded Simple Memory parameter bridge.
 - Cloud-side tool usage (sandbox commands, google_search, ...) is
   surfaced LIVE as dynamic ``vertexCloudTool`` canvas nodes via the
   workflow-ops protocol (agentBuilder pattern) — see ``_ops.py``: each

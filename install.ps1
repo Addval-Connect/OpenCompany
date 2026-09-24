@@ -2,14 +2,17 @@
 # Usage: iwr -useb https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/install.ps1 | iex
 #
 # This script installs OpenCompany and its dependencies:
-# - Node.js 22+ (via winget/choco)
+# - bun (the JavaScript runtime and package manager; no Node.js, no npm)
 # - Python 3.12+ (via winget/choco)
 # - uv (Python package manager)
+#
+# Prefer the desktop app if you just want to use OpenCompany on a laptop; this
+# path is for terminal use.
 
 $ErrorActionPreference = "Stop"
 
-$MIN_NODE_VERSION = 22
 $MIN_PYTHON_VERSION = "3.12"
+$PKG_NAME = "@zeenie-ai/opencompany"
 
 # Colors
 function Write-Color {
@@ -26,7 +29,7 @@ function Error-Exit { Write-Color "[ERROR] $args" "Red"; exit 1 }
 Write-Host ""
 Write-Color "  OpenCompany" "Cyan"
 Write-Host ""
-Write-Host "Open-source workflow automation with AI agents"
+Write-Host "Self-improving AI employees, running on your own computer"
 Write-Host ""
 
 # Check if command exists
@@ -47,43 +50,33 @@ function Refresh-Path {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
+# bun installs to $env:BUN_INSTALL (default ~\.bun) and puts global bin shims
+# in its bin dir. Where it stores the global package itself varies, so nothing
+# below depends on that: the `company` shim knows its own package root and
+# `company provision` does the rest.
+$BUN_HOME = if ($env:BUN_INSTALL) { $env:BUN_INSTALL } else { Join-Path $env:USERPROFILE ".bun" }
+$BUN_BIN_DIR = Join-Path $BUN_HOME "bin"
+
 # =============================================================================
 # Dependency Checks and Installation
 # =============================================================================
 
-function Check-Node {
-    if (Has-Command "node") {
-        $version = (node --version) -replace "v", ""
-        $major = [int]($version.Split(".")[0])
-        if ($major -ge $MIN_NODE_VERSION) {
-            Success "Node.js v$version"
-            return $true
-        }
-        Warn "Node.js v$version is too old (need v$MIN_NODE_VERSION+)"
+function Check-Bun {
+    if (Has-Command "bun") {
+        Success "bun $(bun --version)"
+        return $true
     }
     return $false
 }
 
-function Install-Node {
-    Info "Installing Node.js $MIN_NODE_VERSION..."
-    $pm = Get-PackageManager
-
-    switch ($pm) {
-        "winget" {
-            winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
-        }
-        "choco" {
-            choco install nodejs-lts -y
-        }
-        default {
-            Error-Exit "Please install winget or chocolatey, or install Node.js manually from https://nodejs.org/"
-        }
-    }
-
+function Install-Bun {
+    Info "Installing bun (JavaScript runtime and package manager)..."
+    Invoke-RestMethod https://bun.sh/install.ps1 | Invoke-Expression
+    $env:Path = "$BUN_BIN_DIR;$env:Path"
     Refresh-Path
-
-    if (-not (Check-Node)) {
-        Error-Exit "Failed to install Node.js. Please install manually and restart PowerShell."
+    $env:Path = "$BUN_BIN_DIR;$env:Path"
+    if (-not (Check-Bun)) {
+        Error-Exit "Failed to install bun. Install it manually from https://bun.sh and restart PowerShell."
     }
 }
 
@@ -159,18 +152,19 @@ function Install-Uv {
     }
 }
 
-# The pre-rebrand package owns the deprecated `machina` command too. Remove it
-# before installing OpenCompany so npm does not fail with an existing shim.
-function Remove-LegacyMachinaOs {
-    npm list -g --depth=0 machinaos *> $null
-    if ($LASTEXITCODE -ne 0) { return }
-
-    Info "Removing legacy machinaos package..."
-    npm uninstall -g machinaos
-    if ($LASTEXITCODE -ne 0) {
-        Error-Exit "Unable to remove legacy machinaos. Run PowerShell as Administrator and retry."
+# A previous npm-based install (or the pre-rebrand `machinaos` package) leaves
+# a `company` / `machina` shim on PATH that would shadow the bun one. Remove it
+# when npm happens to be around; skip silently otherwise.
+function Remove-LegacyNpmInstalls {
+    if (-not (Has-Command "npm")) { return }
+    foreach ($pkg in @($PKG_NAME, "machinaos")) {
+        npm list -g --depth=0 $pkg *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Info "Removing legacy npm install of $pkg..."
+            npm uninstall -g $pkg *> $null
+            if ($LASTEXITCODE -ne 0) { Warn "Could not remove $pkg; run: npm uninstall -g $pkg" }
+        }
     }
-    Success "Legacy machinaos package removed"
 }
 
 # =============================================================================
@@ -183,21 +177,42 @@ function Main {
     Write-Host ""
 
     # Check and install dependencies
-    if (-not (Check-Node)) { Install-Node }
+    if (-not (Check-Bun)) { Install-Bun }
     if (-not (Check-Python)) { Install-Python }
     if (-not (Check-Uv)) { Install-Uv }
 
-    # Avoid a collision with the deprecated `machina` compatibility shim.
-    Remove-LegacyMachinaOs
+    Remove-LegacyNpmInstalls
 
     Write-Host ""
     Info "Installing OpenCompany..."
     Write-Host ""
 
-    # Install OpenCompany from npm
-    npm install -g "@zeenie-ai/opencompany"
+    # bun finds its global "project" by walking up from $BUN_INSTALL\install\global
+    # until it meets a package.json. A stray package.json or package-lock.json in
+    # the user profile (an old npm mishap) therefore hijacks global installs and
+    # `bun add -g` fails with "InvalidNPMLockfile" (docs-internal/errors.md #23).
+    # Giving the global dir its own manifest stops the walk-up.
+    $globalDir = Join-Path $BUN_HOME "install\global"
+    New-Item -ItemType Directory -Force -Path $globalDir | Out-Null
+    $globalManifest = Join-Path $globalDir "package.json"
+    if (-not (Test-Path $globalManifest)) {
+        Set-Content -Path $globalManifest -Value '{ "private": true }' -Encoding utf8
+    }
+
+    # Global install as the current user (bun's global root is user-owned).
+    bun add -g $PKG_NAME
     if ($LASTEXITCODE -ne 0) {
-        Error-Exit "npm install -g failed. Run PowerShell as Administrator and retry."
+        Error-Exit "bun add -g $PKG_NAME failed."
+    }
+
+    # bun runs no lifecycle scripts for a global package, so provision the
+    # Python side now rather than on the first `company` command. The shim is
+    # addressed through bun's own answer for the global bin dir.
+    $company = Join-Path (bun pm bin -g) "company.exe"
+    Info "Provisioning the Python environment..."
+    & $company provision
+    if ($LASTEXITCODE -ne 0) {
+        Error-Exit "Provisioning failed. Re-run with: company provision"
     }
 
     Write-Host ""
@@ -208,32 +223,11 @@ function Main {
     Write-Host "  Start OpenCompany:"
     Write-Host "    company start"
     Write-Host ""
-    Write-Host "  Open in browser:"
-    # .env.template ships inside the installed package. This used to read it
-    # from the working directory, which is wherever the user ran the script --
-    # so it printed a bare "http://localhost:", and dereferencing .Matches on
-    # the null result could fault outright. Resolve through npm's global root.
-    $appPort = $null
-    $npmRoot = (npm root -g 2>$null | Select-Object -First 1)
-    if ($npmRoot) {
-        $templatePath = Join-Path $npmRoot "@zeenie-ai/opencompany/.env.template"
-        if (Test-Path $templatePath) {
-            $match = Select-String -Path $templatePath -Pattern "^PYTHON_BACKEND_PORT=(\d+)" |
-                Select-Object -First 1
-            if ($match) { $appPort = $match.Matches.Groups[1].Value }
-        }
-    }
-    if ($appPort) {
-        Write-Host "    http://localhost:$appPort"
-    } else {
-        Write-Host "    the URL printed by 'company start'"
-    }
-    Write-Host ""
-    Write-Host "  For development from source, install bun:"
-    Write-Host "    https://bun.sh"
-    Write-Host ""
     Write-Host "  Run diagnostics:"
     Write-Host "    company doctor"
+    Write-Host ""
+    Write-Host "  If 'company' is not found, open a new PowerShell window (bun's bin dir"
+    Write-Host "  was added to your PATH)."
     Write-Host ""
 }
 

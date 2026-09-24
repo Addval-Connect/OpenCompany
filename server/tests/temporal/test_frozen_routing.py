@@ -140,14 +140,14 @@ def test_frozen_dispatch_never_reads_mutable_settings():
     }
 
 
-def test_frozen_agent_dispatch_selects_context_v2_protocol():
+def test_frozen_agent_dispatch_selects_context_protocol():
     from services.temporal.workflow import MachinaWorkflow
 
     dispatch = MachinaWorkflow()._resolve_dispatch(
         "aiAgent",
         graph_version=2,
         generation=3,
-        context_v2_enabled=True,
+        context_enabled=True,
         routing_snapshot={
             "version": 1,
             "agent_workflow_enabled": True,

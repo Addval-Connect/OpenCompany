@@ -92,6 +92,18 @@ class RLMService:
             provider = parameters.get("provider", "openai")
             model = parameters.get("model", "")
 
+            # RLM builds its own clients from constants.PROVIDER_TO_BACKEND
+            # and never reads a user base URL, so any other provider (a
+            # local server, a named endpoint) would silently be sent to
+            # api.openai.com with that provider's key.
+            from .constants import PROVIDER_TO_BACKEND
+
+            if provider not in PROVIDER_TO_BACKEND:
+                raise ValueError(
+                    f"The RLM Agent cannot run on provider {provider!r}. "
+                    f"Choose one of: {', '.join(sorted(PROVIDER_TO_BACKEND))}."
+                )
+
             if not model or not is_model_valid_for_provider(model, provider):
                 model = await get_default_model_async(provider, database)
 

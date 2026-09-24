@@ -73,6 +73,13 @@ const REQUEST_TIMEOUT = 30000;
 // while retaining a finite bound so a lost response cannot lock controls forever.
 export const WORKFLOW_CONTROL_REQUEST_TIMEOUT = 5 * 60 * 1000;
 
+// validate_api_key probes the user's server when the credential is a Base
+// URL (Ollama, LM Studio, named OpenAI-compatible endpoints): it roots the
+// URL, detects the server's kind and lists its models. The backend bounds
+// each step (nodes/model/_local_validator.py); this stays above their sum, so
+// a slow save is not cut off here and then completes behind the user's back.
+export const CREDENTIAL_PROBE_REQUEST_TIMEOUT = 60 * 1000;
+
 // Maximum queued sends before backpressure kicks in (FIFO eviction of oldest)
 const QUEUE_MAX_SIZE = 200;
 
@@ -472,8 +479,9 @@ interface WebSocketContextValue {
   clearChatMessages: () => void;
   sendChatMessage: (message: string, nodeId?: string) => Promise<void>;
 
-  // Generic request method
-  sendRequest: <T = any>(type: string, data?: Record<string, any>) => Promise<T>;
+  // Generic request method. timeoutMs: omitted = the 30 s default,
+  // negative = no timeout.
+  sendRequest: <T = any>(type: string, data?: Record<string, any>, timeoutMs?: number) => Promise<T>;
 
   // Generic broadcast subscription. Returns an unsubscribe fn.
   // Use for ad-hoc backend-pushed events like `workflow_ops_apply`
@@ -751,13 +759,9 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const currentWorkflowId = currentWorkflow?.id;
 
   const [isConnected, setIsConnected] = useState(false);
-  // `isReady` flips true only AFTER the init burst inside `ws.onopen`
-  // completes (api-key probes, terminal/chat/console history). Queries
-  // that depend on backend-served catalogue data (NodeSpec catalogue,
-  // node groups, node parameters, user settings, credential panels)
-  // gate on `isReady` instead of `isConnected` so they fire once,
-  // post-burst, instead of racing the serial awaits and arriving in
-  // arbitrary order.
+  // `isReady` flips true as soon as the socket opens and the pending-send
+  // queue drains (Wave 32: no init burst). Catalogue/spec queries gate on
+  // it rather than `isConnected` so queued sends replay first.
   const [isReady, setIsReady] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [androidStatus, setAndroidStatus] = useState<AndroidStatus>(defaultAndroidStatus);
@@ -2075,8 +2079,8 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         // First click "did nothing" because catalogue / nodeSpec / credentials
         // queries gate on `isReady` and stayed disabled. The cache (warmed
         // from localStorage via PersistQueryClientProvider for `nodeSpec` /
-        // `nodeGroups` / `pluginCatalogue` / `skillContent`) carries the
-        // visible state until refreshes land.
+        // `nodeGroups` — see lib/queryPersist.ts) carries the visible state
+        // until refreshes land.
         //
         // Wave 32 also dropped the legacy hardcoded `probeApiKey` loop over
         // `['openai', 'anthropic', 'gemini', 'google_maps', 'android_remote']`.
@@ -3127,7 +3131,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const response = await sendRequest<any>('validate_api_key', {
         provider,
         api_key: apiKey
-      });
+      }, CREDENTIAL_PROBE_REQUEST_TIMEOUT);
       // Backend returns one of:
       //   { success: true,  valid: true,  models }         — key is good
       //   { success: true,  valid: false, message }        — clean rejection (401/403/timeout/etc)

@@ -29,7 +29,7 @@ in the auto-add-skill edge dispatcher.
 |--------|-----------------|----------|---------|
 | `output-tool` (source, top, label "Skill", role `skill`) | skill | yes (only handle) | Connect to an agent's `input-skill` |
 
-No `input-main`, no `main` output. uiHints: `isToolPanel`,
+No `input-main`, no `main` output. uiHints:
 `isMasterSkillEditor`, `hideRunButton`, `hideInputSection`,
 `hideOutputSection`; `isConfigNode` auto-derived from the `tool` group
 (the executor excludes it from execution layers).

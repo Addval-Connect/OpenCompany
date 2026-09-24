@@ -1,4 +1,4 @@
-# RFC-0002 — Agent Context V2 and Tool-Based Memory
+# RFC-0002 — Agent Context and Tool-Based Memory
 
 Status: Partly superseded (August 2026)  
 Graph version: 2  
@@ -33,8 +33,11 @@ the journal, provider bindings, tenant scope, mutation rules, compaction
 algorithm, or durable Memory items. Those responsibilities live in backend
 services and are reached through the plugin and tool registries.
 
-Each agent that declares the `requiresContext` capability has exactly one
-system-managed Context companion. A Context owns multiple isolated threads:
+An agent that declares the `requiresContext` capability accepts at most one
+Context node, which the user adds and deletes on the canvas. (Superseded,
+September 2026: this originally gave every such agent exactly one
+system-managed Context companion that the backend created and restored; see
+§11.) A Context owns multiple isolated threads:
 
 1. an explicit chat/session ID selects a persistent session thread;
 2. otherwise a delegated task ID selects a task thread;
@@ -45,10 +48,12 @@ shared.
 
 ## 2. Decisions
 
-- Reuse `MessageWireV2`, including ordered blocks, raw malformed tool
-  arguments, signed/thought blocks, and provider continuation state.
-- Preserve existing Temporal V1 histories. Context V2 is selected only by a
-  new graph/generation and uses new workflow/activity type names.
+- Reuse `MessageWire` (superseded name: `MessageWireV2` — the v1/v2 duality
+  was purged; there is one wire standard), including ordered blocks, raw
+  malformed tool arguments, signed/thought blocks, and provider continuation
+  state.
+- Preserve existing Temporal histories. The Context store is selected only by
+  a new graph/generation and uses new workflow/activity type names.
 - Keep Gemini on `generate_content`; an Interactions migration is out of
   scope.
 - Do not reintroduce LangChain compatibility.
@@ -68,24 +73,20 @@ The backend NodeSpec is the source of truth.
 
 ### 3.1 Context node
 
-The `context` plugin is a passive, system-managed configuration node:
+The `context` plugin is a passive, optional configuration node that the user
+adds and deletes on the canvas:
 
 ```text
 context.output-context -> agent.input-context
 ```
 
-Its parameters are policy only:
+It declares no parameters; the connection is the whole configuration
+(`AgentContextParams` is empty).
 
-```text
-compaction_mode: auto | native | portable | disabled
-trigger_ratio: float = 0.8
-context_window_override?: integer
-exact_tail_retention_count: integer
-```
-
-Its NodeSpec advertises `isContextPanel` and `systemManaged`. The frontend
-renders the panel and calls backend handlers; it does not create journals,
-choose thread IDs, calculate pressure, compact messages, or mutate epochs.
+Its NodeSpec advertises `isContextPanel` and `systemManaged`; the latter only
+keeps the node out of the component palette. The frontend renders the panel
+and calls backend handlers; it does not create journals, choose thread IDs,
+calculate pressure, compact messages, or mutate epochs.
 
 ### 3.2 Memory node
 
@@ -183,7 +184,7 @@ For every iteration it commits:
 1. effective request snapshot, including resolved messages/system instruction,
    provider/model/settings, compiled tool definitions, attachments, and
    dynamic tool surface;
-2. complete assistant `MessageWireV2`, before any requested tool executes;
+2. complete assistant `MessageWire`, before any requested tool executes;
 3. each tool result, validation error, execution error, or ambiguous outcome,
    before another provider request;
 4. final response and usage through the same journal.
@@ -258,8 +259,8 @@ transcripts, own provider identity, or compact Context.
 (`AgentWorkflowV2`, `agent.*.v2`) so V1 and V2 histories could run side by side.
 That split was never needed — history back-compatibility is not a requirement
 here — and it has been folded away. There is one workflow class, `AgentWorkflow`,
-and one unsuffixed activity per concern: `agent.prepare_context`,
-`agent.execute_llm_step`, `agent.append_context`, `agent.compact_context`.
+and one unsuffixed activity per concern: `agent.prepare_payload`,
+`agent.execute_llm_step`, `agent.persist_turn`, `agent.compact_context`.
 
 What still holds: the child workflow carries only `AgentContextRef`, operation
 IDs/hashes and iteration state, so provider messages and large tool results stay
@@ -279,7 +280,7 @@ the agent answer an empty question.
 The rule is now inverted and load-bearing: **the request is always built from
 `messages`; the journal records what was sent.** `agent.execute_llm_step` writes
 each turn from the exact list it hands to `ChatUnifier.chat`, after the call
-returns. `agent.prepare_context` journals nothing, because it runs before a
+returns. `agent.prepare_payload` journals nothing, because it runs before a
 request exists and could only fabricate one. Journal operation ids derive from
 the per-firing `context_execution_id`; deriving them from the generation-scoped
 `execution_id` made every turn in a generation collide on idempotency and
@@ -307,13 +308,24 @@ frontend replaces its draft rather than reproducing migration rules.
 
 Backend lifecycle rules:
 
-- create/copy/hot-spawn/Agent-Builder add a fresh Context companion;
-- copying never copies a journal;
-- deleting an agent archives its Context;
-- deleting a required system edge is rejected or repaired;
-- a Context cannot attach to two agents;
-- capability discovery uses `requiresContext`, never renderer kind or a
-  hardcoded agent type list.
+**Superseded (September 2026).** The original rules made the Context a
+system-managed companion. Normalization created one for every agent that
+declared `requiresContext`, repaired its edge and deleted it along with its
+agent, and save put back one the user had deleted, so the node could not be
+deleted at all. The Context is now optional and user-owned:
+
+- normalization never creates, reconnects or deletes a Context outside the
+  legacy rewrite above, and save never restores one;
+- the validator does not require a Context. It still rejects a Context edge
+  into a node without `requiresContext`, two Contexts on one agent, and one
+  Context on two agents;
+- Agent Builder's `add_subagent` still wires a fresh Context to the teammate
+  it spawns; creating or copying an agent on the canvas adds none;
+- deleting an agent leaves its Context node in place. Removing a Context
+  node from a saved graph enqueues the archive that clears the workflow's
+  stored conversations;
+- capability discovery still uses `requiresContext`, never renderer kind or
+  a hardcoded agent type list.
 
 ## 12. Reset
 
@@ -331,10 +343,12 @@ Ordinary broadcasts contain metadata only:
 
 ```text
 context.updated
-context.compacted
-context.epoch.started
-memory.changed
+memory.updated
 ```
+
+Superseded: `context.compacted` and `context.epoch.started` were never shipped
+(only `context.updated` survives), and `memory.changed` shipped as
+`memory.updated`.
 
 `context.updated` is emitted from `AgentContextStore`'s commit boundary through
 `services/agent_context/listeners.py`, so every writer is covered without

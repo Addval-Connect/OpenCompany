@@ -4,7 +4,7 @@ OpenCompany integrates external services that manage their own lifecycle via CLI
 
 ## Principles
 
-1. **Plugin-owned binaries** -- OpenCompany-managed CLIs/binaries install into `<DATA_DIR>/packages/` from the plugin's own `_install.py` (pooch or the shared npm tree); truly external tools stay system-installed.
+1. **Plugin-owned binaries** -- OpenCompany-managed CLIs/binaries install into `<DATA_DIR>/packages/` from the plugin's own `_install.py` (pooch for release archives, or `core.js_runtime.add_package` — `bun add` into the shared bun-managed packages tree — for npm-registry packages; no Node, no npm); truly external tools stay system-installed.
 2. **Backend-owned lifecycle** -- long-lived daemons are `BaseProcessSupervisor` subclasses in the plugin folder, spawned on demand and stopped by `shutdown_all_supervisors()` at lifespan shutdown.
 3. **Ports are declared in `.env.template`** -- the single place port numbers live. The CLI frees only the ports in `cli.config.Config.all_ports`; plugin daemons own theirs.
 4. **Status is passive** -- status refreshes and WS status commands consult the supervisor (`is_running()`), never spawn.
@@ -45,8 +45,9 @@ Follow the plugin-runtime pattern (references: `nodes/whatsapp/_runtime.py`,
 `nodes/code/_runtime.py`, `services/temporal/_runtime.py`):
 
 1. **Install** — plugin-owned `_install.py` that materialises the binary
-   under `<DATA_DIR>/packages/<name>/` (pooch for release archives, the
-   shared npm tree for npm packages). Idempotent; callable one-shot from
+   under `<DATA_DIR>/packages/<name>/` (pooch for release archives; the
+   shared bun-managed packages tree via `core.js_runtime.add_package` for
+   npm-registry packages, whose bin shims then run on bun). Idempotent; callable one-shot from
    `company build` when pre-caching is worth it.
 2. **Supervise** — a `BaseProcessSupervisor` subclass in the plugin folder
    (`_runtime.py`) owning argv/cwd/env, with `ensure_started()`
@@ -66,7 +67,7 @@ Follow the plugin-runtime pattern (references: `nodes/whatsapp/_runtime.py`,
 |---------|---------------|-----------------|
 | Spawning from a status refresh | a passive probe boots an optional daemon | Consult the supervisor (`is_running()`); demand signals own the starts |
 | Adding plugin-daemon ports to `Config.all_ports` | the CLI would kill a backend-owned daemon during startup | The backend supervises them; the CLI carries no plugin knowledge |
-| Resolving `node_modules/.bin/<cli>` path | Breaks if not in PATH, tribal workaround | Install globally |
-| Using `npx <service-cli>` in `execSync` | Slow, may use wrong version, npx overhead | Install globally, call directly |
+| Spelling `node_modules/.bin/<cli>[.cmd]` by hand | Drifts per platform (bun writes `<name>.exe` + `<name>.bunx` on Windows, `<name>` elsewhere) | `core.js_runtime.shared_tree_bin(name)` after `add_package(spec)` |
+| Running the CLI through `bun x` / `npx` per call | Slow, unpinned version, no shared tree | `add_package("<pkg>@<version>")` once into the shared packages tree, then call the shim directly |
 | Wrapping CLI in a JS script | Unnecessary indirection | Use CLI commands directly |
 | Hardcoding port numbers in code or docs | drifts when ports change | Declare in `.env.template`; read via `core.env_defaults` |

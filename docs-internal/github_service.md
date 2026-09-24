@@ -81,7 +81,7 @@ precedent) → best-effort `gh auth setup-git` → marker +
 
 `github_logout`: `gh auth logout --hostname github.com` (best-effort)
 → remove marker → `credential.oauth.disconnected`.
-`github_status`: `{connected: cli_logged_in()}` — no side effects.
+`github_status`: `{connected, logged_in}` (both from `cli_logged_in()`), no side effects.
 Terminal logins (`gh auth login` run by the user) are first-class: ops
 and status see the same gh session; only the modal badge waits for a
 marker written via the modal's own Login.

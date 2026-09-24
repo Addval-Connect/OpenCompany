@@ -1,12 +1,18 @@
 {
-  "version": "2026.07",
-  "last_updated": "2026-07-25",
+  "version": "2026.09",
+  "last_updated": "2026-09-15",
 
   "llm": {
     "openai": {
-      "gpt-5.6-sol": {"input": 5.00, "output": 30.00, "cache_read": 0.50},
-      "gpt-5.6-terra": {"input": 2.50, "output": 15.00, "cache_read": 0.25},
-      "gpt-5.6-luna": {"input": 1.00, "output": 6.00, "cache_read": 0.10},
+      "_note": "developers.openai.com/api/docs/pricing, 2026-09-15 (standard tier). The -pro variants are not on the pricing page; they mirror their base model per the OpenRouter cache.",
+      "gpt-6-astra": {"input": 10.00, "output": 50.00, "cache_read": 1.00},
+      "gpt-6-astra-pro": {"input": 10.00, "output": 50.00, "cache_read": 1.00},
+      "gpt-5.6-sol": {"input": 4.00, "output": 20.00, "cache_read": 0.40},
+      "gpt-5.6-sol-pro": {"input": 4.00, "output": 20.00, "cache_read": 0.40},
+      "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cache_read": 0.20},
+      "gpt-5.6-terra-pro": {"input": 2.00, "output": 12.00, "cache_read": 0.20},
+      "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cache_read": 0.02},
+      "gpt-5.6-luna-pro": {"input": 0.20, "output": 1.20, "cache_read": 0.02},
       "gpt-5.5": {"input": 5.00, "output": 30.00, "cache_read": 0.50},
       "gpt-5.4": {"input": 2.50, "output": 15.00},
       "gpt-5.3-chat": {"input": 1.75, "output": 14.00},
@@ -18,11 +24,12 @@
     "anthropic": {
       "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
       "claude-opus-5-fast": {"input": 10.00, "output": 50.00, "cache_read": 1.00},
+      "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cache_read": 0.25},
       "claude-fable-5": {"input": 10.00, "output": 50.00, "cache_read": 1.00},
       "claude-opus-4-8": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
       "claude-opus-4-7": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
       "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
-      "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
+      "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20},
       "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
       "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10},
       "claude-sonnet-4-0": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
@@ -44,8 +51,13 @@
       "_default": {"input": 3.00, "output": 15.00, "cache_read": 0.30}
     },
     "gemini": {
-      "gemini-3.6-flash": {"input": 1.50, "output": 7.50},
+      "_note": "ai.google.dev/gemini-api/docs/pricing paid tier, 2026-09-15, <=200K prompt tier. 3.6/3.7/3.8 Flash rise to $1.50/$7.50 on 2027-01-01.",
+      "gemini-3.8-flash": {"input": 0.75, "output": 3.75},
+      "gemini-3.7-flash": {"input": 0.75, "output": 3.75},
+      "gemini-3.6-flash": {"input": 0.75, "output": 3.75},
+      "gemini-3.5-flash": {"input": 1.50, "output": 9.00},
       "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50},
+      "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
       "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
       "gemini-3-flash-preview": {"input": 0.50, "output": 3.00},
       "gemini-3-pro-preview": {"input": 2.00, "output": 12.00},
@@ -66,47 +78,55 @@
       "_default": {"input": 0.15, "output": 0.60}
     },
     "xai": {
+      "_note": "docs.x.ai/docs/models, 2026-09-15, base tier (prompts past 200K tokens are billed at double).",
+      "grok-4.6": {"input": 2.00, "output": 6.00},
       "grok-4.5": {"input": 2.00, "output": 6.00},
-      "grok-4.20": {"input": 2.00, "output": 6.00},
+      "grok-4.3": {"input": 1.25, "output": 2.50},
+      "grok-4.20": {"input": 1.25, "output": 2.50},
+      "grok-4.20-multi-agent": {"input": 1.25, "output": 2.50},
       "_default": {"input": 2.00, "output": 6.00}
     },
     "cerebras": {
+      "_note": "Cerebras no longer publishes per-model prices on its docs (2026-09-15); gpt-oss-120b keeps the last published figure and qwen-3.8-27b falls to _default.",
       "gpt-oss-120b": {"input": 0.35, "output": 0.75},
-      "zai-glm-4.7": {"input": 2.25, "output": 2.75},
-      "gemma-4-31b": {"input": 0.99, "output": 1.49},
       "_default": {"input": 0.35, "output": 0.75}
     },
     "openrouter": {
       "_default": {"input": 1.00, "output": 5.00}
     },
     "deepseek": {
-      "deepseek-v4-pro": {"input": 0.435, "output": 0.87},
-      "deepseek-v4-flash": {"input": 0.14, "output": 0.28},
-      "deepseek-chat": {"input": 0.28, "output": 0.42, "cache_read": 0.028},
-      "deepseek-reasoner": {"input": 0.55, "output": 2.19, "cache_read": 0.14},
-      "_default": {"input": 0.28, "output": 0.42}
+      "_note": "api-docs.deepseek.com/quick_start/pricing, 2026-09-15, off-peak rates (peak hours 01:00-04:00 and 06:00-10:00 UTC Mon-Fri are double). deepseek-v4-flash is a retired alias served by V4.1-Flash at the Flash price; deepseek-chat / deepseek-reasoner are discontinued.",
+      "deepseek-flash": {"input": 0.15, "output": 0.60, "cache_read": 0.003},
+      "deepseek-v4.1-flash": {"input": 0.15, "output": 0.60, "cache_read": 0.003},
+      "deepseek-v4-flash": {"input": 0.15, "output": 0.60, "cache_read": 0.003},
+      "deepseek-v4-pro": {"input": 0.66, "output": 1.98, "cache_read": 0.022},
+      "_default": {"input": 0.15, "output": 0.60}
     },
     "kimi": {
+      "_note": "platform.kimi.ai/docs/pricing/chat, 2026-09-15; cache_read is the cache-hit input price.",
       "kimi-k3": {"input": 3.00, "output": 15.00, "cache_read": 0.30},
-      "kimi-k2.5": {"input": 0.60, "output": 2.50, "cache_read": 0.15},
+      "kimi-k2.7-code": {"input": 0.95, "output": 4.00, "cache_read": 0.19},
+      "kimi-k2.7-code-highspeed": {"input": 1.90, "output": 8.00, "cache_read": 0.38},
+      "kimi-k2.6": {"input": 0.95, "output": 4.00, "cache_read": 0.16},
       "kimi-k2-thinking": {"input": 0.60, "output": 2.50, "cache_read": 0.15},
       "moonshot-v1-8k": {"input": 0.20, "output": 2.00},
       "moonshot-v1-32k": {"input": 1.00, "output": 3.00},
       "moonshot-v1-128k": {"input": 2.00, "output": 5.00},
-      "_default": {"input": 0.60, "output": 2.50}
+      "_default": {"input": 0.95, "output": 4.00}
     },
     "mistral": {
-      "mistral-large-latest": {"input": 2.00, "output": 6.00},
-      "mistral-small-latest": {"input": 0.20, "output": 0.60},
+      "_note": "Large 3 (mistral-large-2512), Small 4 (mistral-small-2603) and Codestral from mistral.ai pricing / docs, 2026-09-15; Medium 3.5 (mistral-medium-3504) is not on the public page and mirrors the OpenRouter cache.",
+      "mistral-large-latest": {"input": 0.50, "output": 1.50},
+      "mistral-medium-latest": {"input": 1.50, "output": 7.50},
+      "mistral-small-latest": {"input": 0.15, "output": 0.60},
       "codestral-latest": {"input": 0.30, "output": 0.90},
       "open-mistral-nemo": {"input": 0.15, "output": 0.15},
-      "_default": {"input": 0.20, "output": 0.60}
+      "_default": {"input": 0.15, "output": 0.60}
     },
     "sarvam": {
-      "_note": "Sarvam publishes INR list prices; converted at 1 INR = 0.0113 USD (~88.5 INR/USD, 2026-07). Source rates per MTok: sarvam-105b 4 in / 16 out / 2.5 cached; sarvam-30b 2.5 / 10 / 1.5. _default mirrors sarvam-105b (the provider default_model) so an unresolved id never under-reports. PricingService._build_llm_registry skips non-dict values, so this key is inert.",
-      "sarvam-105b": {"input": 0.045, "output": 0.181, "cache_read": 0.028},
-      "sarvam-30b": {"input": 0.028, "output": 0.113, "cache_read": 0.017},
-      "_default": {"input": 0.045, "output": 0.181, "cache_read": 0.028}
+      "_note": "docs.sarvam.ai/api-reference-docs/pricing (2026-09-15) lists INR per 1M tokens: sarvam-105b 29.28 in / 10.98 cached / 73.2 out; converted at 1 INR = 0.0113 USD. sarvam-30b is no longer on the pricing page, so it falls to _default, which mirrors sarvam-105b (the provider default_model) so an unresolved id never under-reports. PricingService._build_llm_registry skips non-dict values, so this key is inert.",
+      "sarvam-105b": {"input": 0.331, "output": 0.827, "cache_read": 0.124},
+      "_default": {"input": 0.331, "output": 0.827, "cache_read": 0.124}
     },
     "ollama": {
       "_description": "Local inference is free at the API layer — user-borne hardware costs are not tracked here.",
@@ -114,6 +134,10 @@
     },
     "lmstudio": {
       "_description": "Local inference — same zero-cost convention as ollama.",
+      "_default": {"input": 0.00, "output": 0.00}
+    },
+    "openai_compatible": {
+      "_description": "Named OpenAI-compatible endpoints (openai_compatible:<slug>). Self-hosted servers cost nothing at the API layer. When saving an endpoint found a model id in the LiteLLM table, PricingService.get_pricing uses that per-model price from the model registry before this _default.",
       "_default": {"input": 0.00, "output": 0.00}
     }
   },

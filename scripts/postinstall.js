@@ -1,10 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Postinstall script for OpenCompany.
  *
- * Runs install.js to check deps, install npm/Python packages, build.
- * Plugin daemons (WhatsApp, Stripe, ...) install lazily via their own
- * plugin code on first use.
+ * Runs install.js to check deps, provision the Python venvs and build.
+ * Reached from `bun install` in a source checkout; a global `bun add -g`
+ * runs no dependency lifecycle scripts, so bin/cli.js provisions on the
+ * first `company` command instead. Plugin daemons (WhatsApp, Stripe, ...)
+ * install lazily via their own plugin code on first use.
  */
 import { spawn, execSync } from 'child_process';
 import { resolve, dirname } from 'path';
@@ -96,7 +98,7 @@ async function main() {
     // bin/cli.js, masking the real entry point.
     //
     // Both call sites that need the Python CLI use `python -m cli
-    // <cmd>` (npm run start, .github/workflows/release.yml version
+    // <cmd>` (bun run start, .github/workflows/release.yml version
     // sync). `-m` resolves the package from the working directory's
     // sys.path entry, which `bin/cli.js` already pins to the npm
     // package root via `cwd: ROOT`. No pip install required.

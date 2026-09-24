@@ -11,7 +11,8 @@ server/skills/
 ├── GUIDE.md                  # This file
 ├── assistant/                # General-purpose assistant skills
 │     advisor, agent-builder-skill, assistant-personality, compaction-skill,
-│     humanify-skill, memory-skill, subagent-skill, task-manager, write-todos-skill
+│     data-skill, humanify-skill, memory-skill, skill, subagent-skill,
+│     task-manager, vision-skill, write-todos-skill
 ├── android_agent/            # Android device control skills
 │     personality + one skill per Android service node (battery, wifi,
 │     bluetooth, location, app-launcher, app-list, audio, screen-control,
@@ -25,10 +26,12 @@ server/skills/
 │     file-modify-skill, fs-search-skill
 ├── gcloud/                   # gcloud-skill (Google Cloud CLI)
 ├── github/                   # github-skill (gh CLI)
+├── language_agent/           # speech-skill, translation-skill
 ├── payments_agent/           # stripe-skill
-├── productivity_agent/       # Google Workspace skills
+├── productivity_agent/       # Google Workspace + Microsoft 365 skills
 │     google-gmail-skill, google-calendar-skill, google-drive-skill,
-│     google-sheets-skill, google-tasks-skill, google-contacts-skill
+│     google-sheets-skill, google-tasks-skill, google-contacts-skill,
+│     ms-mail-skill, ms-calendar-skill
 ├── rlm_agent/                # rlm-reasoning-skill
 ├── social_agent/             # Social messaging skills
 │     whatsapp-send-skill, whatsapp-db-skill, twitter-send-skill,

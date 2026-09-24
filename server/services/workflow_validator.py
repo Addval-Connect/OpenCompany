@@ -113,7 +113,7 @@ async def validate_workflow(
                 }
             )
 
-    # Context V2 topology.  These checks are capability-driven: renderer
+    # Context topology.  These checks are capability-driven: renderer
     # component kinds and legacy AI_AGENT_TYPES are intentionally not used.
     valid_contexts_by_agent: Dict[str, List[str]] = {}
     agents_by_context: Dict[str, List[str]] = {}
@@ -166,19 +166,13 @@ async def validate_workflow(
         valid_contexts_by_agent.setdefault(target_id, []).append(source_id)
         agents_by_context.setdefault(source_id, []).append(target_id)
 
+    # A Context is optional: the user adds and deletes it on the canvas, so an
+    # agent without one is valid. Only ambiguous wiring is rejected.
     for node_id in sorted(node_by_id):
         if not requires_context(node_id):
             continue
         context_ids = list(dict.fromkeys(valid_contexts_by_agent.get(node_id, [])))
-        if not context_ids:
-            errors.append(
-                {
-                    "code": "MISSING_CONTEXT",
-                    "node_id": node_id,
-                    "message": "This agent requires exactly one Context node",
-                }
-            )
-        elif len(context_ids) > 1:
+        if len(context_ids) > 1:
             errors.append(
                 {
                     "code": "MULTIPLE_CONTEXTS",
@@ -348,7 +342,10 @@ async def validate_workflow(
             )
 
         # Credential presence — for each Credential subclass declared on
-        # the plugin, ask AuthService whether a key/token is stored.
+        # the plugin, ask whether what this node needs is stored. A
+        # Credential answers through ``is_configured`` (a named endpoint
+        # checks the row the node names); anything else declared on a
+        # plugin is checked by its id.
         for cred_cls in getattr(cls, "credentials", ()) or ():
             if auth_service is None:
                 # Lazy import to avoid a hard dependency on the container at
@@ -359,7 +356,11 @@ async def validate_workflow(
 
                 auth_service = container.auth_service()
             try:
-                stored = await auth_service.has_valid_key(cred_cls.id)
+                is_configured = getattr(cred_cls, "is_configured", None)
+                if is_configured is not None:
+                    stored = await is_configured(auth_service, params)
+                else:
+                    stored = await auth_service.has_valid_key(cred_cls.id)
             except Exception:
                 logger.debug(
                     "[workflow_validator] has_valid_key failed for %s",

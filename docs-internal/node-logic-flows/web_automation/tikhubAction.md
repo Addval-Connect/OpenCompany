@@ -53,6 +53,7 @@ avoided (name-based magic in `ParameterRenderer.tsx`).
 | Handle | Shape | Description |
 |--------|-------|-------------|
 | `output-main` | object | `_shape(operation, **fields)` payload (see below); the same payload is returned to the LLM when wired to `input-tools` |
+| `output-tool` | - | Auto-appended for `usable_as_tool` |
 
 ### Output payload
 

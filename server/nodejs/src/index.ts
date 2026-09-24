@@ -1,11 +1,13 @@
 /**
- * Node.js Code Execution Server
+ * JS Code Execution Server (runs on bun)
  * Thin HTTP layer - all parameters from environment or requests
  */
 
 import express, { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,8 +24,24 @@ const HOST = process.env.NODEJS_EXECUTOR_HOST ?? 'localhost';
 const BODY_LIMIT = process.env.NODEJS_EXECUTOR_BODY_LIMIT ?? '10mb';
 const USER_PACKAGES_DIR = process.env.NODEJS_USER_PACKAGES_DIR ?? path.join(__dirname, '..', 'user-packages');
 
+// The runtime this process runs on is also the package manager for the
+// user-packages tree: `process.execPath` is bun, and `bun add` installs
+// from the npm registry with no node or npm on the machine.
+const BUN = process.execPath;
+const bunVersion = (globalThis as { Bun?: { version: string } }).Bun?.version ?? null;
+
 const app = express();
 app.use(express.json({ limit: BODY_LIMIT }));
+
+// The package routes touch the filesystem and spawn `bun add`. The only
+// caller is the same-machine Python backend, so the ceiling is generous;
+// it exists so a stray loop cannot hammer the disk or the registry.
+const packageRouteLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 interface ExecuteRequest {
   code: string;
@@ -37,13 +55,29 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     service: 'nodejs-executor',
+    runtime: bunVersion ? 'bun' : 'node',
+    runtime_version: bunVersion ?? process.version,
+    // Kept for the Python client's health dict; under bun this is the
+    // Node API level bun reports, not a Node install.
     node_version: process.version,
   });
 });
 
+// TypeScript is type-stripped by bun's own transpiler before it reaches the
+// vm context (which evaluates JavaScript only). Type annotations, interfaces
+// and enums therefore work in typescriptExecutor; a syntax error surfaces as
+// the same {success: false, error} envelope as a runtime error.
+const tsTranspiler = typeof Bun !== 'undefined' ? new Bun.Transpiler({ loader: 'ts', target: 'node' }) : null;
+
+function prepareSource(code: string, language: ExecuteRequest['language']): string {
+  if (language !== 'typescript') return code;
+  if (!tsTranspiler) throw new Error('TypeScript execution needs the bun runtime');
+  return tsTranspiler.transformSync(code);
+}
+
 // Execute code - all parameters from request body
 app.post('/execute', (req: Request, res: Response) => {
-  const { code, input_data = {}, timeout = 30000 } = req.body as ExecuteRequest;
+  const { code, language = 'javascript', input_data = {}, timeout = 30000 } = req.body as ExecuteRequest;
 
   if (!code || typeof code !== 'string') {
     res.status(400).json({ success: false, error: 'Missing or invalid "code" field' });
@@ -71,14 +105,14 @@ app.post('/execute', (req: Request, res: Response) => {
   try {
     const context = vm.createContext(sandbox);
     // This service IS the sandboxed JS executor for the pythonExecutor /
-    // javascriptExecutor workflow nodes. Node's `vm` is not a security
-    // boundary (per https://nodejs.org/api/vm.html#vmcreatecontextcontextobject-options);
+    // javascriptExecutor workflow nodes. `vm` is not a security boundary
+    // (per https://nodejs.org/api/vm.html#vmcreatecontextcontextobject-options);
     // the deployment context is: server binds to localhost only (line 16,
     // default 'localhost') and is invoked exclusively by the same-machine
     // Python backend via NodeJSClient. Public network exposure is the
-    // operator's responsibility.
-    // codeql[js/code-injection]
-    vm.runInContext(code, context, { timeout, filename: 'user-code.js' });
+    // operator's responsibility. CodeQL's js/code-injection finding on this
+    // line is by design and is dismissed on the repository as "won't fix".
+    vm.runInContext(prepareSource(code, language), context, { timeout, filename: language === 'typescript' ? 'user-code.ts' : 'user-code.js' });
 
     res.json({
       success: true,
@@ -96,12 +130,20 @@ app.post('/execute', (req: Request, res: Response) => {
   }
 });
 
+function ensureUserPackagesTree(): void {
+  if (!existsSync(USER_PACKAGES_DIR)) mkdirSync(USER_PACKAGES_DIR, { recursive: true });
+  const manifest = path.join(USER_PACKAGES_DIR, 'package.json');
+  if (!existsSync(manifest)) {
+    // bun add would write one, but a private manifest keeps the tree from
+    // ever looking publishable and pins its name.
+    writeFileSync(manifest, JSON.stringify({ name: 'opencompany-user-packages', private: true }, null, 2) + '\n');
+  }
+}
+
 // Install packages - package list from request.
 // Localhost-only service (see server.listen at the bottom); same trust
-// boundary as the /execute sandbox. No request-rate limiting because the
-// only caller is the same-machine Python backend.
-// codeql[js/missing-rate-limiting]
-app.post('/packages/install', (req: Request, res: Response) => {
+// boundary as the /execute sandbox.
+app.post('/packages/install', packageRouteLimiter, (req: Request, res: Response) => {
   const { packages } = req.body as { packages: string[] };
 
   if (!packages || !Array.isArray(packages) || packages.length === 0) {
@@ -117,23 +159,31 @@ app.post('/packages/install', (req: Request, res: Response) => {
   }
 
   try {
+    ensureUserPackagesTree();
     // execFileSync (argv array, no shell) instead of execSync with template
     // string. The regex above already validates names, but going through
     // execFileSync removes the shell from the path entirely as
     // defense-in-depth.
-    execFileSync('npm', ['install', ...packages], { cwd: USER_PACKAGES_DIR, timeout: 60000 });
+    execFileSync(BUN, ['add', '--no-progress', ...packages], { cwd: USER_PACKAGES_DIR, timeout: 60000 });
     res.json({ success: true, message: `Installed: ${packages.join(', ')}` });
   } catch (error) {
     res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
   }
 });
 
-// List packages — same localhost-only trust boundary as above.
-// codeql[js/missing-rate-limiting]
-app.get('/packages', (_req: Request, res: Response) => {
+// List packages — same localhost-only trust boundary as above. The tree's
+// own manifest is the source of truth (what `bun add` wrote), so no
+// package-manager listing command is needed.
+app.get('/packages', packageRouteLimiter, (_req: Request, res: Response) => {
   try {
-    const output = execFileSync('npm', ['list', '--json', '--depth=0'], { cwd: USER_PACKAGES_DIR, encoding: 'utf-8' });
-    res.json({ success: true, packages: JSON.parse(output).dependencies || {} });
+    const manifest = JSON.parse(readFileSync(path.join(USER_PACKAGES_DIR, 'package.json'), 'utf-8')) as {
+      dependencies?: Record<string, string>;
+    };
+    const installed: Record<string, { version: string }> = {};
+    for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
+      if (existsSync(path.join(USER_PACKAGES_DIR, 'node_modules', name))) installed[name] = { version };
+    }
+    res.json({ success: true, packages: installed });
   } catch {
     res.json({ success: true, packages: {} });
   }
@@ -145,5 +195,5 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`Node.js Executor running on http://${HOST}:${PORT}`);
+  console.log(`JS Executor running on http://${HOST}:${PORT}`);
 });

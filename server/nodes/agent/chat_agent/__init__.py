@@ -7,13 +7,14 @@ applies a different default system message + skill prompt assembly.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from services.plugin import ActionNode, NodeContext, Operation, TaskQueue
 
 from .._handles import STD_AGENT_HINTS, std_agent_handles
+from .._provider import ProviderRef
 
 
 class ChatAgentParams(BaseModel):
@@ -25,24 +26,7 @@ class ChatAgentParams(BaseModel):
     convention.
     """
 
-    provider: Literal[
-        "openai",
-        "anthropic",
-        "bedrock",  # see ai_agent.Params
-        "gemini",
-        "openrouter",
-        "xai",
-        "groq",
-        "cerebras",
-        "deepseek",
-        "kimi",
-        "mistral",
-        "sarvam",
-        # Local-server providers — see ai_agent.Params for the proxy_url
-        # rationale. Same fix; same reason.
-        "ollama",
-        "lmstudio",
-    ] = "openai"
+    provider: ProviderRef = "openai"
     model: str = Field(
         default="",
         json_schema_extra={"placeholder": "Select a model..."},

@@ -176,6 +176,7 @@ export function rehydrateProvider(entry: ServerProviderConfig): ProviderConfig {
     usageService: entry.usage_service,
     stored: entry.stored,
     account_label: entry.account_label ?? null,
+    endpoints: entry.endpoints,
   };
 }
 

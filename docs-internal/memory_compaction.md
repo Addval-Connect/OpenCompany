@@ -1,6 +1,6 @@
 # Memory Compaction, Session Token Tracking, and Cost Calculation
 
-> **Related docs:** [memory_lifecycle.md](./memory_lifecycle.md) for the markdown / vector-store / state-clear surface. This doc is the SSOT for the **service** (`CompactionService`, thresholds, shared native summarization, and pricing). `memory_lifecycle.md` is the SSOT for the **flow** (how the markdown moves through an agent turn).
+> **Related docs:** [memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) for the retired markdown / vector-store / state-clear surface (archived, not an SSOT). This doc is the SSOT for the **service** (`CompactionService`, thresholds, shared native summarization, and pricing). [agent_context_flow.md](./agent_context_flow.md) is the SSOT for the **flow** (how a conversation moves through an agent turn).
 
 ## Overview
 
@@ -16,7 +16,9 @@ All providers use the same client-side summarization path:
 `run_native_llm_step(ChatUnifier, ...)`, then replaces the active memory
 history with a structured five-section summary. The current agent runtime does
 not enable Anthropic or OpenAI provider-managed compaction. Compaction reduces
-active context pressure; it does not terminate an agent loop.
+active context pressure and never stops an agent early, but on the Temporal
+path a summarizer that still fails after the activity's retries ends the run
+with `CompactionError` (past that point the transcript could only grow).
 
 **Inspired by:** Claude Code's structured compaction pattern
 
@@ -40,8 +42,12 @@ native agent loop
        │              compact_context()
        └─ Temporal AgentWorkflow
             ├─ returns aggregate usage in the workflow result
-            └─ when its context counter reaches the prepared threshold:
-                 agent.compact_context → compact_context()
+            ├─ caps each external tool result; past the transcript's byte
+            │  budget, clears results from earlier turns
+            └─ when the next request reaches the prepared threshold, or the
+               earlier turns alone overflow the byte budget:
+                 agent.compact_context → compact_context() on the earlier
+                 turns; the latest turn is kept verbatim
 
 compact_context()
   └─ run_native_llm_step(ChatUnifier, selected provider/model)
@@ -54,8 +60,10 @@ compact_context()
 ## Runtime Compaction Path
 
 `compact_context()` uses the same native provider boundary as ordinary agent
-turns. It sends one user message containing the current memory markdown through
-`run_native_llm_step`, with SDK-internal retries disabled. The in-process path
+turns. It sends one user message containing the text to summarize (the memory
+markdown on the in-process path; on the Temporal path, the earlier turns of
+the live transcript, which the `agent.compact_context` activity renders as
+text) through `run_native_llm_step`, with SDK-internal retries disabled. The in-process path
 allows the native step helper's bounded explicit retry policy; the Temporal
 activity passes `explicit_max_retries=0` because Temporal owns activity
 delivery and a repeated summarizer request can be billed twice.
@@ -272,9 +280,9 @@ path-dependent:
 - `AgentWorkflow` (F4.B) calculates a ratio-based threshold during
   `agent.prepare_payload`; it does not read `custom_threshold`.
 - `compaction_enabled` is stored but is not consulted by `track()` or F4.B.
-  Only the global `COMPACTION_ENABLED` value controls `track()` today, and F4.B
-  does not currently honor that global enabled flag when it extracts the
-  numeric threshold.
+  Only the global `COMPACTION_ENABLED` value controls them; F4.B prepares no
+  threshold when it is off (its transcript byte budget and tool-result cap
+  still apply).
 
 Treat the WebSocket settings as persistence/UI controls until those execution
 paths are unified; do not promise that they disable or override every run.
@@ -330,11 +338,15 @@ ws.send(JSON.stringify({
 ### Environment Variables
 
 ```bash
-# In the repo-root .env (defaults live in the root .env.template:189-194)
+# In the repo-root .env (defaults live in the root .env.template)
 COMPACTION_ENABLED=true       # Enable/disable compaction globally (default: true)
 COMPACTION_RATIO=0.8          # Fraction of context window that triggers compaction
                               # (default: 0.8 — was 0.5 pre-2026.06). Range 0.05-0.99.
                               # Read by core.config.Settings.compaction_ratio.
+TOOL_RESULT_MAX_CHARS=100000  # Most characters one external tool result may add
+                              # to an agent's conversation; 0 disables the cap.
+                              # Per-user override: UserSettings.tool_result_max_chars
+                              # (Settings tab > Tool Result Limit, 10K-200K).
 ```
 
 **In-process `track()` threshold priority chain** (highest → lowest):
@@ -397,7 +409,7 @@ usage = final_state["usage"]
 
 In `server/services/ai.py`, the in-process path calls the service only when a
 legacy memory session id was resolved earlier in the run (`session_id` is set
-from `memory_data["session_id"]` at `ai.py:1005`; it stays `None` once a
+from `memory_data["session_id"]` at `ai.py:1006`; it stays `None` once a
 Context runtime resolves, because `execute_agent` nulls `memory_data` in that
 case):
 
@@ -532,11 +544,17 @@ if tracking.get('needs_compaction') and memory_content and api_key:
         memory_data['memory_content'] = result['summary']
 ```
 
-F4.B performs a parallel check inside `AgentWorkflow` using the workflow's
-active-context usage counter and the ratio-based threshold recorded by
-`agent.prepare_payload`. It invokes the same `compact_context()` method
-through the `agent.compact_context` activity
-(`services/temporal/agent_activities.py:1944`).
+F4.B performs its own check inside `AgentWorkflow` after each tool turn,
+against the ratio-based threshold recorded by `agent.prepare_payload`. Runs
+recorded with `context_pressure_version` 1 measure the next request (the
+last step's `total_tokens`, which every provider fills with the whole prompt
+including cache reads, plus the characters the turn added, at four per
+token), and also summarize when the earlier turns alone overflow the
+transcript's byte budget; runs recorded before that key replay the original
+running sum of every step's usage. It invokes the same `compact_context()`
+method through the `agent.compact_context` activity (`compact_context` in
+`services/temporal/agent_activities.py`). The full rules are in
+[agent_context_flow.md → Transcript size](./agent_context_flow.md).
 
 ### AI Service Wiring
 
@@ -605,7 +623,7 @@ Broadcast when compaction finishes:
 The Token Usage panel is displayed in the MiddleSection of the parameter panel
 for **agent nodes that have a memory session connected** — the gate is
 `isAgentWithSkills && connectedMemorySessionId`
-(`client/src/components/parameterPanel/MiddleSection.tsx:767-768`), not the
+(`client/src/components/parameterPanel/MiddleSection.tsx:768-769`), not the
 memory node itself. It shows:
 
 - **Progress bar**: tokens used vs the model's context length when known (`compactionStats.context_length`), else vs the threshold; turns destructive at 80%
@@ -615,7 +633,7 @@ memory node itself. It shows:
 Built from shadcn primitives (no antd):
 
 ```typescript
-// client/src/components/parameterPanel/MiddleSection.tsx:768-870 (abridged)
+// client/src/components/parameterPanel/MiddleSection.tsx:768-879 (abridged)
 {isAgentWithSkills && connectedMemorySessionId && (
   <Accordion type="single" collapsible defaultValue="tokens">
     <AccordionItem value="tokens">

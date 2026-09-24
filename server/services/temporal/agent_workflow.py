@@ -1,7 +1,7 @@
 """F4.B: ``AgentWorkflow`` — Temporal child workflow for AI agent loops.
 
-Workflow-orchestrated alternative to the in-process ``_run_agent_loop``
-inside ``services/ai.py``: each LLM turn is an activity, each tool call
+Workflow-orchestrated alternative to the in-process ``run_native_agent_loop``
+in ``services/agent_runtime.py``: each LLM turn is an activity, each tool call
 is a per-type activity (registered via ``BaseNode.as_activity()``,
 F4.A), and memory persistence happens per turn so a workflow failure
 mid-loop doesn't lose progress.
@@ -29,7 +29,7 @@ User decisions baked in (plan §15):
 - Memory appends per turn (not on completion).
 - Tool activity failure (after retries) returns an error to the LLM as
   a ``ToolMessage`` and the agent continues — matches the in-process
-  ``_run_agent_loop`` behaviour.
+  ``run_native_agent_loop`` behaviour.
 
 Determinism:
 - ``sandboxed=False`` so we can import frozen registry dicts
@@ -56,12 +56,22 @@ from temporalio.common import RetryPolicy  # kept for type hints
 from temporalio.workflow import ActivityCancellationType, ParentClosePolicy
 
 from services.node_registry import get_node_class
+from services.tool_output import bound_tool_output, tool_output_is_capped
 
 from ._retry_policies import (
     DEFAULT_ACTIVITY_RETRY,
     DELEGATION_CLEANUP_RETRY,
     LLM_STEP_RETRY,
     PERMIT_WAIT_RETRY,
+)
+from .agent_context_pressure import (
+    clear_old_tool_results,
+    clip_latest_turn,
+    earlier_turns_over_budget,
+    has_summarizable_history,
+    projected_request_tokens,
+    summarizer_view,
+    turn_tool_chars,
 )
 from .workflow import AGENT_WORKFLOW_TYPES
 
@@ -593,6 +603,11 @@ class AgentWorkflow:
                 "max_iterations": int,
                 "thinking_config": Optional[dict],
                 "compaction_threshold": Optional[int],
+                # Transcript-pressure controls; absent on histories recorded
+                # before they existed, which then replay the original paths.
+                "tool_result_max_chars": int,     # 0 keeps results whole
+                "transcript_budget_bytes": int,
+                "context_pressure_version": int,
             }
 
         Returns the final agent response, mirroring the shape
@@ -744,6 +759,22 @@ class AgentWorkflow:
         tool_index: Dict[str, Dict[str, Any]] = {t["name"]: t for t in tools}
 
         compaction_threshold = payload.get("compaction_threshold")
+
+        # Transcript-pressure controls recorded by prepare-payload. A history
+        # recorded before these keys existed reads 0 for each, so it keeps
+        # whole tool results and replays the original compaction gate below.
+        tool_output_limit = int(payload.get("tool_result_max_chars") or 0)
+        pressure_version = int(payload.get("context_pressure_version") or 0)
+        transcript_budget = int(payload.get("transcript_budget_bytes") or 0)
+
+        def _result_is_capped(tool_name: Optional[str]) -> bool:
+            """Whether the tool message named ``tool_name`` holds external output."""
+            name = str(tool_name or "")
+            if name.startswith("delegate_to_"):
+                return False
+            info = tool_index.get(name)
+            return tool_output_is_capped(info.get("node_type") if info else None)
+
         thinking_accumulated = ""
         final_content: Optional[str] = None
         # Billing/observability is cumulative for the entire execution and
@@ -936,6 +967,10 @@ class AgentWorkflow:
             # cache markers, OpenAI reasoning content — everything the next
             # turn's request needs.
             assistant_message = step_result.get("assistant_message")
+            # Where this turn starts. Transcript-pressure relief never clears
+            # or summarizes the turn whose tool results the model has not
+            # read yet.
+            turn_start = len(messages)
             if assistant_message:
                 messages.append(assistant_message)
 
@@ -1841,6 +1876,16 @@ class AgentWorkflow:
                                 "delegation_usage": delegated.get("usage"),
                             }
                     tool_content = _serialise_tool_result(tool_result)
+                    if (
+                        tool_output_limit
+                        and not is_delegation
+                        and tool_output_is_capped(tool_info["node_type"])
+                    ):
+                        # Only the model's copy is cut; the tool node keeps
+                        # its whole result.
+                        tool_content = bound_tool_output(
+                            tool_content, tool_output_limit
+                        )
                     await self._emit_phase(
                         agent_node_id,
                         agent_workflow_id,
@@ -2045,35 +2090,95 @@ class AgentWorkflow:
                 interim=True,
             )
 
-            # ---- Compaction check --------------------------------------
-            # Simple by design: token threshold -> summarize the live
-            # conversation -> swap messages. No memory-node gate, no
+            # ---- Transcript pressure and compaction ----------------------
+            # Summarize, then swap messages: no memory-node gate, no
             # checkpoint machinery. A later rollover resumes from the
-            # compacted state for free, because the next LLM turn journals
-            # a fresh request.snapshot containing the compacted messages.
-            token_total = int(
-                context_usage_total.get("total_tokens") or 0
-            )
-            if not token_total:
-                token_total = sum(
-                    int(context_usage_total.get(key) or 0)
-                    for key in (
-                        "input_tokens",
-                        "cache_creation_tokens",
-                        "cache_read_tokens",
-                        "output_tokens",
+            # compacted state for free, because the next LLM turn sends and
+            # saves the compacted messages. The recorded
+            # ``context_pressure_version`` picks the rules:
+            #   - version 1 (agent_context_pressure): clear old tool results
+            #     past the byte budget, summarize when the NEXT request
+            #     reaches the threshold or the earlier turns alone keep the
+            #     transcript over budget, and never summarize this turn,
+            #     whose tool results the model has not read yet;
+            #   - no version (a history recorded before it existed): the
+            #     original rule, cumulative tokens -> summarize everything,
+            #     so a replay schedules exactly the commands it recorded.
+            compact_source: Optional[List[Dict[str, Any]]] = None
+            kept_turn: List[Dict[str, Any]] = []
+            if pressure_version >= 1:
+                clearing = clear_old_tool_results(
+                    messages,
+                    turn_start=turn_start,
+                    budget_bytes=transcript_budget,
+                    is_capped=_result_is_capped,
+                )
+                if clearing.changed:
+                    workflow.logger.info(
+                        f"AgentWorkflow cleared {clearing.changed} earlier "
+                        f"tool result(s) at iteration {iteration + 1}: "
+                        f"{clearing.bytes_before} -> {clearing.bytes_after} "
+                        f"bytes (budget {transcript_budget})"
                     )
+                token_total = projected_request_tokens(
+                    step_result.get("usage"),
+                    turn_tool_chars(messages, turn_start)
+                    - clearing.chars_removed,
                 )
-            if compaction_threshold and token_total >= compaction_threshold:
-                workflow.logger.info(
-                    f"AgentWorkflow compaction triggered at iteration "
-                    f"{iteration + 1}: {token_total} tokens >= threshold "
-                    f"{compaction_threshold} ({len(messages)} live messages)"
+                history_over_budget = earlier_turns_over_budget(
+                    messages,
+                    turn_start=turn_start,
+                    budget_bytes=transcript_budget,
+                    size=clearing.bytes_after,
                 )
+                if compaction_threshold and (
+                    token_total >= compaction_threshold or history_over_budget
+                ):
+                    if has_summarizable_history(messages, turn_start):
+                        workflow.logger.info(
+                            f"AgentWorkflow compaction triggered at iteration "
+                            f"{iteration + 1}: next request about "
+                            f"{token_total} tokens (threshold "
+                            f"{compaction_threshold}), transcript "
+                            f"{clearing.bytes_after} bytes (budget "
+                            f"{transcript_budget}); summarizing {turn_start} "
+                            f"earlier message(s), keeping this turn's "
+                            f"{len(messages) - turn_start}"
+                        )
+                        compact_source = summarizer_view(messages[:turn_start])
+                        kept_turn = messages[turn_start:]
+                    else:
+                        workflow.logger.info(
+                            f"AgentWorkflow compaction skipped at iteration "
+                            f"{iteration + 1}: nothing older than this turn "
+                            "to summarize"
+                        )
+            else:
+                token_total = int(
+                    context_usage_total.get("total_tokens") or 0
+                )
+                if not token_total:
+                    token_total = sum(
+                        int(context_usage_total.get(key) or 0)
+                        for key in (
+                            "input_tokens",
+                            "cache_creation_tokens",
+                            "cache_read_tokens",
+                            "output_tokens",
+                        )
+                    )
+                if compaction_threshold and token_total >= compaction_threshold:
+                    workflow.logger.info(
+                        f"AgentWorkflow compaction triggered at iteration "
+                        f"{iteration + 1}: {token_total} tokens >= threshold "
+                        f"{compaction_threshold} ({len(messages)} live messages)"
+                    )
+                    compact_source = messages
+            if compact_source is not None:
                 compact_payload = {
                     "session_id": payload.get("session_id", "default"),
                     "node_id": payload["node_id"],
-                    "messages": messages,
+                    "messages": compact_source,
                     "provider": payload["provider"],
                     "model": payload["model"],
                 }
@@ -2146,7 +2251,7 @@ class AgentWorkflow:
                 # The activity raises on any failure, so a result here
                 # always carries a non-empty summary.
                 summary = compact_result.get("summary", "")
-                dropped_count = len(messages)
+                dropped_count = len(messages) - len(kept_turn)
                 # Rebuild as: the ORIGINAL system prompt, verbatim, plus ONE
                 # user message carrying the summary and the live request.
                 #
@@ -2185,15 +2290,52 @@ class AgentWorkflow:
                         role="user",
                         content=compacted_content,
                     ),
+                    # Version 1 keeps this turn verbatim, because its tool
+                    # results are still unread. Empty on the original path.
+                    *kept_turn,
                 ]
                 context_usage_total = {}
+                turn_start = len(messages) - len(kept_turn)
                 workflow.logger.info(
                     f"AgentWorkflow compaction applied at iteration "
                     f"{iteration + 1}: {dropped_count} messages -> "
-                    f"{len(messages)} (summary {len(summary)} chars; prior "
-                    "tool calls/results now live only inside the summary; "
-                    "system prompt preserved verbatim)"
+                    f"{len(messages)} (summary {len(summary)} chars; "
+                    f"{len(kept_turn)} message(s) of this turn kept verbatim; "
+                    "earlier tool calls/results now live only inside the "
+                    "summary; system prompt preserved verbatim)"
                 )
+
+            if pressure_version >= 1:
+                # Last resort, against whatever room the earlier turns now
+                # leave: cut this turn's external results to one length that
+                # fits. Clipping only after summarizing keeps as much of the
+                # unread results as possible.
+                clipping = clip_latest_turn(
+                    messages,
+                    turn_start=turn_start,
+                    budget_bytes=transcript_budget,
+                    is_capped=_result_is_capped,
+                )
+                if clipping.changed:
+                    workflow.logger.info(
+                        f"AgentWorkflow cut {clipping.changed} tool result(s) "
+                        f"of this turn at iteration {iteration + 1}: "
+                        f"{clipping.bytes_before} -> {clipping.bytes_after} "
+                        f"bytes (budget {transcript_budget})"
+                    )
+                if transcript_budget and clipping.bytes_after > transcript_budget:
+                    workflow.logger.warning(
+                        f"AgentWorkflow transcript is still "
+                        f"{clipping.bytes_after} bytes after relief at "
+                        f"iteration {iteration + 1} (budget "
+                        f"{transcript_budget}"
+                        + (
+                            ""
+                            if compaction_threshold
+                            else "; compaction is off for this run"
+                        )
+                        + ")"
+                    )
 
             # ---- Continue-as-new -------------------------------------
             # Only at a clean turn boundary, and never while a delegation
@@ -2433,7 +2575,7 @@ def _serialise_tool_result(result: Any) -> str:
     """Return a string body for a ``ToolMessage``.
 
     Mirrors the in-process tool-call serialisation in
-    ``services/ai.py:_run_agent_loop``: feed the LLM the handler's raw
+    ``services/agent_runtime.py:run_native_agent_loop``: feed the LLM the handler's raw
     return value (``json.dumps(result, default=str)``), NOT the Temporal
     activity envelope. The F4.A per-type activity wraps the handler
     result as ``{"success": bool, "result": {...}, "node_id": ...,

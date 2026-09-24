@@ -39,6 +39,7 @@ from services.llm.protocol import (
     Usage,
 )
 from services.tool_identity import DuplicateToolNameError
+from services.tool_output import bound_tool_output, tool_output_is_capped
 
 logger = get_logger(__name__)
 
@@ -213,12 +214,17 @@ async def run_native_agent_loop(
     conversation_saver: Optional[
         Callable[[List[Message]], Awaitable[None]]
     ] = None,
+    tool_output_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run the shared buffered native tool-agent loop.
 
     The complete assistant message returned by a provider is appended verbatim
     before tool execution.  This is essential for Gemini thought signatures,
     Anthropic signed thinking blocks, and OpenAI reasoning continuation state.
+
+    ``tool_output_limit`` caps, in characters, what one external tool result
+    adds to ``messages`` (see ``services.tool_output``); ``None`` or ``0``
+    keeps results whole.
     """
 
     current_tools: List[AgentToolSpec] = list(tools or ())
@@ -393,14 +399,21 @@ async def run_native_agent_loop(
                         "[Agent loop] tool rebind failed: %s", exc, exc_info=True
                     )
 
+            content = json.dumps(result, default=str)
+            called_spec = specs.get(call.name)
+            if tool_output_limit and tool_output_is_capped(
+                called_spec.execution.get("node_type") if called_spec else None
+            ):
+                content = bound_tool_output(content, tool_output_limit)
             tool_message = Message(
                 role="tool",
-                content=json.dumps(result, default=str),
+                content=content,
                 tool_call_id=call.id,
                 name=call.name,
             )
             # Tools opt into vision via `llm_media` refs; blocks stay ~450 B
-            # in durable state (hydration happens per provider call).
+            # in durable state (hydration happens per provider call). Read
+            # from the untouched result, so a capped text keeps its images.
             tool_message.blocks.extend(image_blocks_from_tool_result(result))
             messages.append(tool_message)
 

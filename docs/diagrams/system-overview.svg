@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1080" width="100%" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1120" width="100%" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace">
   <!-- Palette: OpenCompany dark-theme tokens (client/src/themes/dark.css surfaces/fg + light.css Dracula accents) -->
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
@@ -13,6 +13,7 @@
       .h2 { fill: #e8eaed; font-size: 14px; font-weight: 700; }
       .sub { fill: #e8eaed; font-size: 12px; }
       .small { fill: #e8eaed; font-size: 10px; }
+      .dim { fill: #9aa1ac; font-size: 10px; }
       .label { fill: #f1fa8c; font-size: 11px; font-style: italic; }
       .conn { stroke: #e8eaed; stroke-width: 1.8; fill: none; }
       .conn-dot { stroke: #9aa1ac; stroke-width: 1.5; fill: none; stroke-dasharray: 4 4; }
@@ -22,92 +23,118 @@
           .title, .h1, .h2 { font-family: 'Geist Variable', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     </style>
   </defs>
-  <rect class="bg" width="1800" height="1080"/>
+  <rect class="bg" width="1800" height="1120"/>
 
   <text class="title" x="900" y="44" text-anchor="middle">OpenCompany - System Overview</text>
-  <text class="sub" x="900" y="70" text-anchor="middle">FastAPI plugin backend + React Flow client + sidecar processes (single-machine dev topology)</text>
+  <text class="sub" x="900" y="70" text-anchor="middle">FastAPI plugin backend + React Flow client + sidecar processes, all on one machine (ports are named in .env.template)</text>
 
-  <!-- ===== Tier: Browser ===== -->
-  <text class="tier-label" x="230" y="96">BROWSER</text>
-  <rect class="panel p-cyan" x="230" y="104" width="960" height="110" rx="10"/>
-  <rect class="box p-cyan" x="500" y="118" width="420" height="82" rx="8"/>
-  <text class="h2" x="710" y="144" text-anchor="middle">React Flow client</text>
-  <text class="sub" x="710" y="163" text-anchor="middle">client/ - Vite dev :5679</text>
-  <text class="sub" x="710" y="181" text-anchor="middle">React 19 + Tailwind v4 + shadcn/ui + Zustand</text>
+  <!-- ===== Tier: Client hosts ===== -->
+  <text class="tier-label" x="230" y="96">CLIENT HOSTS</text>
+  <rect class="panel p-cyan" x="230" y="104" width="960" height="130" rx="10"/>
 
-  <!-- Browser <-> Backend -->
-  <path class="conn" d="M 558 218 L 558 314" marker-end="url(#arrow)"/>
-  <path class="conn" d="M 568 314 L 568 218" marker-end="url(#arrow)"/>
-  <text class="label" x="546" y="270" text-anchor="end">WebSocket /ws/status</text>
-  <path class="conn" d="M 860 218 L 860 314" marker-end="url(#arrow)"/>
-  <text class="label" x="874" y="270">REST /api/*</text>
+  <rect class="box p-cyan" x="250" y="120" width="450" height="98" rx="8"/>
+  <text class="h2" x="475" y="145" text-anchor="middle">Browser tab</text>
+  <text class="sub" x="475" y="165" text-anchor="middle">http://localhost:5678 - the built SPA served by the backend</text>
+  <text class="small" x="475" y="184" text-anchor="middle">React 19 + Vite + Tailwind v4 + shadcn/ui + Zustand + TanStack Query</text>
+  <text class="small" x="475" y="202" text-anchor="middle">company dev: Vite HMR on the app port, backend moved behind it</text>
+
+  <rect class="box p-cyan" x="720" y="120" width="450" height="98" rx="8"/>
+  <text class="h2" x="945" y="145" text-anchor="middle">Desktop app (Electron shell, desktop/)</text>
+  <text class="sub" x="945" y="165" text-anchor="middle">bundles uv + CPython 3.12 + bun - no Node, no npm</text>
+  <text class="small" x="945" y="184" text-anchor="middle">first launch: uv sync into the app data dir, then spawns uvicorn</text>
+  <text class="small" x="945" y="202" text-anchor="middle">waits on /health/ready, loads the same SPA, opens OAuth in the OS browser</text>
+
+  <!-- Client <-> Backend -->
+  <path class="conn" d="M 600 238 L 600 314" marker-end="url(#arrow)"/>
+  <path class="conn" d="M 612 314 L 612 238" marker-end="url(#arrow)"/>
+  <text class="label" x="588" y="280" text-anchor="end">WebSocket /ws/status (request/response + broadcasts)</text>
+  <path class="conn" d="M 860 238 L 860 314" marker-end="url(#arrow)"/>
+  <text class="label" x="874" y="280">REST /api/* - /health - /health/ready</text>
 
   <!-- Inbound webhook into backend left edge -->
   <path class="conn" d="M 40 430 L 226 430" marker-end="url(#arrow)"/>
   <text class="label" x="130" y="414" text-anchor="middle">/webhook/{path} (inbound)</text>
+  <text class="dim" x="130" y="448" text-anchor="middle">Stripe, Discord,</text>
+  <text class="dim" x="130" y="462" text-anchor="middle">WhatsApp Business, custom</text>
 
   <!-- ===== Tier: Python backend ===== -->
   <text class="tier-label" x="230" y="310">PYTHON BACKEND</text>
-  <rect class="panel p-purple" x="230" y="318" width="960" height="324" rx="10"/>
-  <text class="h1" x="710" y="348" text-anchor="middle">Python backend - FastAPI :5678 (server/)</text>
+  <rect class="panel p-purple" x="230" y="318" width="960" height="330" rx="10"/>
+  <text class="h1" x="710" y="348" text-anchor="middle">Python backend - FastAPI + uvicorn on PYTHON_BACKEND_PORT (server/)</text>
 
-  <rect class="box p-purple" x="250" y="368" width="435" height="70" rx="8"/>
-  <text class="h2" x="467" y="395" text-anchor="middle">WS + REST dispatch</text>
-  <text class="small" x="467" y="417" text-anchor="middle">core MESSAGE_HANDLERS + plugin ws_handler_registry</text>
+  <rect class="box p-purple" x="250" y="368" width="435" height="72" rx="8"/>
+  <text class="h2" x="467" y="393" text-anchor="middle">WS + REST dispatch</text>
+  <text class="small" x="467" y="412" text-anchor="middle">core MESSAGE_HANDLERS + plugin ws_handler_registry</text>
+  <text class="small" x="467" y="428" text-anchor="middle">broadcasts are CloudEvents v1.0 envelopes</text>
 
-  <rect class="box p-purple" x="735" y="368" width="435" height="70" rx="8"/>
-  <text class="h2" x="952" y="395" text-anchor="middle">WorkflowService -&gt; NodeExecutor</text>
-  <text class="sub" x="952" y="417" text-anchor="middle">ParameterResolver {{node.field}}</text>
+  <rect class="box p-purple" x="735" y="368" width="435" height="72" rx="8"/>
+  <text class="h2" x="952" y="393" text-anchor="middle">WorkflowService -&gt; NodeExecutor</text>
+  <text class="small" x="952" y="412" text-anchor="middle">ParameterResolver {{node.field}} - per-workflow workspace dir</text>
+  <text class="small" x="952" y="428" text-anchor="middle">DeploymentManager + WorkflowControlWorkflow (Start/Pause/Resume/Reset)</text>
 
-  <rect class="box p-purple" x="250" y="456" width="435" height="84" rx="8"/>
-  <text class="h2" x="467" y="483" text-anchor="middle">Node plugins (115+)</text>
-  <text class="small" x="467" y="503" text-anchor="middle">server/nodes/&lt;group&gt;/&lt;plugin&gt;/</text>
-  <text class="small" x="467" y="521" text-anchor="middle">Pydantic Params/Output = SSOT</text>
+  <rect class="box p-purple" x="250" y="458" width="435" height="86" rx="8"/>
+  <text class="h2" x="467" y="483" text-anchor="middle">Node plugins (148, 34 palette groups)</text>
+  <text class="small" x="467" y="503" text-anchor="middle">server/nodes/&lt;group&gt;/&lt;plugin&gt;/ - one folder per node</text>
+  <text class="small" x="467" y="519" text-anchor="middle">Pydantic Params / Output = SSOT, served as NodeSpec</text>
+  <text class="small" x="467" y="535" text-anchor="middle">78 skills in server/skills/ (SKILL.md playbooks)</text>
 
-  <rect class="box p-purple" x="735" y="456" width="435" height="84" rx="8"/>
-  <text class="h2" x="952" y="483" text-anchor="middle">AuthService</text>
-  <text class="sub" x="952" y="507" text-anchor="middle">Fernet + PBKDF2 encrypted credentials</text>
+  <rect class="box p-purple" x="735" y="458" width="435" height="86" rx="8"/>
+  <text class="h2" x="952" y="483" text-anchor="middle">AuthService + credentials</text>
+  <text class="small" x="952" y="503" text-anchor="middle">35 Credential classes (API keys, OAuth, CLI-managed logins)</text>
+  <text class="small" x="952" y="519" text-anchor="middle">Fernet + PBKDF2 encrypted credentials.db</text>
+  <text class="small" x="952" y="535" text-anchor="middle">optional JWT login (VITE_AUTH_ENABLED, AUTH_MODE single / multi)</text>
 
-  <rect class="box p-purple" x="250" y="558" width="920" height="64" rx="8"/>
-  <text class="h2" x="710" y="584" text-anchor="middle">Execution engine</text>
-  <text class="sub" x="710" y="607" text-anchor="middle">Temporal -&gt; sequential (auto-fallback)</text>
+  <rect class="box p-purple" x="250" y="562" width="920" height="70" rx="8"/>
+  <text class="h2" x="710" y="587" text-anchor="middle">Execution engine</text>
+  <text class="sub" x="710" y="607" text-anchor="middle">Temporal by default (per-type activities on 9 task queues, agents as child workflows) -&gt; sequential fallback</text>
+  <text class="small" x="710" y="624" text-anchor="middle">durable deployments: survive restarts, pause / resume, cron catch-up - see execution-flow.svg</text>
 
   <!-- Backend -> Sidecars -->
-  <path class="conn" d="M 710 646 L 710 722" marker-end="url(#arrow)"/>
-  <text class="label" x="724" y="688">spawns / calls</text>
+  <path class="conn" d="M 710 652 L 710 722" marker-end="url(#arrow)"/>
+  <text class="label" x="724" y="690">spawns on demand / calls</text>
 
   <!-- ===== Tier: Sidecar processes ===== -->
-  <text class="tier-label" x="230" y="718">SIDECAR PROCESSES</text>
-  <rect class="panel p-orange" x="230" y="726" width="960" height="120" rx="10"/>
+  <text class="tier-label" x="230" y="718">SIDECAR PROCESSES (all backend-spawned)</text>
+  <rect class="panel p-orange" x="230" y="726" width="960" height="162" rx="10"/>
 
-  <rect class="box p-orange" x="250" y="746" width="215" height="80" rx="8"/>
-  <text class="h2" x="357" y="772" text-anchor="middle">Node.js executor :5682</text>
-  <text class="small" x="357" y="792" text-anchor="middle">Express + tsx</text>
-  <text class="small" x="357" y="808" text-anchor="middle">JS/TS code nodes</text>
+  <rect class="box p-orange" x="250" y="742" width="215" height="102" rx="8"/>
+  <text class="h2" x="357" y="766" text-anchor="middle">JS / TS executor</text>
+  <text class="small" x="357" y="786" text-anchor="middle">Express bundle run by bun</text>
+  <text class="small" x="357" y="802" text-anchor="middle">(bun build --target=bun)</text>
+  <text class="dim" x="357" y="820" text-anchor="middle">NODEJS_EXECUTOR_PORT</text>
 
-  <rect class="box p-orange" x="485" y="746" width="215" height="80" rx="8"/>
-  <text class="h2" x="592" y="772" text-anchor="middle">WhatsApp RPC :5683</text>
-  <text class="small" x="592" y="792" text-anchor="middle">Go whatsmeow binary</text>
+  <rect class="box p-orange" x="485" y="742" width="215" height="102" rx="8"/>
+  <text class="h2" x="592" y="766" text-anchor="middle">WhatsApp bridge</text>
+  <text class="small" x="592" y="786" text-anchor="middle">edgymeow (Go, whatsmeow)</text>
+  <text class="small" x="592" y="802" text-anchor="middle">bun-managed package</text>
+  <text class="dim" x="592" y="820" text-anchor="middle">WHATSAPP_RPC_PORT</text>
 
-  <rect class="box p-orange" x="720" y="746" width="215" height="80" rx="8"/>
-  <text class="h2" x="827" y="772" text-anchor="middle">Temporal server</text>
-  <text class="small" x="827" y="792" text-anchor="middle">gRPC :5681 - Web UI :5680</text>
+  <rect class="box p-orange" x="720" y="742" width="215" height="102" rx="8"/>
+  <text class="h2" x="827" y="766" text-anchor="middle">Temporal dev server</text>
+  <text class="small" x="827" y="786" text-anchor="middle">pinned CLI, SQLite history</text>
+  <text class="small" x="827" y="802" text-anchor="middle">supervised by the lifespan</text>
+  <text class="dim" x="827" y="820" text-anchor="middle">TEMPORAL_FRONTEND_GRPC_PORT</text>
+  <text class="dim" x="827" y="834" text-anchor="middle">TEMPORAL_UI_PORT</text>
 
-  <rect class="box p-orange" x="955" y="746" width="215" height="80" rx="8"/>
-  <text class="h2" x="1062" y="772" text-anchor="middle">Temporal workers</text>
-  <text class="small" x="1062" y="792" text-anchor="middle">manager + per-queue</text>
-  <text class="small" x="1062" y="808" text-anchor="middle">worker pool</text>
+  <rect class="box p-orange" x="955" y="742" width="215" height="102" rx="8"/>
+  <text class="h2" x="1062" y="766" text-anchor="middle">Temporal workers</text>
+  <text class="small" x="1062" y="786" text-anchor="middle">framework worker +</text>
+  <text class="small" x="1062" y="802" text-anchor="middle">TemporalWorkerPool</text>
+  <text class="dim" x="1062" y="820" text-anchor="middle">one worker per task queue</text>
+
+  <text class="dim" x="710" y="870" text-anchor="middle">plugin CLIs run as subprocesses from the shared bun tree in ~/.opencompany/packages/: claude, gh, cf, vercel, gcloud, stripe, agent-browser</text>
 
   <!-- Backend -> Storage (routed around sidecar tier) -->
-  <path class="conn" d="M 230 610 L 170 610 L 170 985 L 226 985" marker-end="url(#arrow)"/>
-  <text class="label" x="162" y="800" text-anchor="end">read/write</text>
+  <path class="conn" d="M 230 610 L 170 610 L 170 1010 L 226 1010" marker-end="url(#arrow)"/>
+  <text class="label" x="162" y="820" text-anchor="end">read/write</text>
 
   <!-- ===== Tier: Storage ===== -->
-  <text class="tier-label" x="230" y="922">STORAGE</text>
-  <rect class="panel p-pink" x="230" y="930" width="960" height="110" rx="10"/>
-  <rect class="box p-pink" x="250" y="950" width="920" height="70" rx="8"/>
-  <text class="h2" x="710" y="977" text-anchor="middle">~/.opencompany/</text>
-  <text class="sub" x="710" y="1000" text-anchor="middle">workflow.db - credentials.db - temporal.db - Redis cache/locks (optional)</text>
+  <text class="tier-label" x="230" y="946">STORAGE</text>
+  <rect class="panel p-pink" x="230" y="954" width="960" height="118" rx="10"/>
+  <rect class="box p-pink" x="250" y="970" width="920" height="86" rx="8"/>
+  <text class="h2" x="710" y="995" text-anchor="middle">~/.opencompany/ (DATA_DIR - shared by CLI installs and the desktop app)</text>
+  <text class="sub" x="710" y="1016" text-anchor="middle">workflow.db - credentials.db - temporal.db - workspaces/&lt;slug&gt;/ - packages/ - daemons/ - claude/</text>
+  <text class="small" x="710" y="1036" text-anchor="middle">SQLite everywhere; Redis is opt-in (REDIS_ENABLED, default off) and no shipped configuration enables it</text>
 
   <!-- Backend / Sidecars -> External services -->
   <path class="conn" d="M 1194 480 L 1316 480" marker-end="url(#arrow)"/>
@@ -117,45 +144,53 @@
 
   <!-- ===== External services (right column) ===== -->
   <text class="tier-label" x="1320" y="96">EXTERNAL SERVICES</text>
-  <rect class="panel p-green" x="1320" y="104" width="440" height="936" rx="10"/>
+  <rect class="panel p-green" x="1320" y="104" width="440" height="968" rx="10"/>
   <text class="h1" x="1540" y="134" text-anchor="middle">External services</text>
 
-  <rect class="box p-green" x="1340" y="152" width="400" height="116" rx="8"/>
-  <text class="h2" x="1540" y="177" text-anchor="middle">LLM providers (12)</text>
-  <text class="sub" x="1540" y="197" text-anchor="middle">OpenAI, Anthropic, Gemini, OpenRouter, xAI,</text>
-  <text class="sub" x="1540" y="215" text-anchor="middle">DeepSeek, Kimi, Mistral, Groq, Cerebras</text>
-  <text class="sub" x="1540" y="233" text-anchor="middle">local: Ollama, LM Studio</text>
-  <text class="sub" x="1540" y="251" text-anchor="middle">image input: native blocks + visionAnalyze delegate</text>
+  <rect class="box p-green" x="1340" y="150" width="400" height="116" rx="8"/>
+  <text class="h2" x="1540" y="175" text-anchor="middle">LLM providers (13)</text>
+  <text class="sub" x="1540" y="195" text-anchor="middle">OpenAI, Anthropic, Gemini, OpenRouter, xAI, DeepSeek,</text>
+  <text class="sub" x="1540" y="213" text-anchor="middle">Kimi, Mistral, Groq, Cerebras, Sarvam</text>
+  <text class="sub" x="1540" y="231" text-anchor="middle">local and free: Ollama, LM Studio</text>
+  <text class="small" x="1540" y="251" text-anchor="middle">image input: native image blocks + visionAnalyze delegate</text>
 
-  <rect class="box p-green" x="1340" y="280" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="305" text-anchor="middle">Google Workspace</text>
-  <text class="sub" x="1540" y="325" text-anchor="middle">Gmail, Calendar, Drive, Sheets, Tasks, Contacts</text>
+  <rect class="box p-green" x="1340" y="282" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="305" text-anchor="middle">Speech + translation</text>
+  <text class="sub" x="1540" y="325" text-anchor="middle">OpenAI, ElevenLabs, Deepgram, Groq, Sarvam, DeepL</text>
 
-  <rect class="box p-green" x="1340" y="368" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="393" text-anchor="middle">Messaging</text>
-  <text class="sub" x="1540" y="413" text-anchor="middle">WhatsApp, Telegram, Twitter/X</text>
+  <rect class="box p-green" x="1340" y="360" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="383" text-anchor="middle">Workspace suites + email</text>
+  <text class="sub" x="1540" y="403" text-anchor="middle">Google Workspace (6 apps), Microsoft 365, IMAP / SMTP</text>
 
-  <rect class="box p-green" x="1340" y="456" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="481" text-anchor="middle">Search APIs</text>
-  <text class="sub" x="1540" y="501" text-anchor="middle">DuckDuckGo (free), Brave, Serper, Perplexity</text>
+  <rect class="box p-green" x="1340" y="438" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="461" text-anchor="middle">Messaging + social</text>
+  <text class="sub" x="1540" y="481" text-anchor="middle">WhatsApp, WhatsApp Business, Telegram, Discord, X</text>
 
-  <rect class="box p-green" x="1340" y="544" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="569" text-anchor="middle">Web scraping</text>
-  <text class="sub" x="1540" y="589" text-anchor="middle">Apify actors, Crawlee, residential proxies</text>
+  <rect class="box p-green" x="1340" y="516" width="400" height="78" rx="8"/>
+  <text class="h2" x="1540" y="539" text-anchor="middle">Search + scraping</text>
+  <text class="sub" x="1540" y="559" text-anchor="middle">DuckDuckGo (free), Brave, Serper, Perplexity</text>
+  <text class="sub" x="1540" y="577" text-anchor="middle">Apify actors, Crawlee, TikHub (social data)</text>
 
-  <rect class="box p-green" x="1340" y="632" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="657" text-anchor="middle">Dev CLIs</text>
-  <text class="sub" x="1540" y="677" text-anchor="middle">GitHub (gh), Vercel, Stripe</text>
+  <rect class="box p-green" x="1340" y="610" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="633" text-anchor="middle">Dev + cloud CLIs</text>
+  <text class="sub" x="1540" y="653" text-anchor="middle">GitHub gh, Vercel, Cloudflare cf, Google Cloud gcloud</text>
 
-  <rect class="box p-green" x="1340" y="720" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="745" text-anchor="middle">Device</text>
-  <text class="sub" x="1540" y="765" text-anchor="middle">Android via relay - 16 service nodes</text>
+  <rect class="box p-green" x="1340" y="688" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="711" text-anchor="middle">Payments</text>
+  <text class="sub" x="1540" y="731" text-anchor="middle">Stripe CLI (actions + signed webhook trigger)</text>
 
-  <rect class="box p-green" x="1340" y="808" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="833" text-anchor="middle">Vector + RAG</text>
-  <text class="sub" x="1540" y="853" text-anchor="middle">ChromaDB, Qdrant, Pinecone</text>
+  <rect class="box p-green" x="1340" y="766" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="789" text-anchor="middle">Device + browser</text>
+  <text class="sub" x="1540" y="809" text-anchor="middle">Android via relay (16 nodes) - your real Chrome over CDP</text>
 
-  <rect class="box p-green" x="1340" y="896" width="400" height="60" rx="8"/>
-  <text class="h2" x="1540" y="921" text-anchor="middle">Maps</text>
-  <text class="sub" x="1540" y="941" text-anchor="middle">Google Maps Geocoding + Places</text>
+  <rect class="box p-green" x="1340" y="844" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="867" text-anchor="middle">Vector + RAG</text>
+  <text class="sub" x="1540" y="887" text-anchor="middle">ChromaDB, Qdrant, Pinecone + embeddings + chunking</text>
+
+  <rect class="box p-green" x="1340" y="922" width="400" height="62" rx="8"/>
+  <text class="h2" x="1540" y="945" text-anchor="middle">Maps + proxies</text>
+  <text class="sub" x="1540" y="965" text-anchor="middle">Google Maps Geocoding + Places - residential proxies</text>
+
+  <text class="dim" x="1540" y="1020" text-anchor="middle">Counts come from the live registries: len(NODE_METADATA),</text>
+  <text class="dim" x="1540" y="1036" text-anchor="middle">len(CREDENTIAL_REGISTRY), config/llm_defaults.json - September 2026</text>
 </svg>

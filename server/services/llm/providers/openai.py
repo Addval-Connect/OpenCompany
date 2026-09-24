@@ -42,12 +42,51 @@ class OpenAIProvider:
             "api_key": api_key,
             "max_retries": max(0, int(max_retries)),
         }
+        # The user's stored URL (resolved when it was saved) wins over the
+        # vendor-declared one. Neither is ever rewritten here (RFC-0003 D1).
         url = proxy_url or base_url
         if url:
             kwargs["base_url"] = url
-            if proxy_url:
-                kwargs["api_key"] = "ollama"
+        #: Which setting produced the URL, for failure logs (RFC-0003 D10).
+        self.url_source = "proxy" if proxy_url else ("llm_defaults" if base_url else "sdk_default")
         self._client = openai.AsyncOpenAI(**kwargs)
+
+    @property
+    def endpoint_url(self) -> str:
+        """The base URL requests actually go to."""
+        return str(self._client.base_url)
+
+    def _raise_if_error_body(self, resp: Any) -> None:
+        """Turn a 2xx that carried an error body into a ``PROTOCOL`` failure.
+
+        The SDK raises only on 4xx/5xx. A server asked for a route it does
+        not serve can answer HTTP 200 with an ``{"error": ...}`` body (LM
+        Studio does), which the SDK parses into a completion with no
+        choices. Left alone that surfaces as "AI generated empty response",
+        with nothing pointing at the base URL (RFC-0003 §2.1, D9).
+        """
+        extra = getattr(resp, "model_extra", None)
+        error = extra.get("error") if isinstance(extra, dict) else None
+        if error is None:
+            candidate = getattr(resp, "error", None)
+            if isinstance(candidate, (str, dict)):
+                error = candidate
+        if not error:
+            return
+
+        from services.llm.endpoints import redact_url
+        from services.llm.protocol import LLMError, LLMErrorCategory
+
+        url = redact_url(self.endpoint_url)
+        raise LLMError(
+            message=f"HTTP 2xx without choices from {url}: {str(error)[:300]}",
+            provider=self.provider_name,
+            category=LLMErrorCategory.PROTOCOL,
+            public_message=(
+                f"The server at {url} answered without a completion. "
+                "Check the base URL configured for this provider."
+            ),
+        )
 
     # ------------------------------------------------------------------
     # chat
@@ -351,8 +390,10 @@ class OpenAIProvider:
         return items
 
     def _normalize(self, resp: Any, model: str) -> LLMResponse:
-        choice = resp.choices[0] if resp.choices else None
+        choices = getattr(resp, "choices", None)
+        choice = choices[0] if choices else None
         if not choice:
+            self._raise_if_error_body(resp)
             return LLMResponse(model=model)
 
         msg = choice.message

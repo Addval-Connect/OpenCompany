@@ -102,25 +102,15 @@ async def handle_get_stored_api_key(data: Dict[str, Any], websocket: WebSocket) 
     validated/connected badge stays honest.
     """
 
-    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
-
     auth_service = container.auth_service()
     provider = data["provider"].lower()
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or DEFAULT_CREDENTIAL_CUSTOMER_ID
-    )
-    session_id = data.get("session_id", "default")
-    api_key = await auth_service.get_api_key(
-        provider, session_id, credential_customer_id=caller
-    )
+    api_key = await auth_service.get_api_key(provider, data.get("session_id", "default"))
     if not api_key:
         default = _lookup_credential_default(provider)
         if default is not None:
             return {"provider": provider, "hasKey": False, "apiKey": default}
         return {"provider": provider, "hasKey": False}
-    models = await auth_service.get_stored_models(
-        provider, session_id, credential_customer_id=caller
-    )
+    models = await auth_service.get_stored_models(provider, data.get("session_id", "default"))
     return {
         "provider": provider,
         "hasKey": True,
@@ -143,12 +133,6 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
     store = get_idempotency_store("credentials")
     provider = data["provider"].lower()
 
-    # Credential owner is the authenticated WS principal, not the client
-    # payload.  Auth disabled → "owner" (OWNER_PRINCIPAL_ID = DEFAULT_CREDENTIAL_CUSTOMER_ID).
-    credential_customer_id = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or "owner"
-    )
-
     async def _do_save() -> Dict[str, Any]:
         auth_service = container.auth_service()
         broadcaster = get_status_broadcaster()
@@ -157,7 +141,6 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
             api_key=data["api_key"].strip(),
             models=data.get("models", []),
             session_id=data.get("session_id", "default"),
-            credential_customer_id=credential_customer_id,
         )
         await broadcaster.broadcast_credential_event(
             "credential.api_key.saved",
@@ -171,21 +154,24 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
 @ws_handler("provider")
 async def handle_delete_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
     """Delete stored API key. Idempotent on ``request_id``."""
-    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
     from services.idempotency import get_idempotency_store
 
     store = get_idempotency_store("credentials")
     provider = data["provider"].lower()
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or DEFAULT_CREDENTIAL_CUSTOMER_ID
-    )
 
     async def _do_delete() -> Dict[str, Any]:
+        from services.llm.endpoints import base_url_key
+        from services.model_registry import get_model_registry
+
         auth_service = container.auth_service()
         broadcaster = get_status_broadcaster()
-        await auth_service.remove_api_key(
-            provider, data.get("session_id", "default"), credential_customer_id=caller
-        )
+        session_id = data.get("session_id", "default")
+        await auth_service.remove_api_key(provider, session_id)
+        # A provider's Base URL row and its registered models belong to it:
+        # deleting a named endpoint (or a local server's key) must leave
+        # neither behind. Both are no-ops for a provider that has none.
+        await auth_service.remove_api_key(base_url_key(provider), session_id)
+        get_model_registry().forget_local_models(provider)
         await broadcaster.update_api_key_status(
             provider,
             valid=False,

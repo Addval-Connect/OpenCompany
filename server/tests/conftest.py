@@ -121,6 +121,19 @@ sys.modules["core.auth_cookies"] = _auth_cookies_mod
 _auth_cookies_spec.loader.exec_module(_auth_cookies_mod)
 setattr(_core_pkg, "auth_cookies", _auth_cookies_mod)
 
+# core.approot is stdlib-only and is imported at module load by
+# core.env_defaults, core.paths and core.config (app-tree root + env file
+# locations, OPENCOMPANY_APP_ROOT override). It must be resolvable under
+# the stubbed package BEFORE those modules are file-loaded below.
+_approot_spec = _importlib_util.spec_from_file_location(
+    "core.approot",
+    SERVER_DIR / "core" / "approot.py",
+)
+_approot_mod = _importlib_util.module_from_spec(_approot_spec)
+sys.modules["core.approot"] = _approot_mod
+_approot_spec.loader.exec_module(_approot_mod)
+setattr(_core_pkg, "approot", _approot_mod)
+
 # core.env_defaults is stdlib-only (the .env.template-backed env
 # resolver plugin folders use instead of hardcoded port fallbacks) —
 # expose the real module so plugin imports resolve during collection.
@@ -144,6 +157,19 @@ _encryption_mod = _importlib_util.module_from_spec(_encryption_spec)
 sys.modules["core.encryption"] = _encryption_mod
 _encryption_spec.loader.exec_module(_encryption_mod)
 setattr(_core_pkg, "encryption", _encryption_mod)
+
+# core.session_teardown is stdlib-only (the shielded rollback + close both
+# databases run under a cancelled caller); the real core/database.py and
+# core/credentials_database.py import it at module load, and tests that
+# file-load those modules need it resolvable under the stubbed package.
+_session_teardown_spec = _importlib_util.spec_from_file_location(
+    "core.session_teardown",
+    SERVER_DIR / "core" / "session_teardown.py",
+)
+_session_teardown_mod = _importlib_util.module_from_spec(_session_teardown_spec)
+sys.modules["core.session_teardown"] = _session_teardown_mod
+_session_teardown_spec.loader.exec_module(_session_teardown_mod)
+setattr(_core_pkg, "session_teardown", _session_teardown_mod)
 
 # core.paths — central path resolution. Stub the public surface with
 # tmpdir-rooted Paths so plugin module imports don't trip over the
@@ -175,6 +201,19 @@ _make_submodule(
         "example_workflows_dir": lambda: _TEST_OPENCOMPANY_ROOT / "workflows",
     },
 )
+
+# core.js_runtime — how the backend finds bun and extends the shared
+# packages tree. Stdlib + core.paths (the stub above), imported at module
+# load by the JS executor runtime and the npm-shipped CLI plugin
+# installers, so it must be resolvable under the stubbed package.
+_js_runtime_spec = _importlib_util.spec_from_file_location(
+    "core.js_runtime",
+    SERVER_DIR / "core" / "js_runtime.py",
+)
+_js_runtime_mod = _importlib_util.module_from_spec(_js_runtime_spec)
+sys.modules["core.js_runtime"] = _js_runtime_mod
+_js_runtime_spec.loader.exec_module(_js_runtime_mod)
+setattr(_core_pkg, "js_runtime", _js_runtime_mod)
 
 
 # services.pricing -- pre-stub the singleton so handler modules that do

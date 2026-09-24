@@ -94,8 +94,8 @@ class TemporalExecutor:
             workflow_slug: Human-readable slug used in the Temporal Web UI
                 listing prefix. Optional — falls back to ``"workflow"`` for
                 one-off Runs without a saved DB row.
-            graph_version: Normalized graph version for Context V2
-            generation: Durable workflow-control generation for Context V2
+            graph_version: Normalized graph version for the Context topology
+            generation: Durable workflow-control generation for the Context store
             user_id: Authenticated server-owned user identity
 
         Returns:

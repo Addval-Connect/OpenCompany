@@ -213,7 +213,8 @@ export function useCredentialPanel(config: ProviderConfig, visible: boolean) {
       return sendRequest(config.ws!.logout, {});
     }),
     oauthRefresh: () => execute('refresh', () => sendRequest(config.ws!.status, {})),
-    sendWs: (type: string, data?: Record<string, any>) => execute(type, () => sendRequest(type, data ?? {})),
+    sendWs: (type: string, data?: Record<string, any>, timeoutMs?: number) =>
+      execute(type, () => sendRequest(type, data ?? {}, timeoutMs)),
   };
 
   return {

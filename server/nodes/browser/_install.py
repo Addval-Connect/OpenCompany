@@ -1,23 +1,24 @@
 """``agent-browser`` local install — landed in the shared OpenCompany
-npm tree at :func:`core.paths.packages_dir` (``<DATA_DIR>/packages/``).
+packages tree at :func:`core.paths.packages_dir` (``<DATA_DIR>/packages/``).
 
 All OpenCompany-managed npm packages (``agent-browser``,
-``@anthropic-ai/claude-code``, ``edgymeow``) live under a single
-``<packages_dir>/node_modules/`` so npm manages them with one
-``package.json`` + ``package-lock.json`` rather than us carving out
-per-service install trees. ``npm install <pkg> --prefix <packages_dir>``
-extends the shared tree idempotently.
+``@anthropic-ai/claude-code``, ``edgymeow``, ``cf``, ``vercel``) live
+under a single ``<packages_dir>/node_modules/`` managed by bun through
+one ``package.json`` + ``bun.lock`` rather than us carving out
+per-service install trees. :func:`core.js_runtime.add_package`
+(``bun add --cwd <packages_dir> <spec>``) extends the shared tree
+idempotently and the bin shim runs on the bun runtime; no Node or npm
+is involved. agent-browser's postinstall is trusted so its platform
+binary lands the way the package expects.
 """
 
 from __future__ import annotations
 
-import shutil
 import subprocess
-import sys
 from typing import Optional
 
+from core.js_runtime import add_package, bun_binary, shared_tree_bin
 from core.logging import get_logger
-from core.paths import packages_dir
 
 logger = get_logger(__name__)
 
@@ -26,27 +27,19 @@ _NPM_SPEC = "agent-browser@latest"
 
 def agent_browser_binary_path() -> Optional[str]:
     """Return path to the agent-browser CLI, installing on miss."""
-    root = packages_dir()
-    bin_name = "agent-browser.cmd" if sys.platform == "win32" else "agent-browser"
-    bin_path = root / "node_modules" / ".bin" / bin_name
+    bin_path = shared_tree_bin("agent-browser")
 
     if bin_path.exists():
         return str(bin_path)
 
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        logger.warning("[browser] npm not on PATH; cannot install %s", _NPM_SPEC)
+    if bun_binary() is None:
+        logger.warning("[browser] bun not available; cannot install %s", _NPM_SPEC)
         return None
 
-    logger.info("[browser] installing %s into shared tree %s", _NPM_SPEC, root)
-    root.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [npm_cmd, "install", _NPM_SPEC, "--prefix", str(root), "--no-audit", "--no-fund"],
-        capture_output=True,
-        text=True,
-    )
+    logger.info("[browser] installing %s into the shared packages tree", _NPM_SPEC)
+    result = add_package(_NPM_SPEC, trust=True)
     if result.returncode != 0 or not bin_path.exists():
-        logger.error("[browser] npm install failed: %s", result.stderr.strip())
+        logger.error("[browser] bun add %s failed: %s", _NPM_SPEC, result.stderr.strip())
         return None
 
     # Fetch the Chrome-for-Testing runtime (agent-browser's documented

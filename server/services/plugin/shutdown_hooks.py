@@ -30,6 +30,8 @@ sibling hooks — every hook runs even if one raises, mirroring the
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Awaitable, Callable, List, Tuple
 
 from core.logging import get_logger
@@ -39,6 +41,14 @@ logger = get_logger(__name__)
 
 
 ShutdownHook = Callable[[], Awaitable[None]]
+
+# Per-hook ceiling. A hook that never returns used to wedge the whole
+# lifespan teardown: under ``company serve`` the CLI's 5 s grace + tree-kill
+# masked it, but a desktop shell waiting for a clean exit (so Temporal / the
+# Node sidecar / the WhatsApp bridge are reaped, not orphaned) saw the
+# backend hang until the 45 s desktop deadline killed it. Each hook now gets
+# this long, then teardown moves on and names the offender at WARNING.
+HOOK_TIMEOUT_SECONDS = 10.0
 
 
 # Registry is keyed by label so each plugin can register exactly one
@@ -86,8 +96,15 @@ async def run_shutdown_hooks() -> None:
 
     logger.info(f"Running {len(hooks)} plugin shutdown hook(s): " f"{[label for label, _ in hooks]}")
     for label, hook in hooks:
+        started = time.monotonic()
         try:
-            await hook()
+            await asyncio.wait_for(hook(), timeout=HOOK_TIMEOUT_SECONDS)
+            logger.debug(f"Plugin shutdown hook {label!r} finished in {time.monotonic() - started:.2f}s")
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Plugin shutdown hook {label!r} did not finish within {HOOK_TIMEOUT_SECONDS:g}s; "
+                "continuing teardown without it"
+            )
         except Exception as exc:  # noqa: BLE001 — log and continue
             logger.error(
                 f"Plugin shutdown hook {label!r} raised; continuing: {exc}",
@@ -96,6 +113,7 @@ async def run_shutdown_hooks() -> None:
 
 
 __all__ = [
+    "HOOK_TIMEOUT_SECONDS",
     "register_shutdown_hook",
     "registered_labels",
     "run_shutdown_hooks",

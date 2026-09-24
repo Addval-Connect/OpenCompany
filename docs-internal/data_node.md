@@ -41,8 +41,10 @@ suffixes `-1`, `-2`, …) imports a mount file into the workspace and mints a
 real `FileRef` — the bridge to previews, drags, and vision.
 
 **Read tiers** (`_readers.py`, all bounded; `bound_result` caps the
-serialized envelope at ~200 KB because tool results have no downstream
-truncation): text (line window, encoding fallback + `encoding_guessed`),
+serialized envelope at ~200 KB, which also keeps the node's own output small;
+the agent loops then cut what reaches the model to the Tool Result Limit,
+100,000 characters by default, see `services/tool_output.py`): text (line
+window, encoding fallback + `encoding_guessed`),
 csv (Sniffer, 500 rows / 100 cols / 2k-char cells), json (≤5 MiB, depth 8,
 `pruned_paths`), pdf (pypdf via the `docs` extra, 20 pages/req), html
 (bs4), xlsx (openpyxl `read_only`, 500 rows), image (Pillow **metadata
@@ -86,8 +88,10 @@ Refs in durable state, bytes only at the provider boundary:
   structurally, so a leak is a loud error, not a 2 MiB Temporal payload.
 - Tools opt in by returning `llm_media: [{ref, detail}]` (max 8;
   `ref.workflow_id` required; png/jpeg/webp/gif). Producers today: the
-  data node's image tier. Both agent loops attach the blocks
-  (`agent_runtime.py` and `temporal/agent_activities.py`).
+  data node's image tier. The in-process agent loop attaches the blocks
+  (`agent_runtime.py`, `image_blocks_from_tool_result` call); the Temporal
+  agent path does not yet attach `llm_media` blocks (it only hydrates
+  already-attached ones via `run_native_llm_step`).
 - `hydrate_image_blocks(messages, provider, model)` runs once per LLM step
   in `run_native_llm_step`, on deep copies — originals never mutate;
   per-image failures degrade to text placeholders; incapable models get
@@ -106,9 +110,9 @@ Refs in durable state, bytes only at the provider boundary:
 
 ## Tests
 
-`tests/nodes/test_data_source_node.py` (spec/validation/path-security/
-tiers/mount flows/no-host-path-leak), `tests/services/data/test_mount_store.py`
-(validation matrix), `tests/nodes/test_vision_analyze.py` (budget math +
-per-provider request shapes), `tests/llm/test_media_blocks.py` (codec
+`server/tests/nodes/test_data_source_node.py` (spec/validation/path-security/
+tiers/mount flows/no-host-path-leak), `server/tests/services/data/test_mount_store.py`
+(validation matrix), `server/tests/nodes/test_vision_analyze.py` (budget math +
+per-provider request shapes), `server/tests/llm/test_media_blocks.py` (codec
 round-trip + never-bytes raise, `llm_media` contract, gated hydration,
 Anthropic tool_result shape).

@@ -30,6 +30,8 @@ auto-hides both, which would break chaining into `speechToText`.
 
 | Name | Type | Default | Required | Description |
 |------|------|---------|----------|-------------|
+| `tool_name` | string | `text_to_speech` | no | Override name shown to the LLM when used as a tool |
+| `tool_description` | string | `"Convert text into spoken audio. Returns a reference to an audio file saved in the workspace, not the audio itself. Use when the user asks for speech, narration, a voiceover or an audio version of some text."` | no | Override description shown to the LLM when used as a tool (`rows: 3`) |
 | `provider` | enum | `elevenlabs` | no | Registry-driven: the enum is `tts_providers()` |
 | `text` | string | - | yes | Text to speak; capped per provider/model |
 | `tts_model` | string | `""` | no | Blank uses the provider default. **Not** named `model` — see below |

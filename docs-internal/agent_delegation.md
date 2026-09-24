@@ -93,7 +93,7 @@ for tool_info in tool_data:
 
 For agent node types, the method:
 
-1. Resolves the tool name via `_resolve_default_tool_name_description(node_type)` — a closure inside `_build_tool_from_node()` that reads the plugin class's `tool_name` ClassVar (each agent plugin declares `tool_name = "delegate_to_<x>"`). There is no central `DEFAULT_TOOL_NAMES` dict; the name comes from the plugin class via `services.node_registry.get_node_class`. The delegation branch is gated by `_get_tool_schema()`'s `_AGENT_DELEGATION_TYPES` tuple (`services/ai.py:2510-2529`) — **18 agents**: the 15 standard delegatable agents (`aiAgent`, `chatAgent`, `android_agent`, `coding_agent`, `web_agent`, `task_agent`, `social_agent`, `travel_agent`, `tool_agent`, `productivity_agent`, `payments_agent`, `consumer_agent`, `autonomous_agent`, `orchestrator_agent`, `ai_employee`), the two bypass-loop agents `rlm_agent` and `claude_code_agent`, and the bridged cloud agent `vertex_managed_agent`. (`AI_AGENT_TYPES` in `server/constants.py:32-53` mirrors this same 18-entry set; `codex_agent` is not currently in it. The `tool_name = f"delegate_to_{cls.type}"` default is stamped by `BaseNode.__init_subclass__`, `services/plugin/base.py:257`, so only `aiAgent`, `chatAgent` and `vertex_managed_agent` declare it explicitly.)
+1. Resolves the tool name via `_resolve_default_tool_name_description(node_type)` — a closure inside `_build_tool_from_node()` that reads the plugin class's `tool_name` ClassVar (each agent plugin declares `tool_name = "delegate_to_<x>"`). There is no central `DEFAULT_TOOL_NAMES` dict; the name comes from the plugin class via `services.node_registry.get_node_class`. The delegation branch is gated by `_get_tool_schema()`'s `_AGENT_DELEGATION_TYPES` tuple (`services/ai.py:2509-2528`) — **18 agents**: the 15 standard delegatable agents (`aiAgent`, `chatAgent`, `android_agent`, `coding_agent`, `web_agent`, `task_agent`, `social_agent`, `travel_agent`, `tool_agent`, `productivity_agent`, `payments_agent`, `consumer_agent`, `autonomous_agent`, `orchestrator_agent`, `ai_employee`), the two bypass-loop agents `rlm_agent` and `claude_code_agent`, and the bridged cloud agent `vertex_managed_agent`. (`AI_AGENT_TYPES` in `server/constants.py:32-53` mirrors this same 18-entry set; `codex_agent` is not currently in it. The `tool_name = f"delegate_to_{cls.type}"` default is stamped by `BaseNode.__init_subclass__`, `services/plugin/base.py:257`, so only `aiAgent`, `chatAgent` and `vertex_managed_agent` declare it explicitly.)
 
 2. Creates a `DelegateToAgentSchema` Pydantic model in `_get_tool_schema()` with two fields (`task` -> the child's mission directive / system message, `context` -> the child's input data / prompt):
    ```python
@@ -277,7 +277,7 @@ result = await instance.execute(node_id, child_params, child_ctx)
 
 **File:** `server/nodes/agent/_inline.py`, `prepare_agent_call()` (called by every agent plugin's `@Operation`)
 
-The spawned child's `execute()` runs `prepare_agent_call()`, which calls `collect_agent_connections()` (from `server/services/plugin/edge_walker.py`) with **its own node_id**. The function returns a **5-tuple** — `(context_data, skill_data, tool_data, input_data, task_data)` (`edge_walker.py:181-199`; the first element is the Context descriptor, or the legacy Memory descriptor on immutable V1 snapshots):
+The spawned child's `execute()` runs `prepare_agent_call()`, which calls `collect_agent_connections()` (from `server/services/plugin/edge_walker.py`) with **its own node_id**. The function returns a **5-tuple** — `(context_data, skill_data, tool_data, input_data, task_data)` (`edge_walker.py:181-199`; the first element is the Context descriptor, or the legacy Memory descriptor on `input-memory` graphs):
 
 ```python
 context_data, skill_data, tool_data, input_data, task_data = await collect_agent_connections(
@@ -346,8 +346,8 @@ Parent and child agents have completely separate memory systems. On current
 (V2) graphs the child's conversation is its own RFC-0002 Context store row,
 keyed by `(workflow_id, generation, <child agent_node_id>)`, and `simpleMemory`
 is an explicit tool the child calls on its own `input-tools`; the table below
-describes the legacy V1 markdown model, which survives only for immutable V1
-snapshots:
+describes the legacy markdown model, which survives only for graphs recorded
+with an `input-memory` edge:
 
 | Aspect | Parent Agent | Child Agent |
 |--------|-------------|-------------|

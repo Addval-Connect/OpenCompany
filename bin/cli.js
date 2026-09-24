@@ -1,6 +1,9 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+// The `company` launcher. Installed by `bun add -g @zeenie-ai/opencompany`
+// and run by bun (the shebang); the code itself is plain JavaScript so a
+// legacy npm-installed copy still runs under node.
 
-import { spawn, execSync } from 'child_process';
+import { spawn, spawnSync, execSync } from 'child_process';
 import { basename, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync, existsSync } from 'fs';
@@ -22,6 +25,7 @@ const COMMANDS = {
   clean: 'Clean build artifacts',
   docs: 'Documentation tooling (docs nodes [--check])',
   doctor: 'Check system dependencies and project health',
+  provision: 'Set up the Python environment (runs automatically on first use; --force re-runs)',
   help: 'Show this help message',
   version: 'Show version number (version sync [tag] to sync from a git tag)',
 };
@@ -33,7 +37,7 @@ const SUBCOMMAND_VERBS = new Set(['daemon', 'deploy', 'docs', 'version']);
 
 function printHelp() {
   console.log(`
-OpenCompany - Workflow Automation Platform
+OpenCompany - Self-improving AI employees
 
 Usage: company <command> [flags]
 
@@ -51,6 +55,18 @@ Examples:
 Compatibility: the legacy \`machina\` command remains available but is deprecated.
 Documentation: https://docs.opencompany.sh/
 `);
+}
+
+// bun is the package manager, script runner and JS runtime everywhere.
+// A legacy npm-installed copy may run this file under node without bun
+// on PATH, so every bun use below keeps an npm fallback for that case.
+function hasBun() {
+  return getVersion('bun --version') !== null;
+}
+
+function isSourceCheckout() {
+  // bunfig.toml is committed but excluded from the published tarball.
+  return existsSync(resolve(ROOT, 'bunfig.toml'));
 }
 
 function getVersion(cmd) {
@@ -82,12 +98,6 @@ function expandPath() {
 function checkDeps() {
   const errors = [];
 
-  // Node.js version check
-  const nodeVersion = parseInt(process.version.slice(1));
-  if (nodeVersion < 22) {
-    errors.push(`Node.js 22+ required (found ${process.version})`);
-  }
-
   // Python version check
   let pyVersion = getVersion('python --version') || getVersion('python3 --version');
   if (!pyVersion) {
@@ -117,7 +127,8 @@ function checkDeps() {
 function doctor() {
   console.log('\nOpenCompany Doctor\n');
   try {
-    execSync('npx envinfo --system --binaries --npmPackages edgymeow,agent-browser,cross-env', {
+    const runner = hasBun() ? 'bun x' : 'npx';
+    execSync(`${runner} envinfo --system --binaries --npmPackages edgymeow,agent-browser,cross-env`, {
       cwd: ROOT, stdio: 'inherit', shell: true,
     });
   } catch { /* envinfo not available, continue with manual checks */ }
@@ -137,8 +148,9 @@ function doctor() {
   console.log('');
 }
 
-// Resolve <ROOT>/.cli-venv Python if the postinstall step provisioned it.
-// Returns null on source checkouts (no venv -> fall back to ``npm run``).
+// Resolve <ROOT>/.cli-venv Python if provisioning has run. Returns null on
+// source checkouts (no venv -> fall back to ``bun run``) and on a fresh
+// global install before its first run.
 function venvPython() {
   const py = process.platform === 'win32'
     ? resolve(ROOT, '.cli-venv', 'Scripts', 'python.exe')
@@ -146,13 +158,74 @@ function venvPython() {
   return existsSync(py) ? py : null;
 }
 
+// The app port from the shipped .env.template (the single place ports live).
+function appPort() {
+  try {
+    const m = /^PYTHON_BACKEND_PORT=(\d+)/m.exec(readFileSync(resolve(ROOT, '.env.template'), 'utf-8'));
+    return m ? m[1] : '';
+  } catch {
+    return '';
+  }
+}
+
+// Run scripts/install.js (uv, server venv, bytecode, CLI venv, Temporal)
+// under this runtime. Exits the process on failure.
+function runInstallJs() {
+  const installJs = resolve(ROOT, 'scripts', 'install.js');
+  if (!existsSync(installJs)) {
+    console.error('scripts/install.js is missing from this install; reinstall with: bun add -g @zeenie-ai/opencompany');
+    process.exit(1);
+  }
+  const result = spawnSync(process.execPath, [installJs], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: { ...process.env, FORCE_COLOR: '1' },
+  });
+  if (result.status !== 0) {
+    console.error('\nProvisioning failed. Fix the error above and re-run: company provision');
+    process.exit(result.status || 1);
+  }
+}
+
+// First-run provisioning for a global install. `bun add -g` does not run a
+// dependency's lifecycle scripts, so the venv the postinstall hook used to
+// create is built here, on the first `company` command. Source checkouts
+// provision through `company build` instead.
+function ensureProvisioned() {
+  if (venvPython() || isSourceCheckout()) return;
+  console.log('First run: provisioning the Python environment (one time)...');
+  runInstallJs();
+}
+
+// `company provision [--force]`: the explicit form of the above, for the
+// installers (which cannot know where bun placed the package, while this
+// file always knows its own ROOT) and for repairing a broken install.
+function provision(force) {
+  if (isSourceCheckout()) {
+    console.log('This is a source checkout; run: company build');
+    return;
+  }
+  if (venvPython() && !force) {
+    console.log('Already provisioned (run `company provision --force` to redo it).');
+  } else {
+    runInstallJs();
+  }
+  const port = appPort();
+  console.log('');
+  console.log('Run: company start');
+  if (port) console.log(`Open: http://localhost:${port}`);
+  console.log('');
+}
+
 function run(script, extraArgs = []) {
   // Global-install fast path: spawn the venv's Python directly with
-  // ``-m cli <cmd>``. Skips the ``npm run`` shim that previously re-
+  // ``-m cli <cmd>``. Skips the script-runner hop that previously re-
   // resolved the system ``python`` (which on PEP 668 systems lacks
-  // the CLI runtime deps -- typer/rich/anyio/psutil). The npm-run
-  // path stays as the source-checkout fallback (``bun run start``
-  // uses package.json scripts directly).
+  // the CLI runtime deps -- typer/rich/anyio/psutil). The script-runner
+  // path stays as the source-checkout fallback: ``bun run <script>``
+  // when bun is on PATH (source checkouts are bun-only), else ``npm run``
+  // for a legacy npm-installed copy.
+  ensureProvisioned();
   const venvPy = venvPython();
   if (venvPy) {
     const child = spawn(venvPy, ['-m', 'cli', script, ...extraArgs], {
@@ -164,9 +237,12 @@ function run(script, extraArgs = []) {
     return;
   }
 
-  const npmArgs = ['run', script];
-  if (extraArgs.length) npmArgs.push('--', ...extraArgs);
-  const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', npmArgs, {
+  const runnerArgs = ['run', script];
+  if (extraArgs.length) runnerArgs.push('--', ...extraArgs);
+  const runner = hasBun()
+    ? (process.platform === 'win32' ? 'bun.exe' : 'bun')
+    : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const child = spawn(runner, runnerArgs, {
     cwd: ROOT,
     stdio: 'inherit',
     shell: true,
@@ -195,7 +271,13 @@ if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
   console.log(`company v${PKG.version}`);
 } else if (cmd === 'doctor') {
   doctor();
+} else if (cmd === 'provision') {
+  provision(rest.includes('--force'));
 } else if (cmd === 'start' || cmd === 'dev' || cmd === 'build' || cmd === 'serve') {
+  // Provision before the dependency check: on a fresh global install uv is
+  // installed BY provisioning (scripts/install.js), so checking for it first
+  // would fail the very first `company start`.
+  ensureProvisioned();
   checkDeps();
   run(cmd, rest);
 } else if (SUBCOMMAND_VERBS.has(cmd)) {

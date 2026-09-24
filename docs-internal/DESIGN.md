@@ -5,7 +5,7 @@
 The OpenCompany execution engine implements a robust workflow orchestration system combining industry-standard patterns from **Netflix Conductor**, **Prefect 3.0**, **Temporal**, and **Redis Streams**. This document details the architectural decisions, design patterns, and standards used.
 
 Related docs:
-- [temporal-execution-engine-rfc.md](temporal-execution-engine-rfc.md) - canonical current Temporal control, trigger, graph, agent-team, and trace architecture
+- [temporal-execution-engine-rfc.md](ARCHIVE/temporal-execution-engine-rfc.md) - Temporal control, trigger, graph, agent-team, and trace architecture
 - [TEMPORAL_ARCHITECTURE.md](TEMPORAL_ARCHITECTURE.md) - distributed execution via Temporal activities
 - [event_waiter_system.md](event_waiter_system.md) - push-based trigger waiters
 - [native_llm_sdk.md](native_llm_sdk.md) - LLM provider layer
@@ -14,14 +14,14 @@ Related docs:
 - [workflow-schema.md](workflow-schema.md) - workflow JSON schema and node catalog
 - [frontend_architecture.md](frontend_architecture.md) - current frontend architecture (React 19 + Vite + Tailwind v4 + shadcn/ui + Radix + RHF/zod + TanStack Query + Zustand). Tokens, primitives, state, forms, credentials exemplar.
 - [plugin_system.md](plugin_system.md) - Wave 11 class-based plugin architecture (target state for the config-driven research that lived in deleted planning docs)
-- [schema_source_of_truth_rfc.md](schema_source_of_truth_rfc.md) - backend NodeSpec / icon / palette wire format
-- [ui_migration_plan.md](ui_migration_plan.md) - antd → shadcn/ui migration plan and completion log
+- [schema_source_of_truth_rfc.md](ARCHIVE/schema_source_of_truth_rfc.md) - backend NodeSpec / icon / palette wire format
+- [ui_migration_plan.md](ARCHIVE/ui_migration_plan.md) - antd → shadcn/ui migration plan and completion log
 
 ---
 
 ## Execution Modes
 
-`WorkflowService` in `server/services/workflow.py` is a thin facade (~840 lines) that routes every workflow run based on available infrastructure. In every shipped configuration the effective routing is Temporal -> sequential:
+`WorkflowService` in `server/services/workflow.py` is a thin facade (~855 lines) that routes every workflow run based on available infrastructure. In every shipped configuration the effective routing is Temporal -> sequential:
 
 ```
 workflow.execute(workflow_id, workflow_data)
