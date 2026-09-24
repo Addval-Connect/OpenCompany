@@ -47,7 +47,7 @@ class ChatModelExtractor:
 
     @staticmethod
     async def extract(tool_data: Optional[List[Dict[str, Any]]], auth) -> Tuple[List[str], List[Dict]]:
-        from constants import AI_CHAT_MODEL_TYPES
+        from constants import AI_CHAT_MODEL_TYPES, detect_ai_provider
 
         backends, kwargs_list = [], []
 
@@ -60,7 +60,16 @@ class ChatModelExtractor:
                 continue
 
             params = tool_info.get("parameters", {})
-            provider = params.get("provider", "")
+            # A chat-model node has no ``provider`` field: its provider comes
+            # from its type, or from its ``endpoint`` for a named endpoint.
+            provider = detect_ai_provider(node_type, params)
+            if provider not in PROVIDER_TO_BACKEND:
+                # RLM builds its own clients and never reads a user base URL,
+                # so a local server or named endpoint would reach api.openai.com.
+                raise ValueError(
+                    f"The RLM Agent cannot use the {provider!r} chat model connected to it. "
+                    f"Connect one for: {', '.join(sorted(PROVIDER_TO_BACKEND))}."
+                )
             model = params.get("model", "")
             api_key = params.get("api_key")
 

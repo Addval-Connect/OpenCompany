@@ -100,3 +100,27 @@ class TestRlmGuard:
 
         assert result["success"] is False
         assert "cannot run on provider" in result["error"]
+
+    async def test_a_connected_chat_model_is_routed_by_its_own_provider(self):
+        # Chat-model nodes carry no ``provider`` field; reading one sent an
+        # Anthropic key to the OpenAI backend.
+        from services.rlm.adapters import ChatModelExtractor
+
+        backends, kwargs = await ChatModelExtractor.extract(
+            [{"node_type": "anthropicChatModel", "parameters": {"model": "claude-x", "api_key": "sk-ant"}}], None
+        )
+
+        assert backends == ["anthropic"]
+        assert kwargs == [{"model_name": "claude-x", "api_key": "sk-ant"}]
+
+    @pytest.mark.parametrize(
+        ("node_type", "parameters"),
+        [("openaiCompatibleChatModel", {"endpoint": REF}), ("ollamaChatModel", {})],
+    )
+    async def test_rlm_refuses_a_connected_chat_model_it_cannot_route(self, node_type, parameters):
+        from services.rlm.adapters import ChatModelExtractor
+
+        with pytest.raises(ValueError, match="cannot use the"):
+            await ChatModelExtractor.extract(
+                [{"node_type": node_type, "parameters": {**parameters, "model": "m", "api_key": "k"}}], None
+            )
