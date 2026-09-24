@@ -340,6 +340,19 @@ class Credential:
         """
         raise NotImplementedError(f"Credential subclass {cls.__name__} must override _probe()")
 
+    @classmethod
+    async def catalogue_extras(cls) -> Optional[Dict[str, Any]]:
+        """Extra catalogue fields computed from stored state, or ``None``.
+
+        ``handle_get_credential_catalogue`` merges the result into this
+        provider's entry after computing ``stored`` the default way, so an
+        override may also replace ``stored``. For credentials whose state is
+        not one row per provider id, such as a provider holding several
+        named rows. Must not do network IO: the catalogue is fetched on
+        every modal open.
+        """
+        return None
+
 
 class OAuth2Credential(Credential):
     """OAuth 2.0 with refresh-token support.

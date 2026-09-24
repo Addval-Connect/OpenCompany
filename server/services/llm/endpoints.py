@@ -25,10 +25,14 @@ pure helpers costs nothing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from core.logging import get_logger
+from services.llm.config import ENDPOINT_PROVIDER, split_provider_ref
+
+if TYPE_CHECKING:
+    from services.auth import AuthService
 
 logger = get_logger(__name__)
 
@@ -168,11 +172,60 @@ async def resolve_base_url(candidate: str, *, api_key: str, timeout: float = 10.
     )
 
 
+async def list_endpoint_refs(auth: "AuthService") -> List[str]:
+    """Every saved named endpoint, as provider references, sorted.
+
+    Enumerated from the credential rows themselves rather than a separate
+    index, so there is nothing that can disagree with them.
+    """
+    prefix = f"{ENDPOINT_PROVIDER}:"
+    return sorted(
+        provider
+        for provider in await auth.list_api_key_providers()
+        if provider.startswith(prefix) and not provider.endswith(BASE_URL_SUFFIX)
+    )
+
+
+@dataclass(frozen=True)
+class SavedEndpoint:
+    """A saved named endpoint, as the credentials panel and dropdowns show it.
+
+    ``base_url`` is the redacted form stored for display; the full URL
+    stays in the encrypted ``{ref}_proxy`` row.
+    """
+
+    ref: str
+    label: str
+    base_url: str
+    kind: str
+    models: List[str]
+
+
+async def list_endpoints(auth: "AuthService") -> List[SavedEndpoint]:
+    """Every saved named endpoint with its display metadata and models."""
+    endpoints: List[SavedEndpoint] = []
+    for ref in await list_endpoint_refs(auth):
+        meta = (await auth.get_model_params(ref)).get(SERVER_META_KEY) or {}
+        endpoints.append(
+            SavedEndpoint(
+                ref=ref,
+                label=meta.get("label") or split_provider_ref(ref)[1],
+                base_url=meta.get("base_url", ""),
+                kind=meta.get("kind", "generic"),
+                models=list(await auth.get_stored_models(ref)),
+            )
+        )
+    return endpoints
+
+
 __all__ = [
     "BASE_URL_SUFFIX",
     "SERVER_META_KEY",
     "ResolvedBaseUrl",
+    "SavedEndpoint",
     "base_url_key",
+    "list_endpoint_refs",
+    "list_endpoints",
     "redact_url",
     "resolve_base_url",
 ]

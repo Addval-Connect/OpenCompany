@@ -393,6 +393,7 @@ async def handle_get_credential_catalogue(data: Dict[str, Any], websocket: WebSo
     client-side credential checks needed.
     """
     from services.credential_registry import get_credential_registry
+    from services.plugin.credential import CREDENTIAL_REGISTRY
 
     registry = get_credential_registry()
     since = data.get("since")
@@ -448,6 +449,16 @@ async def handle_get_credential_catalogue(data: Dict[str, Any], websocket: WebSo
             provider["account_label"] = tokens.get("email") or tokens.get("name")
         else:
             provider["account_label"] = None
+
+        # A credential whose state is not one row per provider id (e.g.
+        # several named OpenAI-compatible endpoints) contributes its own
+        # fields, and may replace ``stored``. Declared on the plugin's
+        # Credential class, so this handler names no provider.
+        cred_cls = CREDENTIAL_REGISTRY.get(pid)
+        if cred_cls is not None:
+            extras = await cred_cls.catalogue_extras()
+            if extras:
+                provider.update(extras)
 
     return catalogue
 

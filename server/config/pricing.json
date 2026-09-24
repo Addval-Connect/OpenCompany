@@ -121,6 +121,10 @@
     "lmstudio": {
       "_description": "Local inference — same zero-cost convention as ollama.",
       "_default": {"input": 0.00, "output": 0.00}
+    },
+    "openai_compatible": {
+      "_description": "Named OpenAI-compatible endpoints (openai_compatible:<slug>). Self-hosted servers cost nothing at the API layer. When saving an endpoint found a model id in the LiteLLM table, PricingService.get_pricing uses that per-model price from the model registry before this _default.",
+      "_default": {"input": 0.00, "output": 0.00}
     }
   },
 

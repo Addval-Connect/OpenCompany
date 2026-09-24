@@ -36,6 +36,8 @@ EXPECTED_REGISTERED_PROVIDERS = {
     # Indic-first; OpenAI-compatible chat endpoint but no model-list route,
     # which it declares via `supports_model_listing: false`.
     "sarvam",
+    # The one registration behind every user-named endpoint (RFC-0003 D13).
+    "openai_compatible",
 }
 COMPAT_PROVIDERS = (
     "xai",
@@ -184,6 +186,22 @@ def test_every_compat_provider_inherits_shared_response_and_tool_contract(
         "deep",
     ]
     assert spec.sdk_exception_refs == ("openai:OpenAIError",)
+
+
+def test_endpoint_provider_is_registered_once_without_a_base_url():
+    """RFC-0003 AG17: named endpoints share one OpenAIProvider registration.
+
+    It must not pin a ``base_url``: each endpoint's resolved URL lives on its
+    own ``openai_compatible:<slug>_proxy`` row, and a pinned default would be
+    used silently when that row is missing.
+    """
+    from services.llm.providers.openai import OpenAIProvider
+
+    spec = get_provider("openai_compatible")
+    assert spec.factory is OpenAIProvider
+    assert spec.client_kwargs == {"provider_name": "openai_compatible"}
+    assert spec.sdk_exception_refs == ("openai:OpenAIError",)
+    assert list(all_providers()).count("openai_compatible") == 1
 
 
 def test_unknown_provider_raises_node_user_error():
