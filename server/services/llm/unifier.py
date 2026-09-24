@@ -123,16 +123,18 @@ class ChatUnifier:
             )
         except LLMError as error:
             # Raised by provider logic rather than the SDK, e.g. a 2xx that
-            # carried an error body instead of a completion.
+            # carried an error body instead of a completion. Logged whether
+            # or not it is translated: agent steps take it untranslated, and
+            # only this layer knows where the call went (RFC-0003 D10).
+            self._log_failure("LLM provider request failed", error, entry, provider)
             if not translate_errors:
                 raise
-            self._log_failure("LLM provider request failed", error, entry)
             raise NodeUserError(error.user_message) from error
         except spec.sdk_exception_types as e:
             error = LLMError.from_exception(provider, e)
+            self._log_failure("LLM provider request failed", error, entry, provider)
             if not translate_errors:
                 raise error from e
-            self._log_failure("LLM provider request failed", error, entry)
             raise NodeUserError(error.user_message) from error
         except (ValueError, TypeError, OSError) as e:
             # Only normalize generic configuration/transport failures raised
@@ -152,14 +154,14 @@ class ChatUnifier:
                 category=category,
                 retryable=category == LLMErrorCategory.CONNECTION,
             )
-            if not translate_errors:
-                raise error from e
             logger.warning(
                 "LLM client construction failed",
                 provider=error.provider,
                 category=error.category.value,
                 retryable=error.retryable,
             )
+            if not translate_errors:
+                raise error from e
             raise NodeUserError(error.user_message) from error
         finally:
             if entry is not None:
@@ -182,11 +184,11 @@ class ChatUnifier:
             )
             models = await entry.client.fetch_models(api_key)
         except LLMError as error:
-            self._log_failure("LLM model-list request failed", error, entry)
+            self._log_failure("LLM model-list request failed", error, entry, provider)
             raise NodeUserError(error.user_message) from error
         except spec.sdk_exception_types as e:
             error = LLMError.from_exception(provider, e)
-            self._log_failure("LLM model-list request failed", error, entry)
+            self._log_failure("LLM model-list request failed", error, entry, provider)
             raise NodeUserError(error.user_message) from error
         except (ValueError, TypeError, OSError) as e:
             if entry is not None:
@@ -430,18 +432,20 @@ class ChatUnifier:
             ) from None
 
     @staticmethod
-    def _log_failure(event: str, error: LLMError, entry: Optional[_ClientEntry]) -> None:
+    def _log_failure(event: str, error: LLMError, entry: Optional[_ClientEntry], provider: str) -> None:
         """One WARN line per provider failure, naming where the call went.
 
-        ``url`` is redacted (no userinfo, query or fragment) and
-        ``url_source`` says which setting produced it, so a routing mistake
-        is distinguishable from a model failure (RFC-0003 D10). The key is
-        never logged.
+        ``provider`` is the reference the call was made with, so a named
+        endpoint keeps its slug even when the provider raised under its
+        generic name. ``url`` is redacted (no userinfo, query or fragment)
+        and ``url_source`` says which setting produced it, so a routing
+        mistake is distinguishable from a model failure (RFC-0003 D10).
+        The key is never logged.
         """
         client = entry.client if entry is not None else None
         logger.warning(
             event,
-            provider=error.provider,
+            provider=provider,
             category=error.category.value,
             retryable=error.retryable,
             status_code=error.status_code,

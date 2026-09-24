@@ -85,6 +85,36 @@ class TestTwoHundredWithoutChoices:
                     model="m",
                 )
 
+    async def test_an_untranslated_failure_still_logs_where_the_call_went(self):
+        # Agent steps take errors untranslated (translate_errors=False); the
+        # failure log must not depend on translation (D10).
+        error = LLMError(message="raw", provider="openai_compatible", category=LLMErrorCategory.PROTOCOL)
+        client = MagicMock()
+        client.chat = AsyncMock(side_effect=error)
+        client.endpoint_url = LEAKY_URL
+        client.url_source = "proxy"
+        spec = ProviderSpec(
+            name="openai_compatible", factory=MagicMock(return_value=client), sdk_exception_refs=("openai:OpenAIError",)
+        )
+        auth = MagicMock()
+        auth.get_api_key = AsyncMock(return_value=LEAKY_URL)
+        unifier = ChatUnifier(defaults={"providers": {}}, auth_service=auth)
+
+        with patch("services.llm.unifier.get_provider", return_value=spec), patch("services.llm.unifier.logger") as log:
+            with pytest.raises(LLMError):
+                await unifier.chat(
+                    provider="openai_compatible:home",
+                    api_key="k",
+                    messages=[Message(role="user", content="hi")],
+                    model="m",
+                    translate_errors=False,
+                )
+
+        logged = log.warning.call_args.kwargs
+        assert logged["provider"] == "openai_compatible:home"
+        assert logged["url"] == "http://host:1234/"
+        assert logged["url_source"] == "proxy"
+
 
 class TestTheStoredKeyIsSentAsStored:
     def test_openai_compatible_client_keeps_the_key_with_a_proxy(self):
