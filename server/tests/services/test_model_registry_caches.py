@@ -8,6 +8,7 @@ under DATA_DIR, and matched conservatively.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -153,6 +154,31 @@ class TestLiteLLMTable:
 
         await registry.ensure_litellm_table()
 
+        assert registry.lookup_litellm("gpt-4o") is None
+
+    @respx.mock
+    async def test_an_on_demand_fetch_that_failed_is_not_repeated_on_every_save(self, registry):
+        route = respx.get(mr.LITELLM_MODELS_URL).mock(side_effect=httpx.ConnectError("offline"))
+
+        await registry.ensure_litellm_table()
+        await registry.ensure_litellm_table()
+
+        assert route.call_count == 1
+
+    async def test_an_on_demand_fetch_is_bounded_in_total(self, registry, monkeypatch):
+        calls = 0
+
+        async def slow_refresh():
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(5)
+
+        monkeypatch.setattr(registry, "_refresh_litellm", slow_refresh)
+
+        await asyncio.wait_for(registry.ensure_litellm_table(timeout=0.05), 1)
+        await registry.ensure_litellm_table(timeout=0.05)
+
+        assert calls == 1
         assert registry.lookup_litellm("gpt-4o") is None
 
     @respx.mock

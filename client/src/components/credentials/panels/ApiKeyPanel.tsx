@@ -17,6 +17,7 @@ import { useCredentialPanel } from '../useCredentialPanel';
 import { ProviderDefaultsSection, LlmUsageSection, ApiUsageSection } from '../sections';
 import { NodeIcon } from '../../../assets/icons';
 import { theme } from '../../../styles/theme';
+import { CREDENTIAL_PROBE_REQUEST_TIMEOUT } from '@/contexts/WebSocketContext';
 import type { ServerEndpointSummary } from '@/hooks/useCatalogueQuery';
 import type { ProviderConfig } from '../types';
 import EndpointList from './EndpointList';
@@ -47,12 +48,13 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
   // Every field goes out under its catalogue key; the backend Credential
   // decides what each means. A rejected save carries its reason in
   // `message`, which the generic executor does not surface on its own.
+  // Both probe the server, so they get the probe budget, not the default.
   const addEndpoint = async () => {
     const res = await panel.actions.sendWs('validate_api_key', {
       provider: config.id,
       api_key: inputValue.trim(),
       ...Object.fromEntries(secondaryFields.map((sf) => [sf.key, String(panel.values[sf.key] ?? '').trim()])),
-    });
+    }, CREDENTIAL_PROBE_REQUEST_TIMEOUT);
     if (res?.valid) {
       for (const f of config.fields ?? []) panel.form.setFieldValue(f.key, '');
     } else if (res?.message) {
@@ -64,7 +66,7 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
       provider: config.id,
       api_key: endpoint.base_url || endpoint.ref,
       ref: endpoint.ref,
-    });
+    }, CREDENTIAL_PROBE_REQUEST_TIMEOUT);
     if (res && !res.valid && res.message) panel.setError(res.message);
   };
   const removeEndpoint = (endpoint: ServerEndpointSummary) =>

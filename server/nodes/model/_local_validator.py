@@ -30,6 +30,7 @@ a re-Fetch must not take down a configuration that works.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -47,9 +48,14 @@ logger = get_logger(__name__)
 
 _DISPLAY_NAMES = {"ollama": "Ollama", "lmstudio": "LM Studio"}
 
-# Native routes are only asked once the host is known to answer, so a
-# short timeout is enough and keeps a save well inside the WS budget.
+# A save runs inside one WS request, so every step after rooting is bounded
+# (the frontend waits CREDENTIAL_PROBE_REQUEST_TIMEOUT). Native routes are
+# only asked once the host is known to answer, so a short timeout is enough;
+# the three are asked at once, so a slow host costs one timeout, not three.
 _NATIVE_TIMEOUT_SECONDS = 3.0
+# The Ollama and LM Studio SDK probes. Ollama's client times out on its own;
+# LM Studio's takes no timeout, so the bound is applied around both.
+_SDK_PROBE_TIMEOUT_SECONDS = 10.0
 
 
 def _classify_http_error(display: str, base_url: str, exc: BaseException) -> Tuple[str, str]:
@@ -59,7 +65,7 @@ def _classify_http_error(display: str, base_url: str, exc: BaseException) -> Tup
     Rooting has already succeeded by the time a native probe runs, so a
     failure here is about the native API, not the base URL.
     """
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
         return ("timeout", f"Request to {base_url} timed out — server may be overloaded or unreachable")
 
     if isinstance(exc, httpx.ConnectError):
@@ -236,22 +242,25 @@ async def _detect_kind(base_url: str, api_key: str) -> Tuple[str, Optional[Dict[
     """Which server answers at ``base_url``, from its native routes.
 
     Each route is accepted only by body shape, never by status: LM Studio
-    answers HTTP 200 to routes it does not serve. llama.cpp is asked first
-    because its server also mimics some Ollama routes. Returns the kind and,
-    for llama.cpp, the ``/props`` body (it carries ``n_ctx``).
+    answers HTTP 200 to routes it does not serve. The three routes are asked
+    at once; llama.cpp wins when several answer, because its server also
+    mimics some Ollama routes. Returns the kind and, for llama.cpp, the
+    ``/props`` body (it carries ``n_ctx``).
     """
     host = _strip_v1_path(base_url)
     headers = {"Authorization": f"Bearer {api_key}"}
     async with httpx.AsyncClient(timeout=_NATIVE_TIMEOUT_SECONDS, headers=headers) as client:
-        props = await _get_json(client, f"{host}/props")
-        if isinstance(props, dict) and isinstance(props.get("default_generation_settings"), dict):
-            return "llamacpp", props
-        body = await _get_json(client, f"{host}/api/v1/models")
-        if isinstance(body, dict) and isinstance(body.get("models"), list):
-            return "lmstudio", None
-        body = await _get_json(client, f"{host}/api/version")
-        if isinstance(body, dict) and isinstance(body.get("version"), str):
-            return "ollama", None
+        props, lmstudio_models, ollama_version = await asyncio.gather(
+            _get_json(client, f"{host}/props"),
+            _get_json(client, f"{host}/api/v1/models"),
+            _get_json(client, f"{host}/api/version"),
+        )
+    if isinstance(props, dict) and isinstance(props.get("default_generation_settings"), dict):
+        return "llamacpp", props
+    if isinstance(lmstudio_models, dict) and isinstance(lmstudio_models.get("models"), list):
+        return "lmstudio", None
+    if isinstance(ollama_version, dict) and isinstance(ollama_version.get("version"), str):
+        return "ollama", None
     return "generic", None
 
 
@@ -307,7 +316,8 @@ async def _describe_models(
     """
     if kind in ("ollama", "lmstudio"):
         fetch = _fetch_ollama_models if kind == "ollama" else _fetch_lmstudio_models
-        return {e["id"]: {k: v for k, v in e.items() if k != "id"} for e in await fetch(base_url)}
+        loaded = await asyncio.wait_for(fetch(base_url), _SDK_PROBE_TIMEOUT_SECONDS)
+        return {e["id"]: {k: v for k, v in e.items() if k != "id"} for e in loaded}
 
     ids = [entry for entry in entries if isinstance(getattr(entry, "id", None), str) and entry.id]
     if kind == "llamacpp":

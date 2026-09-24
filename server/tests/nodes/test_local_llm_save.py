@@ -8,6 +8,7 @@ what matters here is that they are still the ones called.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -119,6 +120,31 @@ class TestKindDetection:
 
         assert await lv._detect_kind("http://host:8000/v1", "k") == ("generic", None)
 
+    @respx.mock
+    async def test_llamacpp_wins_when_it_also_answers_like_ollama(self):
+        props = {"default_generation_settings": {"n_ctx": 4096}}
+        respx.get("http://host:8080/props").mock(return_value=httpx.Response(200, json=props))
+        respx.get("http://host:8080/api/version").mock(return_value=httpx.Response(200, json={"version": "0.1"}))
+
+        assert await lv._detect_kind("http://host:8080/v1", "k") == ("llamacpp", props)
+
+    async def test_the_native_routes_are_asked_at_once(self, monkeypatch):
+        # A slow host then costs one probe timeout, not three.
+        in_flight = peak = 0
+
+        async def get_json(client, url):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return None
+
+        monkeypatch.setattr(lv, "_get_json", get_json)
+
+        assert await lv._detect_kind("http://host:8000/v1", "k") == ("generic", None)
+        assert peak == 3
+
 
 class TestFailedSaveChangesNothing:
     @respx.mock
@@ -166,6 +192,23 @@ class TestFailedSaveChangesNothing:
         assert auth.rows[f"{REF}_proxy"]["key"] == "http://old:8080"
         assert REF not in auth.rows
         assert registry.get_model_info("model.gguf", REF) is None
+        broadcaster.update_api_key_status.assert_not_awaited()
+
+    @respx.mock
+    async def test_a_hung_sdk_probe_fails_the_save_within_its_bound(self, auth, broadcaster, registry, monkeypatch):
+        # LM Studio's SDK takes no timeout of its own.
+        async def never_answers(base_url):
+            await asyncio.sleep(5)
+
+        respx.get("http://host:1234/models").mock(return_value=httpx.Response(200, json=_models("qwen3")))
+        monkeypatch.setattr(lv, "_fetch_lmstudio_models", never_answers)
+        monkeypatch.setattr(lv, "_SDK_PROBE_TIMEOUT_SECONDS", 0.05)
+
+        result = await lv.validate_local_llm({"provider": "lmstudio", "api_key": "http://host:1234"})
+
+        assert result["valid"] is False
+        assert "timed out" in result["message"]
+        assert auth.stored == []
         broadcaster.update_api_key_status.assert_not_awaited()
 
     @respx.mock

@@ -16,6 +16,7 @@ temperature constraints, thinking capabilities). Three sources, three files:
 Falls back to llm_defaults.json offline.
 """
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, asdict, field
@@ -46,6 +47,11 @@ _LITELLM_FIELDS = (
     "input_cost_per_token",
     "output_cost_per_token",
 )
+# An on-demand fetch runs inside an endpoint save, so it is bounded in
+# total, and a failed one is not repeated on every save: offline, each save
+# would otherwise wait out the timeout. The 24 h refresh is not affected.
+_LITELLM_ON_DEMAND_TIMEOUT_SECONDS = 8.0
+_LITELLM_RETRY_AFTER = timedelta(minutes=10)
 
 
 def _local_models_path() -> Path:
@@ -155,6 +161,7 @@ class ModelRegistryService:
         # Kept apart so an OpenRouter refresh cannot replace them.
         self._local_models: Dict[str, ModelInfo] = {}
         self._litellm: Dict[str, Dict[str, Any]] = {}
+        self._litellm_failed_at: Optional[datetime] = None
         self._cache_timestamp: Optional[datetime] = None
         self._llm_defaults: Dict[str, Any] = {}
 
@@ -673,15 +680,24 @@ class ModelRegistryService:
         matches = [spec for key, spec in self._litellm.items() if key.partition("/")[2] == model_id]
         return matches[0] if len(matches) == 1 else None
 
-    async def ensure_litellm_table(self) -> None:
+    async def ensure_litellm_table(self, timeout: float = _LITELLM_ON_DEMAND_TIMEOUT_SECONDS) -> None:
         """Fetch the LiteLLM table if this process has none yet.
 
         The 24 h refresh keeps it current; this covers a first endpoint
         save on a machine whose OpenRouter snapshot was still fresh, so
-        the refresh has not run yet.
+        the refresh has not run yet. It runs inside that save, so it gets
+        ``timeout`` seconds in total, and after a failure it waits
+        ``_LITELLM_RETRY_AFTER`` before trying again. Never raises.
         """
-        if not self._litellm:
-            await self._refresh_litellm()
+        if self._litellm:
+            return
+        if self._litellm_failed_at and datetime.now(timezone.utc) - self._litellm_failed_at < _LITELLM_RETRY_AFTER:
+            return
+        try:
+            await asyncio.wait_for(self._refresh_litellm(), timeout)
+        except asyncio.TimeoutError:
+            self._litellm_failed_at = datetime.now(timezone.utc)
+            logger.warning(f"Model registry: LiteLLM table fetch took longer than {timeout:g}s; not retried for a while")
 
     async def _refresh_litellm(self) -> None:
         """Fetch and trim the LiteLLM table. Never raises."""
@@ -691,14 +707,17 @@ class ModelRegistryService:
                 response.raise_for_status()
                 raw = response.json()
         except Exception as e:  # noqa: BLE001 — a stale copy beats none
+            self._litellm_failed_at = datetime.now(timezone.utc)
             logger.warning(f"Model registry: LiteLLM table refresh failed, keeping the cached copy: {e}")
             return
 
         table = self._parse_litellm(raw)
         if not table:
+            self._litellm_failed_at = datetime.now(timezone.utc)
             logger.warning("Model registry: LiteLLM table had no chat models, keeping the cached copy")
             return
         self._litellm = table
+        self._litellm_failed_at = None
         self._save_litellm_cache()
         logger.info(f"Model registry: loaded {len(table)} chat models from LiteLLM")
 

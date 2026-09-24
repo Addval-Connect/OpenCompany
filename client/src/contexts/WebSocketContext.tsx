@@ -73,6 +73,13 @@ const REQUEST_TIMEOUT = 30000;
 // while retaining a finite bound so a lost response cannot lock controls forever.
 export const WORKFLOW_CONTROL_REQUEST_TIMEOUT = 5 * 60 * 1000;
 
+// validate_api_key probes the user's server when the credential is a Base
+// URL (Ollama, LM Studio, named OpenAI-compatible endpoints): it roots the
+// URL, detects the server's kind and lists its models. The backend bounds
+// each step (nodes/model/_local_validator.py); this stays above their sum, so
+// a slow save is not cut off here and then completes behind the user's back.
+export const CREDENTIAL_PROBE_REQUEST_TIMEOUT = 60 * 1000;
+
 // Maximum queued sends before backpressure kicks in (FIFO eviction of oldest)
 const QUEUE_MAX_SIZE = 200;
 
@@ -472,8 +479,9 @@ interface WebSocketContextValue {
   clearChatMessages: () => void;
   sendChatMessage: (message: string, nodeId?: string) => Promise<void>;
 
-  // Generic request method
-  sendRequest: <T = any>(type: string, data?: Record<string, any>) => Promise<T>;
+  // Generic request method. timeoutMs: omitted = the 30 s default,
+  // negative = no timeout.
+  sendRequest: <T = any>(type: string, data?: Record<string, any>, timeoutMs?: number) => Promise<T>;
 
   // Generic broadcast subscription. Returns an unsubscribe fn.
   // Use for ad-hoc backend-pushed events like `workflow_ops_apply`
@@ -3123,7 +3131,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const response = await sendRequest<any>('validate_api_key', {
         provider,
         api_key: apiKey
-      });
+      }, CREDENTIAL_PROBE_REQUEST_TIMEOUT);
       // Backend returns one of:
       //   { success: true,  valid: true,  models }         — key is good
       //   { success: true,  valid: false, message }        — clean rejection (401/403/timeout/etc)
