@@ -125,7 +125,7 @@ flowchart TD
   GraphQL POST. `run_cli_command` kills the process tree on timeout and
   returns `success: False` with `error: "<binary> timed out (Ns)"`, which the
   failure wrap turns into a `NodeUserError`.
-- **Error paths**: `ensure_cf_cli()` raising (npm missing, npm install
+- **Error paths**: `ensure_cf_cli()` raising (bun missing, `bun add`
   failing) -> `RuntimeError("cf CLI install failed: ...")`, which is NOT a
   `NodeUserError` and therefore takes `BaseNode.execute`'s generic exception
   branch (full traceback). Non-zero exit -> `NodeUserError("cf <argv0>
@@ -135,13 +135,15 @@ flowchart TD
 ## Side Effects
 
 - **Subprocess**: one `cf` process per operation from the project-local
-  shim `<DATA_DIR>/packages/node_modules/.bin/cf` (`cf.cmd` on Windows).
+  shim `<DATA_DIR>/packages/node_modules/.bin/cf` (`cf.exe` plus a `cf.bunx`
+  file on Windows — bun's shims, never `.cmd`), which runs the CLI on bun.
   The system-global `cf` is never consulted. Child env is a copy of the
   server env plus `NO_COLOR=1` and the credential vars above; no `cwd` is
   passed (the process inherits the server's cwd - the workflow workspace is
   not used).
-- **Install**: on first use `npm install cf@0.2.0 --prefix <DATA_DIR>/packages
-  --no-audit --no-fund` runs in a worker thread under an install lock.
+- **Install**: on first use `core.js_runtime.add_package("cf@0.2.0")` — `bun add
+  --cwd <DATA_DIR>/packages --no-progress cf@0.2.0` — runs in a worker thread
+  under an install lock.
 - **External API calls**: `POST https://api.cloudflare.com/client/v4/graphql`
   with `{query, variables}` (`graphql_query` only).
 - **Credential reads**: `auth_service.get_api_key("cloudflare")` and
@@ -163,7 +165,9 @@ flowchart TD
   session created by `cf auth login` lives in cf's own user-level config and
   is never read by OpenCompany; the modal badge is a synthetic `cli-managed`
   marker OAuth row written by `_handlers.py`.
-- **Services**: the `cf` CLI (Node >= 22, `npm` on PATH for the install);
+- **Services**: the `cf` CLI (declares `engines.node >= 22`, which bun ignores —
+  it runs on bun with no Node on PATH; `bun` on PATH or `OPENCOMPANY_BUN_BIN`
+  for the install);
   Cloudflare's dashboard OAuth for login (cf opens the browser itself and
   listens on a fixed loopback port it owns - see `_handlers.py` for the
   single-flight guard and the never-kill rule).

@@ -16,8 +16,10 @@ as a plain subprocess driven over the VSCode-extension stream-json protocol
 (`--output-format stream-json --input-format stream-json --verbose --ide`) —
 NOT the old headless `claude -p`. The common case is a single visible
 `prompt` that synthesises a one-task batch. Memory continuity is handled by
-claude's own on-disk session JSONL via `--continue` / `--resume` over a
-stable `cwd`, not by re-injecting markdown. This is the only
+claude's own on-disk session JSONL via a host-minted `--session-id` on the
+first run and `--resume <last_session_id>` afterwards (never `--continue`,
+which the CLI resolves only against interactive sessions) over a stable
+`cwd`, not by re-injecting markdown. This is the only
 specialized-agent node that shells out; the others stay in-process.
 
 ## Inputs (handles)
@@ -28,7 +30,7 @@ Standard `std_agent_handles()` topology (same as the generic agents).
 |--------|---------|
 | `input-main` | Auto-prompt fallback (reads `source.message / text / content / str`) |
 | `input-skill` | Connected skill names collected; SKILL.md trees materialised under `<workspace>/.claude/skills/` and exposed to the CLI (not injected into a system prompt) |
-| `input-memory` | When wired, sets `continue_session=True` so claude emits `--continue` and resumes its on-disk session under the stable cwd |
+| `input-context` | Context-node opt-in (`ui_hints.requiresContext = True` via `STD_AGENT_HINTS`): a connected `context` node persists the conversation through `SpecializedAgentContextBridge`; `is_context()` tells the descriptor apart from a legacy memory payload (see Decision Logic) |
 | `input-tools` | Connected tool nodes exposed to the CLI as `mcp__opencompany__<type>` MCP tools |
 | `input-task` | Collected by the edge-walker; `task_data` is unpacked but the 5th element is ignored (`_`) here |
 
@@ -88,9 +90,9 @@ frontend Input Data panel — a separate, looser schema from the plugin's strict
 ```mermaid
 flowchart TD
   A[ClaudeCodeAgentNode.execute_op] --> B[broadcast executing]
-  B --> C[collect_agent_connections<br/>memory/skill/tool/input]
-  C --> D{memory_data wired?}
-  D -- yes --> D1[continue_session = True]
+  B --> C[collect_agent_connections<br/>context/skill/tool/input]
+  C --> D{context_data is a legacy<br/>memory payload, not is_context?}
+  D -- yes --> D1[resume_session_id =<br/>memory_data.last_session_id]
   D -- no --> E{params.tasks empty?}
   D1 --> E
   E -- yes --> F[Resolve prompt:<br/>params.prompt else input_data<br/>message/text/content/str]
@@ -117,11 +119,20 @@ flowchart TD
   `effort` + `fallback_model` + `continue_session`.
 - **Batch defaulting**: when `params.tasks` is non-empty, node-level
   `model`/`system_prompt`/`effort`/`fallback_model` fill any task that
-  didn't override; `continue_session=True` is auto-set only when memory is
-  wired AND the task didn't explicitly opt in or pick a resume UUID.
-- **Memory bridge**: `continue_session = bool(memory_data)`; the argv builder
-  emits `--continue` (first run is a benign no-op, later runs resume the
-  on-disk JSONL). NO markdown re-injection.
+  didn't override; `resume_session_id` is auto-set from the memory node's
+  `last_session_id` only when memory is wired AND the task didn't explicitly
+  opt in/out or pick its own UUID.
+- **Context vs legacy memory**: `collect_agent_connections` returns one
+  `context_data` slot; `is_context()` marks a Context-node descriptor (handled
+  by `SpecializedAgentContextBridge`), anything else is treated as a legacy
+  memory payload (`memory_data`).
+- **Memory bridge (legacy payload only)**: `resume_session_id =
+  memory_data["last_session_id"]` — the pool reads the persisted
+  `last_session_id` and the argv builder emits `--resume <UUID>` (first run
+  has none, so the pool mints `--session-id` and `_persist_memory` stores it
+  for next time; a stale UUID is cleared when claude reports it not found).
+  Never `--continue`, which skips non-interactive sessions. NO markdown
+  re-injection.
 - **Serial-memory guard**: memory wired AND `len(tasks) > 1` -> `NodeUserError`
   (parallel `--resume` against one JSONL would corrupt it).
 - **Workspace**: `ctx.raw["workspace_dir"]` (injected by workflow.py) or
@@ -148,12 +159,12 @@ flowchart TD
 
 ## External Dependencies
 
-- **Binaries**: `@anthropic-ai/claude-code`, OpenCompany-managed — auto-installed on first use into the shared npm tree at `<DATA_DIR>/packages/` (binary at `<DATA_DIR>/packages/node_modules/.bin/claude[.cmd]`); requires `npm` on PATH.
+- **Binaries**: `@anthropic-ai/claude-code`, OpenCompany-managed — auto-installed on first use into the shared packages tree at `<DATA_DIR>/packages/` with `bun add --trust` via `core.js_runtime.add_package` (bin shim at `<DATA_DIR>/packages/node_modules/.bin/claude[.exe]`, executed on the bun runtime); requires bun (`OPENCOMPANY_BUN_BIN` or PATH), never Node or npm.
 - **Python packages**: standard library + the `services/cli_agent/` framework
   (FastMCP bridge, session pool).
 - **Credentials**: Claude Code handles its own authentication via
   `CLAUDE_CONFIG_DIR=<DATA_DIR>/claude/` (= `~/.opencompany/claude/` by
-  default; see [Claude OAuth](../../claude_code_agent_architecture.md));
+  default; see [Claude OAuth](../../ARCHIVE/claude_code_agent_architecture.md));
   OpenCompany does not inject an API key.
 
 ## Edge cases & known limits
@@ -183,4 +194,4 @@ flowchart TD
 - **Generic pattern**: [`_pattern.md`](./_pattern.md)
 - **Architecture**: [CLI Agent Framework](../../cli_agent_framework.md),
   [Claude Code Interactive Mode](../../claude_code_interactive_mode.md),
-  [Claude Code Agent](../../claude_code_agent_architecture.md)
+  [Claude Code Agent](../../ARCHIVE/claude_code_agent_architecture.md)

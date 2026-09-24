@@ -1,7 +1,9 @@
 # `server/nodes/` — plugin cookbook
 
-**One file = one node.** Drop a Python file in the right subfolder and
-it auto-registers at import time. No other code needs to change.
+**One plugin = one folder** (`server/nodes/<group>/<name>/__init__.py`),
+or a single `.py` file inside a domain folder whose icon/meta are shared
+folder-wide (`stripe/`, `telegram/`, `speech/`, ...). Both auto-register
+at import time; no other code needs to change.
 
 Full reference: [docs-internal/plugin_system.md](../../docs-internal/plugin_system.md).
 
@@ -10,7 +12,7 @@ Full reference: [docs-internal/plugin_system.md](../../docs-internal/plugin_syst
 ## Five-minute recipe
 
 ```python
-# server/nodes/search/acme_search.py
+# server/nodes/search/acme_search/__init__.py
 from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Literal, Optional
 
@@ -19,8 +21,9 @@ from services.plugin import (
 )
 
 
-# 1. Credential — inline here (single-use) or move to
-#    server/nodes/search/_credentials.py if 2+ plugins will share it.
+# 1. Credential — inline here (single-use) or create a
+#    server/nodes/search/_credentials.py (the search folder does not
+#    ship one today) if 2+ plugins will share it.
 class AcmeCredential(ApiKeyCredential):
     id = "acme"
     display_name = "Acme Search"
@@ -109,7 +112,8 @@ Match the palette group. Current folders (see
 agent/       — AI agents (ai_agent, chat_agent + specialized/variant folders incl. 2 team leads,
                CLI agents (claude_code, codex, rlm) and Vertex agents; SSOT: AI_AGENT_TYPES
                in server/constants.py + the folder glob)
-model/       — LLM chat models (openai, anthropic, gemini, …)
+model/       — LLM chat models (openai, anthropic, gemini, …, and openai_compatible for
+               a user-named endpoint); also owns the LLM provider dropdown loaders
 android/     — Android device services
 google/      — Google Workspace (gmail / calendar / drive / sheets / …)
 twitter/     — Twitter/X (send / search / user / receive)
@@ -169,7 +173,7 @@ these first before writing new code:
 |---|---|---|
 | `agent/` | `_inline.prepare_agent_call` | One-shot pre-dispatch for every agent (memory + skill + tool + teammate collection) |
 | `agent/` | `_specialized.SpecializedAgentBase` | Base for 13 specialized agents |
-| `model/` | `_base.ChatModelBase` | 12 chat models inherit → same `@Operation("chat")` body that calls `ai_service.execute_chat` |
+| `model/` | `_base.ChatModelBase` | 13 chat models inherit → same `@Operation("chat")` body that calls `ai_service.execute_chat` |
 | `speech/` + `translate/` | `_config` / `_registry` / `_unifier` / `_providers/` | The multi-vendor shape. Capability data is JSON (`services/plugin/capabilities.CapabilityConfig`), registration is `services/provider_registry`, and each `_providers/<vendor>.py` owns that vendor's auth scheme, request transport and response shape |
 | `android/` | `_base.AndroidServiceBase` | 16 Android services inherit; payload translation + `SERVICE_ID_MAP` lives on this base |
 | `android/` | `_base.execute_android_service_tool` | AI-tool dispatcher — called from `services/handlers/tools.py` for direct service tools (the `androidTool` aggregator + `execute_android_toolkit` were retired) |
@@ -177,9 +181,9 @@ these first before writing new code:
 | `google/` | `_base.build_google_service` / `track_google_usage` | 7 Google plugins (OAuth + API) |
 | `google/` | `_gmail.fetch_email_details` / `mark_email_as_read` | gmail + gmail_receive |
 | `twitter/` | `_base.call_with_retry` / `format_tweet` / `sync_search_recent` | 4 twitter plugins (XDK + refresh) |
-| `whatsapp/` | `_base.*` | whatsappSend / whatsappDb (RPC dispatch via `services/whatsapp_service.py`) |
+| `whatsapp/` | `_base.*` | whatsappSend / whatsappDb (RPC dispatch via `nodes/whatsapp/_service.py` — `RPCClient` + `whatsapp_rpc_call`) |
 | `social/` | `_base.*` | socialReceive / socialSend |
-| `proxy/` | `proxy_config.execute_proxy_config` | 10-operation matrix; called by both `ProxyConfigNode.dispatch` and `tools.py`'s AI-tool branch |
+| `proxy/` | `proxy_config/__init__.py::execute_proxy_config` | 10-operation matrix; called by both `ProxyConfigNode.dispatch` and `tools.py`'s AI-tool branch |
 
 Cross-domain infrastructure lives in `services/plugin/` (e.g.
 `edge_walker.py` for agent connection discovery, `routing.py` for
@@ -194,13 +198,13 @@ Credentials live **in each node folder's `_credentials.py`** — same
 the sibling file via relative path:
 
 ```python
-# inside server/nodes/google/gmail.py
+# inside server/nodes/google/gmail/__init__.py
 from ._credentials import GoogleCredential               # shared with 6 siblings
 
-# inside server/nodes/model/openai_chat_model.py
-from ._credentials import OpenAICredential               # one of 10 cloud LLM creds
+# inside server/nodes/model/openai_chat_model/__init__.py
+from ._credentials import OpenAICredential               # one of 11 cloud LLM creds
 
-# inside server/nodes/twitter/twitter_send.py
+# inside server/nodes/twitter/twitter_send/__init__.py
 from ._credentials import TwitterCredential              # shared with 3 siblings
 ```
 
@@ -212,11 +216,11 @@ from ._credentials import TwitterCredential              # shared with 3 sibling
 | `nodes/telegram/` | `TelegramCredential` (bot token + owner chat id) | telegram_send / _receive |
 | `nodes/discord/` | `DiscordBotCredential` (bot token; overrides `inject()` because Discord uses `Bot <token>`, not the inherited `Bearer `) + `DiscordUserCredential` (OAuth2 user context, separate id so connecting a user never overwrites the bot) | discord_send / _action / _receive / _interaction |
 | `nodes/scraper/` | `ApifyCredential` (Bearer, SDK probe) + `TikHubCredential` (Bearer, declarative httpx probe against `tikhub/user/get_user_info` — kept SDK-free so the modal validates even if the `tikhub` import fails) | apify_actor / tikhub_action |
-| `nodes/model/` | 13 LLM credential classes: 11 cloud (`OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / xAI / Sarvam`) plus Ollama / LM Studio | 12 chat models (xAI has no standalone chat-model node) **plus the 5 `nodes/sarvam/` service nodes**, which import `SarvamCredential` from here — one stored key serves Sarvam's OpenAI-compatible chat endpoint *and* its `api-subscription-key` REST APIs |
+| `nodes/model/` | 14 LLM credential classes: 11 cloud (`OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / xAI / Sarvam`), Ollama / LM Studio, and `OpenAICompatibleCredential` (any number of named endpoints, RFC-0003) | 13 chat models (xAI has no standalone chat-model node) **plus the `nodes/speech/` and `nodes/translate/` Sarvam providers**, which import `SarvamCredential` from here — one stored key serves Sarvam's OpenAI-compatible chat endpoint *and* its `api-subscription-key` REST APIs |
 | `nodes/search/` | `BraveSearch / Serper / Perplexity` inlined in each plugin file | single-use per plugin |
 
 Declare inline only when genuinely single-use (see
-`nodes/search/brave_search.py` for the inline pattern). Declare in
+`nodes/search/brave_search/__init__.py` for the inline pattern). Declare in
 `_credentials.py` when the folder has 2+ plugins that share auth.
 
 Auto-discovery is automatic — when the nodes walker imports a plugin
@@ -327,7 +331,7 @@ Four ideas worth stealing wholesale:
 See [Multi-credential nodes](../../docs-internal/plugin_system.md#multi-credential-nodes)
 for the `ctx.connection(id)` contract and the `routing=` trap that comes with it.
 
-### Seven generic registries to plug into
+### Generic registries to plug into (19 at time of writing; the hand-curated table lives in [plugin_system.md](../../docs-internal/plugin_system.md#self-contained-plugin-folders))
 
 Telegram's `__init__.py` is the canonical wiring example. Adding any
 of these concerns to your plugin is one `register_*` call from your
@@ -369,7 +373,7 @@ The credential-validator dispatch is a sibling concern, handled by the
 existing `services/plugin/credential.py:Credential` base class. Your
 `Credential` subclass overrides `_probe(api_key) -> ProbeResult` (or,
 in rare cases like local-LLM 2-storage, the whole `validate(data)
--> dict` classmethod). Maps, Apify, all 10 cloud LLM providers, and
+-> dict` classmethod). Maps, Apify, all 11 cloud LLM providers, and
 both local-LLM providers (Ollama / LM Studio) all dispatch through the
 same scaffold — no `_SPECIAL_PROVIDER_VALIDATORS` dict in
 `routers/websocket.py`.

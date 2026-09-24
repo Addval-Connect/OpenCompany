@@ -47,8 +47,12 @@ It is a single folder `server/nodes/<group>/<name>/` whose
 `display_name` / `group` / `component_kind` / `handles` /
 `credentials` / `task_queue` / `usable_as_tool` / `Params` / `Output`
 plus one `@Operation` method. That's the entire node (the folder also
-holds `icon.svg` / `meta.json`, which is why a bare `.py` file is no
-longer the shape). On server restart it auto-registers, the
+holds `icon.svg` / `meta.json`, which is why the folder is the canonical
+shape; a bare `.py` inside a domain folder still works and 23 shipped
+plugins use it — stripe, telegram, discord, whatsapp, whatsapp_business,
+translate, speech, github, vercel, cloudflare, gcloud; live list:
+`find server/nodes -mindepth 2 -maxdepth 2 -name "*.py" ! -name "_*" ! -name "__init__.py"`).
+On server restart it auto-registers, the
 NodeSpec is emitted at `/api/schemas/nodes/<type>/spec.json`, and it
 appears in the Component Palette under its first `group` entry.
 
@@ -184,9 +188,10 @@ background task awaits exit. Success gate is the same mtime-advance +
 sniff pair, against a **pinned config dir**: every invocation passes
 `--global-config <DATA_DIR>/vercel/` (the `CLAUDE_CONFIG_DIR`
 isolation idiom) so the auth-file path is deterministic across
-platforms. The installer is `npm install <pkg> --prefix
-<packages_dir()>` into the shared npm tree instead of a GitHub-release
-download. Reference: [`server/nodes/vercel/`](../server/nodes/vercel/)
+platforms. The installer is `core.js_runtime.add_package(<spec>)` —
+`bun add --cwd <packages_dir()> <spec>` into the shared bun-managed
+packages tree, the bin shim then running on bun — instead of a
+GitHub-release download. Reference: [`server/nodes/vercel/`](../server/nodes/vercel/)
 + [vercel_service.md](./vercel_service.md).
 
 **CLI-opens-the-browser variant (Cloudflare).** Some CLIs run the
@@ -197,8 +202,8 @@ browser directly. The login handler then proxies NOTHING to the modal
 flips when the background completion broadcasts. Two hazards force the
 handler's shape: concurrent logins collide on the fixed port
 (single-flight guard: repeat clicks return "already in progress"), and
-on Windows killing the npm `.cmd` shim orphans the node child still
-holding the port (the completion watcher never kills — the CLI's own
+on Windows killing bun's `.exe` launcher shim orphans the child bun
+process still holding the port (the completion watcher never kills — the CLI's own
 login timeout ends it). Success gate = a CLI status probe that parses
 JSON, never exit codes (`cf auth whoami` exits 0 in both auth states).
 When the CLI's OAuth grant is a fixed scope set (cf: 86 scopes, no
@@ -247,10 +252,10 @@ What you **do** still write:
 | Self-contained plugin folders (rich plugins like telegram with their own service, WS handlers, pre-checks) | [plugin_system.md → Self-contained plugin folders](./plugin_system.md#self-contained-plugin-folders) |
 | Wave 12 event framework (signed webhooks, CLI daemons, polling) | [plugin_system.md → Wave 12](./plugin_system.md#wave-12--generalized-event-framework-servicesevents) |
 | Stripe as the Wave 12 reference plugin (also the canonical CLI-managed-auth + auto-installer reference) | [stripe_service.md](./stripe_service.md) |
-| Backend-as-SSOT design (NodeSpec, icons, output schemas) | [schema_source_of_truth_rfc.md](./schema_source_of_truth_rfc.md) |
+| Backend-as-SSOT design (NodeSpec, icons, output schemas) | [schema_source_of_truth_rfc.md](./ARCHIVE/schema_source_of_truth_rfc.md) |
 | JSON workflow format, edge handle conventions | [workflow-schema.md](./workflow-schema.md) |
 | Polling triggers + event_waiter mechanics | [event_waiter_system.md](./event_waiter_system.md) |
-| Memory lifecycle (markdown parse/append/trim, vector store, session resume) | [memory_lifecycle.md](./memory_lifecycle.md) |
+| Memory lifecycle (markdown parse/append/trim, vector store, session resume) — *archived; describes the retired pre-RFC-0002 `input-memory` markdown model* | [ARCHIVE/memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) |
 | Tool building pipeline (`_build_tool_from_node`, schema, per-type Temporal dispatch) | [tool_building_pipeline.md](./tool_building_pipeline.md) |
 | Process supervision (used by `DaemonEventSource`) | [server/services/process_service.py](../server/services/process_service.py) — singleton API |
 | Multi-vendor node behind one `provider` dropdown (two registries, JSON capabilities, per-vendor modules) | [speech_provider_rfc.md](./speech_provider_rfc.md) |
@@ -259,14 +264,19 @@ What you **do** still write:
 ## Wave summary (current state)
 
 - **Wave 11** — Class-based plugin system. 9 Temporal worker pools;
-  plugin count via `glob server/nodes/**/__init__.py`; invariant total
-  via `pytest --collect-only`. `services/handlers/` shrank from
+  plugin count via `len(services.node_registry.NODE_METADATA)` after
+  `import nodes` (a bare `**/__init__.py` glob overcounts because it also
+  matches the group packages); invariant total via `pytest --collect-only`. `services/handlers/` shrank from
   12.8K → 1.1K LOC.
-- **Wave 11.H** — Self-contained plugin folders. Six generic
-  registries replace per-plugin hardcoding in core (five at 11.H;
-  `register_router` landed in 11.I), plus newer `register_*`
-  entrypoints for webhook sources / option loaders / OAuth callback
-  paths / canary trigger types. Telegram is the reference.
+- **Wave 11.H** — Self-contained plugin folders. Five generic
+  registries at 11.H, `register_router` at 11.I; the set has since
+  grown to 19 (webhook sources, option loaders, OAuth callback paths,
+  canary trigger types, poll factories, social send handlers, shutdown
+  hooks, service factories, log-source tags, conversation listeners,
+  process supervisors, master-skill expander, agent-context builder).
+  Live list: the registry table in
+  [plugin_system.md](./plugin_system.md#self-contained-plugin-folders). Telegram
+  is the reference.
 - **Wave 12** — Generalized event framework
   ([`services/events/`](../server/services/events/)). `EventSource`
   hierarchy + CloudEvents-shaped envelope + verifier registry +

@@ -100,6 +100,22 @@ def _ensure_llm_contents(messages: List[Any]) -> None:
     )
 
 
+def _unsaved_endpoint_error(provider: str) -> Optional[ApplicationError]:
+    """The failure for a named endpoint with no key row, else ``None``.
+
+    Saving an endpoint always stores a key (the user's or the declared
+    placeholder), so a missing one means the endpoint was removed or never
+    chosen. Retrying cannot fix that, and ``MissingAgentProviderCredential``
+    is a type the AgentWorkflow shows to the user as is.
+    """
+    from services.llm.endpoints import unconfigured_endpoint_message
+
+    message = unconfigured_endpoint_message(provider)
+    if not message:
+        return None
+    return ApplicationError(message, type="MissingAgentProviderCredential", non_retryable=True)
+
+
 async def _resolve_activity_api_key(payload: Dict[str, Any]) -> str:
     """Resolve a provider credential inside an activity, never workflow state.
 
@@ -132,9 +148,7 @@ async def _resolve_activity_api_key(payload: Dict[str, Any]) -> str:
             api_key = candidate
 
     if not api_key:
-        from temporalio.exceptions import ApplicationError
-
-        raise ApplicationError(
+        raise _unsaved_endpoint_error(provider) or ApplicationError(
             f"API key for provider {provider!r} is not configured",
             type="MissingAgentProviderCredential",
             non_retryable=True,
@@ -708,7 +722,8 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
 
     Mirrors the prep half of ``services.ai.AIService.execute_agent``,
     minus the agent loop (which lives in ``AgentWorkflow.run`` for the
-    F4.B Temporal path and ``services.ai._run_agent_loop`` in-process):
+    F4.B Temporal path and ``services.agent_runtime.run_native_agent_loop``
+    in-process):
 
     1. Read node parameters from DB via ``database.get_node_parameters``.
     2. Walk edges via ``services.plugin.edge_walker.collect_agent_connections``
@@ -837,6 +852,9 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         # node params don't carry the api_key directly).
         api_key = await auth.get_api_key(provider) or await auth.get_api_key(f"{provider}_api_key")
     if not api_key:
+        endpoint_error = _unsaved_endpoint_error(provider)
+        if endpoint_error:
+            raise endpoint_error
         raise RuntimeError(
             f"API key for provider {provider!r} required for AgentWorkflow " f"node {node_id!r}; configure it in the Credentials Modal."
         )

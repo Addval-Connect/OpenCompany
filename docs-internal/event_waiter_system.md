@@ -123,7 +123,7 @@ Some triggers do not fit the push model because the upstream service has no webh
 | `googleGmailReceive` | **Polling** | `WorkflowControlWorkflow` polling activity (controlled); `PollingTriggerWorkflow` legacy compatibility |
 | `cronScheduler` | Temporal Schedule | `services/temporal/schedules.py` |
 
-Controlled polling triggers are registered with `WorkflowControlWorkflow`, which invokes the plugin-generated `poll.{node_type}.v{version}` activity and starts a graph only for deduplicated new events. Legacy uncontrolled polling still uses the deployment compatibility layer. See [temporal-execution-engine-rfc.md](temporal-execution-engine-rfc.md) for the current deployment architecture.
+Controlled polling triggers are registered with `WorkflowControlWorkflow`, which invokes the plugin-generated `poll.{node_type}.v{version}` activity and starts a graph only for deduplicated new events. Legacy uncontrolled polling still uses the deployment compatibility layer. See [temporal-execution-engine-rfc.md](ARCHIVE/temporal-execution-engine-rfc.md) for the deployment architecture.
 
 ## Cancellation
 

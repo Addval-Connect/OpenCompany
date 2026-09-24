@@ -25,10 +25,10 @@ big**. That constraint, measured rather than assumed, drives nearly every decisi
 | Temporal blob **error** — activity result, activity **input**, workflow result | **2,097,152 B** | server default; no custom `DataConverter` or `PayloadCodec` anywhere in the repo |
 | Temporal blob **warning** | 524,288 B → `PayloadSizeWarning` | not covered by `pyproject.toml` `filterwarnings`, so it surfaces |
 | Retries burned before the failure is reported | **3** | `_PayloadSizeError` absent from `NON_RETRYABLE_ERROR_TYPES` ([`_retry_policies.py:51`](../server/services/temporal/_retry_policies.py)) |
-| Legacy `execute_node_activity` internal WS | 4 MiB inbound (aiohttp default, `max_msg_size` unset) | [`activities.py:242`](../server/services/temporal/activities.py) |
-| `node_outputs.data` | no cap; written **3×** per store (`output_main`/`output_top`/`output_0`) | [`activities.py:486`](../server/services/temporal/activities.py) |
-| WS broadcast | no size guard; retained in `_status` **forever** and replayed to every newly connecting client | [`status_broadcaster.py:87,688`](../server/services/status_broadcaster.py) |
-| In-memory `_outputs` | never evicted except by `clear_all_outputs` | [`workflow.py:577`](../server/services/workflow.py) |
+| Legacy `execute_node_activity` internal WS | 4 MiB inbound (aiohttp default, `max_msg_size` unset) | [`activities.py:243`](../server/services/temporal/activities.py) |
+| `node_outputs.data` | no cap; written **3×** per store (`output_main`/`output_top`/`output_0`) | [`activities.py:488`](../server/services/temporal/activities.py) |
+| WS broadcast | no size guard; retained in `_status` **forever** and replayed to every newly connecting client | [`status_broadcaster.py:90,683`](../server/services/status_broadcaster.py) |
+| In-memory `_outputs` | never evicted except by `clear_all_outputs` | [`workflow.py:74,766`](../server/services/workflow.py) |
 
 ### What actually happens to a 12 MB base64 TTS result
 
@@ -104,7 +104,7 @@ branches in shared code; this is how we avoid needing any.
 ### D5 — First multi-credential node in the repo
 
 `credentials = (OpenAICredential, ElevenLabsCredential, …)` with `ctx.connection(params.provider)`.
-Already supported: `_make_connection_factory` ([`base.py:1134`](../server/services/plugin/base.py))
+Already supported: `_make_connection_factory` ([`base.py:_make_connection_factory`](../server/services/plugin/base.py))
 builds a dict over **all** declared credentials and raises only for undeclared ids. No node uses
 this today.
 

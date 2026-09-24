@@ -3,9 +3,17 @@
 ## Quick Start
 
 ```bash
-npm install -g @zeenie-ai/opencompany
+bun add -g @zeenie-ai/opencompany
 company start
 ```
+
+bun (https://bun.sh) is the only JavaScript runtime and package manager
+involved — no Node.js, no npm. `bun add -g` runs no lifecycle scripts, so the
+first `company` command provisions the Python side (`bin/cli.js` runs
+`scripts/install.js` when `.cli-venv` is missing); `install.sh` / `install.ps1`
+install bun, Python and uv first and run `company provision` eagerly. Nothing
+spells bun's global package directory (it varies by platform and
+configuration): the shim knows its own package root.
 
 Open the app URL — `http://localhost:${PYTHON_BACKEND_PORT}` (the port
 is declared once in `.env.template`; see [SETUP.md](./SETUP.md) for the
@@ -24,22 +32,41 @@ deprecation warning; kept for upgrade compatibility).
 |---------|-------------|
 | `company start` | Production mode, single port: uvicorn serves API + WS + built SPA on `PYTHON_BACKEND_PORT`. Optional daemons (Temporal dev server, WhatsApp) are backend-owned, started from the lifespan when enabled |
 | `company dev` | Start in dev mode (Vite HMR + uvicorn). `--force` re-bundles Vite deps (recovers "Outdated Optimize Dep"); `--daemon` binds backend to 0.0.0.0 |
-| `company serve` | Single-port production runtime (uvicorn serves API + WS + built SPA; optional daemons incl. the Node.js executor are backend-spawned on demand) — the systemd `ExecStart` on deployed VMs |
+| `company serve` | Single-port production runtime (uvicorn serves API + WS + built SPA; optional daemons incl. the JS executor sidecar (bun) are backend-spawned on demand) — the systemd `ExecStart` on deployed VMs |
 | `company stop` | Stop all services and free configured ports |
 | `company build` | Full production build (bun install → client → sidecar → uv sync → bytecode → temporal binary). Step [0/6] scaffolds `.env` from `.env.template` when missing, generating fresh random secrets (`secrets.token_hex(24)`) for `SECRET_KEY` / `JWT_SECRET_KEY` / `API_KEY_ENCRYPTION_KEY` instead of the dev placeholders; an existing `.env` is untouched |
 | `company clean` | Stop services, then remove build artifacts, node_modules, `.venv`, repo-local state (preserves `.opencompany/{workflows,deploy,packages}`) |
 | `company deploy up/status/destroy` | Self-deploy a login-gated VM (gcloud preflight + Terraform; see `cli/commands/deploy/`) |
 | `company daemon start/stop/status/restart` | Detached backend management (PID file under user data dir) |
-| `company version sync` | Propagate the root package.json version |
+| `company version sync [tag]` | Write a git tag's version (default: the latest) into every version file: root / client / desktop `package.json`, `pyproject.toml`, `cli/__init__.py`. Never `server/pyproject.toml`, which `server/uv.lock` records. The release procedure is in [ci_cd.md -> Cutting a release](./ci_cd.md#cutting-a-release) |
 | `company docs nodes [--check]` | Regenerate (or verify) the `docs-internal/node-logic-flows/` index |
 
 There is no `help` verb: `company` with no arguments, `company --help`, and
 `company <verb> --help` print Typer's help (`no_args_is_help=True` in `cli/cli.py`).
 
+### Desktop shell scripts (`desktop/package.json`, run from `desktop/`)
+
+The Electron shell is its own bun package with its own lockfile; root `bun run` does not reach it.
+
+| Command | Description |
+|---------|-------------|
+| `bun run stage` | Assemble `stage/`: the backend sibling layout from `bun pm pack --dry-run` (CLI, install scripts, client sources and backend tests dropped; `server/uv.lock` force-included; the JS executor sidecar built with its package's own `bun run build` — `bun build --target=bun`, express inlined — and `dist/index.js` copied) plus the pinned runtimes for this host. `--target mac-arm64,mac-x64` stages other targets; `--skip-runtimes` stages app-root only |
+| `bun run fetch-runtimes` | Just the runtimes: download uv / python-build-standalone / bun pinned in `runtimes.json`, verify against the upstream checksum manifests (bun's `SHASUMS256.txt`; its `LICENSE.md` is fetched from the bun repo since the zip carries none), cache in `vendor/`, prune stale runtime dirs (a leftover `node/`), extract into `stage/runtime/<os>-<arch>/` |
+| `bun run dev` | electron-vite dev against `stage/` (`OPENCOMPANY_DESKTOP_APP_ROOT=..` and `OPENCOMPANY_DESKTOP_VENV_PYTHON=../server/.venv/...` run against the checkout without staging or provisioning) |
+| `bun run build` | electron-vite build of main / preload / setup renderer into `out/` |
+| `bun run typecheck` / `bun run test` / `bun run test:invariants` / `bun run test:e2e` | TS7 gate; vitest unit tests; staged-tree invariants (after `stage`); Playwright Electron smoke (after `build`) |
+| `bun run gen-icons` | Render `build/icon.svg` to `build/icon.png` (electron-builder derives icns / ico / Linux PNGs) |
+| `bun run sync-version` | Copy the root `package.json` version into `desktop/package.json` (CI runs it before `dist`) |
+| `bun run pack` / `bun run dist` | electron-builder unpacked dir / installers into `release/` |
+
 ### Dependency checks
 
-`start` and `build` verify Node.js 22+, Python 3.12+, and uv before
-running.
+`build` requires bun (installs the workspace and runs every JS build step — a
+missing bun is fatal) and reports Node.js as optional (when present, bun runs
+vite / vitest / eslint on it via their node shebangs; when absent, bun runs the
+build tools itself — nothing shipped needs Node), verifies Python 3.12+
+(`_check_python`), and installs `uv` via pip if missing. `start` runs
+no toolchain check, only the `_sqlalchemy_preflight` venv-health probe.
 
 ---
 
@@ -48,10 +75,11 @@ running.
 Run with `bun run <script>` from the project root (`package.json` is
 the source of truth). The dev package manager is bun@1.4.0 —
 `scripts/preinstall.js` rejects `npm install` in a source checkout.
-The commands below are quoted verbatim from `package.json`; two of them
-(`client:start`, `test:frontend`) still spell `npm run` internally
-because they invoke another package's script, which bun executes on
-Node either way (recorded follow-up).
+The commands below are quoted verbatim from `package.json`. No script
+hops through `npm run` any more: cross-package scripts use
+`bun --cwd=<dir> run <script>` (the `=` form is mandatory on bun 1.4),
+and the tools they reach (vite, vitest) execute on Node when it is present
+(dev/CI only — their bins carry node shebangs, which bun respects).
 
 ### CLI wrappers
 
@@ -63,11 +91,17 @@ Node either way (recorded follow-up).
 | `version:sync` | `python -m cli version sync` |
 | `docs:nodes` / `docs:nodes:check` | `python -m cli docs nodes [--check]` |
 
+Two `company` verbs live in the launcher itself (`bin/cli.js`) with no
+`python -m cli` counterpart: `company doctor` (environment report) and
+`company provision [--force]` (the Python-side setup of a global install —
+uv, the venvs, bytecode, the Temporal binary; automatic on the first
+`company` command, explicit here for the installers and for repairs).
+
 ### Service scripts
 
 | Script | Command | Description |
 |--------|---------|-------------|
-| `client:start` | `cd client && npm run start` | React frontend (Vite dev server) |
+| `client:start` | `bun --cwd=client run start` | React frontend (Vite dev server) |
 | `python:start` | `cd server && uv run python main.py` | Backend only (`main.py` reads `HOST` / `PYTHON_BACKEND_PORT` from the env) |
 | `python:daemon` | `cd server && cross-env HOST=0.0.0.0 uv run python main.py` | Backend only, LAN-reachable |
 | `temporal:worker` | `cd server && uv run python -m services.temporal.worker` | Standalone Temporal worker |
@@ -80,7 +114,7 @@ The Temporal dev server is backend-owned: the FastAPI lifespan starts it via `Te
 |--------|---------|
 | `test` | backend + frontend suites |
 | `test:backend` | `cd server && uv run pytest tests/ -v` |
-| `test:frontend` | `cd client && npm run test` (vitest) |
+| `test:frontend` | `bun --cwd=client run test` (vitest) |
 | `test:nodes` | node-plugin tests with handler coverage |
 
 ### Lifecycle hooks
@@ -88,7 +122,7 @@ The Temporal dev server is backend-owned: the FastAPI lifespan starts it via `Te
 | Script | File | Purpose |
 |--------|------|---------|
 | `preinstall` / `preuninstall` | `scripts/preinstall.js` | Removes the legacy `machinaos` global package / stale temp dirs before (un)install |
-| `postinstall` | `scripts/postinstall.js` | End-user install pipeline for the npm tarball (delegates to `scripts/install.js`) |
+| `postinstall` | `scripts/postinstall.js` | Install pipeline entry (delegates to `scripts/install.js`). Reached from `bun install` in a checkout; a global `bun add -g` runs no dependency lifecycle scripts, so `bin/cli.js` provisions on the first `company` command instead |
 
 ---
 
@@ -96,9 +130,9 @@ The Temporal dev server is backend-owned: the FastAPI lifespan starts it via `Te
 
 | File | Purpose |
 |------|---------|
-| `install.js` | npm-tarball install pipeline (npm/uv install for end users — dev workspaces use bun; client build only when `client/dist` is missing from the tarball, `uv sync`, bytecode compile, CLI runtime venv, non-fatal Temporal binary fetch; the Node.js sidecar `dist/index.js` ships pre-built in the tarball) — mirrors `company build`; the compileall command shape is locked in sync by `cli/tests/test_release_pipeline_config.py` |
-| `preinstall.js` | Legacy-package/temp cleanup (also runs on uninstall) |
-| `postinstall.js` | npm lifecycle entry that guards recursion and invokes install.js |
+| `install.js` | End-user provisioning pipeline (`#!/usr/bin/env bun`; run by `company provision` — eagerly from `install.sh` / `install.ps1` / the cloud-init templates, or lazily by `bin/cli.js` on the first `company` command when `.cli-venv` is missing and the tree is not a source checkout; client build only when `client/dist` is missing from the tarball, `uv sync`, bytecode compile, CLI runtime venv, non-fatal Temporal binary fetch; the JS executor sidecar `dist/index.js` ships pre-built in the tarball) — mirrors `company build`; the compileall command shape is locked in sync by `cli/tests/test_release_pipeline_config.py` |
+| `preinstall.js` | Gates source checkouts to bun; legacy-package/temp cleanup (also runs on uninstall) |
+| `postinstall.js` | Lifecycle entry (`bun install` in a checkout) that guards recursion and invokes install.js |
 | `migrate_icons.py`, `migrate_skill_icons.py` | One-off icon-migration utilities (historical) |
 
 (`serve-client.js` was retired July 2026: `company start` is single-port —
@@ -121,7 +155,7 @@ Key variables in `.env` (see `.env.template` for the full list):
 | `VITE_CLIENT_PORT` | `.env.template` | App port (Vite dev server; proxies backend prefixes). Equal to `PYTHON_BACKEND_PORT` in production |
 | `PYTHON_BACKEND_PORT` | `.env.template` | Backend port (`.env.dev` moves it one up in dev, behind the Vite proxy) |
 | `WHATSAPP_RPC_PORT` | `.env.template` | WhatsApp API port (plugin-owned) |
-| `NODEJS_EXECUTOR_PORT` | `.env.template` | Node.js code-executor sidecar (plugin-owned) |
+| `NODEJS_EXECUTOR_PORT` | `.env.template` | JS code-executor sidecar, runs on bun (plugin-owned; the env var name is unchanged) |
 | `TEMPORAL_FRONTEND_GRPC_PORT` / `TEMPORAL_UI_PORT` | `.env.template` | Temporal gRPC / Temporal Web UI |
 
 All values live in the serial block declared at the top of `.env.template`; no
@@ -139,10 +173,10 @@ code or doc should carry the numerals.
 
 | Dependency | Version | Install |
 |------------|---------|---------|
-| Node.js | 22+ | https://nodejs.org/ |
+| bun | 1.4+ — the only JavaScript runtime and package manager anything shipped needs: it runs the `company` shim, the JS executor sidecar and the plugin CLIs (incl. the Cloudflare `cf` CLI, whose `engines.node >= 22` bun ignores) and installs the package (`bun add -g`) | official installer (https://bun.sh; `install.sh` / `install.ps1` run it); root `packageManager` pin read by `oven-sh/setup-bun` in CI; the desktop app bundles it |
 | Python | 3.12+ (CLI); server venv accepts 3.11–3.12 | https://python.org/ |
 | uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| bun | 1.4.x | official installer (https://bun.sh); root `packageManager` pin read by `oven-sh/setup-bun` in CI |
+| Node.js | optional, dev/CI only — when present, bun runs vite / vitest / eslint on it via their node shebangs (CI installs 22 for that reason); `company build` reports it as optional | https://nodejs.org/ |
 
 ---
 

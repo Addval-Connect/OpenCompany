@@ -1,0 +1,41 @@
+{
+  "name": "opencompany-desktop",
+  "version": "0.2.1",
+  "private": true,
+  "description": "OpenCompany desktop shell: bundles uv, Python and bun, provisions the backend venv on first run, and hosts the app in a native window.",
+  "license": "MIT",
+  "author": "OpenCompany contributors",
+  "homepage": "https://opencompany.sh",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "fetch-runtimes": "bun run scripts/fetch-runtimes.ts",
+    "stage": "bun run scripts/stage.ts",
+    "gen-icons": "bun run scripts/gen-icons.ts",
+    "sync-version": "bun run scripts/sync-version.ts",
+    "test": "vitest run tests/unit",
+    "test:invariants": "vitest run tests/invariants",
+    "test:e2e": "playwright test",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder"
+  },
+  "dependencies": {
+    "electron-log": "5.4.4",
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.12.3",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "esbuild": "^0.25.0",
+    "sharp": "0.35.4",
+    "typescript": "7.0.2",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
+  }
+}

@@ -28,6 +28,8 @@ AI_CHAT_MODEL_TYPES: FrozenSet[str] = frozenset(
         # format; routed through OpenAIProvider with a localhost base_url).
         "ollamaChatModel",
         "lmstudioChatModel",
+        # A user-named OpenAI-compatible endpoint (RFC-0003 D13).
+        "openaiCompatibleChatModel",
     ]
 )
 
@@ -56,8 +58,8 @@ AI_AGENT_TYPES: FrozenSet[str] = frozenset(
 
 AI_MEMORY_TYPES: FrozenSet[str] = frozenset(
     [
-        # V2 exposes this node through input-tools, while immutable V1
-        # generations still recognize their recorded input-memory topology.
+        # Exposed through input-tools; legacy graphs recorded before the
+        # Context node still carry their input-memory topology.
         "simpleMemory",
     ]
 )
@@ -97,7 +99,7 @@ AI_MODEL_TYPES: FrozenSet[str] = AI_AGENT_TYPES | AI_CHAT_MODEL_TYPES
 # They don't execute independently - they're used by their parent nodes.
 CONFIG_NODE_TYPES: FrozenSet[str] = (
     AI_CONTEXT_TYPES  # Context nodes (connect to input-context)
-    | AI_MEMORY_TYPES  # Legacy V1 memory / V2 Memory tool config nodes
+    | AI_MEMORY_TYPES  # Memory tool config nodes (legacy input-memory or input-tools)
     | AI_TOOL_TYPES  # Tool nodes (connect to AI Agent's input-tools)
     | AI_CHAT_MODEL_TYPES  # Model config nodes (connect to input-model)
     | SKILL_NODE_TYPES  # Skill nodes (connect to Zeenie's input-skill)
@@ -473,6 +475,14 @@ def detect_ai_provider(node_type: str, parameters: dict = None) -> str:
         return "anthropic"
     if "gemini" in nt:
         return "gemini"
+    # A named endpoint: the node's ``endpoint`` parameter holds its
+    # provider reference, ``openai_compatible:<slug>``. Without one the
+    # bare id comes back; it holds no key, so the run stops before any
+    # request and asks the user to choose an endpoint.
+    if "openaicompatible" in nt:
+        from services.llm.config import ENDPOINT_PROVIDER
+
+        return (parameters or {}).get("endpoint") or ENDPOINT_PROVIDER
     # Local-server providers — match the LMStudioChatModelNode /
     # OllamaChatModelNode plugin types so the runtime path reads the
     # correct {provider}_proxy credential and the openai SDK is pointed

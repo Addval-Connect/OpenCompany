@@ -2,7 +2,7 @@
 
 Keeps one warm ``claude --output-format stream-json --input-format
 stream-json --verbose --ide`` subprocess per Context thread+epoch (or per
-``simpleMemory.node_id`` for immutable V1 generations) so successive turns
+``simpleMemory.node_id`` for legacy ``input-memory`` graphs) so successive turns
 can reuse the same process — same session UUID across turns, no respawn cost.
 Mirrors what Anthropic's official
 VSCode extension does (verified from the on-disk extension source at
@@ -143,7 +143,7 @@ class PooledClaudeSession:
     # "Automatic discovery from parent and nested directories" rule
     # in code.claude.com/docs/en/skills. Per-workflow isolation:
     # workflow A's wired skills never bleed into workflow B's
-    # subprocess even when both spawn with ``cwd=repo_root``.
+    # subprocess (each spawns in a worktree under its own workspace).
     workspace_dir: Optional[Path] = None
     # Set of skill names currently materialised under
     # ``<workspace_dir>/.claude/skills/`` for this warm subprocess.
@@ -716,8 +716,8 @@ class ClaudeSessionPool:
         # ``.claude/skills/`` inside every ``--add-dir`` path per
         # code.claude.com/docs/en/skills. This gives us per-workflow
         # isolation — workflow A's wired skills never bleed into
-        # workflow B's subprocess even when both spawn with
-        # ``cwd=repo_root``. Paired with the conditional ``Skill``
+        # workflow B's subprocess (each spawns in a worktree under its
+        # own workspace). Paired with the conditional ``Skill``
         # entry in ``--allowedTools`` (see ``interactive_argv``) —
         # both fire when ``connected_skill_names`` is non-empty.
         # Falls back to ``cwd`` only when no workspace_dir was
@@ -1177,44 +1177,28 @@ class ClaudeSessionPool:
             if kind == "spawned":
                 await broadcaster.broadcast_claude_session_spawned(
                     wire_node_id,
-                    session_uuid=(
-                        "" if context_scoped else payload["session_uuid"]
-                    ),
+                    session_uuid=payload["session_uuid"],
                     pid=payload["pid"],
                     workflow_id=workflow_id,
                 )
             elif kind == "cleared":
                 await broadcaster.broadcast_claude_session_cleared(
                     wire_node_id,
-                    old_session_uuid=(
-                        ""
-                        if context_scoped
-                        else payload["old_session_uuid"]
-                    ),
-                    new_session_uuid=(
-                        ""
-                        if context_scoped
-                        else payload["new_session_uuid"]
-                    ),
+                    old_session_uuid=payload["old_session_uuid"],
+                    new_session_uuid=payload["new_session_uuid"],
                     workflow_id=workflow_id,
                 )
             elif kind == "terminated":
                 await broadcaster.broadcast_claude_session_terminated(
                     wire_node_id,
                     reason=payload["reason"],
-                    session_uuid=(
-                        None
-                        if context_scoped
-                        else payload.get("session_uuid")
-                    ),
+                    session_uuid=payload.get("session_uuid"),
                     workflow_id=workflow_id,
                 )
             elif kind == "usage":
                 await broadcaster.broadcast_claude_session_usage(
                     wire_node_id,
-                    session_uuid=(
-                        "" if context_scoped else payload["session_uuid"]
-                    ),
+                    session_uuid=payload["session_uuid"],
                     total_cost_usd=payload.get("total_cost_usd"),
                     input_tokens=payload.get("input_tokens", 0),
                     output_tokens=payload.get("output_tokens", 0),

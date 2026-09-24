@@ -100,14 +100,12 @@ async def _resolve_connection_namespace(websocket: Any) -> str:
             return getattr(container.settings(), "temporal_namespace", "default")
         except Exception:
             return "default"
-=======
 def _socket_open(connection: WebSocket) -> bool:
     """True while both sides of the socket are still CONNECTED."""
     return (
         getattr(connection, "client_state", WebSocketState.CONNECTED) is WebSocketState.CONNECTED
         and getattr(connection, "application_state", WebSocketState.CONNECTED) is WebSocketState.CONNECTED
     )
->>>>>>> 914afa63 (fix(ws): stop a client disconnect from cancelling database teardown mid-rollback)
 
 
 class StatusBroadcaster:

@@ -1,6 +1,6 @@
 # RLM Service -- Recursive Language Model Agent Integration
 
-> **Related docs:** [agent_context_flow.md](./agent_context_flow.md) for conversation continuity — RLM is a specialized provider, so a connected Context node reaches it through `SpecializedAgentContextBridge` (`services/cli_agent/context_bridge.py`); [tool_building_pipeline.md](./tool_building_pipeline.md) for how connected tool nodes are bound to the REPL via `ToolBridgeAdapter`. [memory_lifecycle.md](./memory_lifecycle.md) describes only the retired V1 markdown memory path.
+> **Related docs:** [agent_context_flow.md](./agent_context_flow.md) for conversation continuity — RLM is a specialized provider, so a connected Context node reaches it through `SpecializedAgentContextBridge` (`services/cli_agent/context_bridge.py`); [tool_building_pipeline.md](./tool_building_pipeline.md) for how connected tool nodes are bound to the REPL via `ToolBridgeAdapter`. [memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) describes only the retired markdown memory path.
 
 ## Overview
 
@@ -146,7 +146,7 @@ BackendAdapter.adapt("groq", "llama-3.3-70b-versatile", "gsk-...")
 
 ### ChatModelExtractor
 
-Scans `tool_data` (nodes connected to `input-tools`) for `AI_CHAT_MODEL_TYPES` nodes. Extracts their provider/model/api_key and converts via `BackendAdapter` into RLM's `other_backends` format.
+Scans `tool_data` (nodes connected to `input-tools`) for `AI_CHAT_MODEL_TYPES` nodes. Takes each node's provider from `detect_ai_provider` (chat-model nodes carry no `provider` field: the type names it, or the `endpoint` parameter for an OpenAI-compatible node) plus its model and api_key, and converts them via `BackendAdapter` into RLM's `other_backends` format. A provider missing from the mapping above (Ollama, LM Studio, xAI, a named endpoint, ...) is refused with a clear error rather than sent to the OpenAI backend, since RLM never reads a user base URL.
 
 Currently RLM supports one `other_backend` (for depth>=1 calls). If multiple chat model nodes are connected, only the first is used.
 
@@ -208,11 +208,12 @@ preparation helpers, then delegates to the independent RLM service:
 context_data, skill_data, tool_data, input_data, task_data = await collect_agent_connections(
     node_id, ctx.raw, database, log_prefix="[RLM Agent]"
 )
-# The first element is a Context descriptor on V2 graphs (kind == "context"),
-# or the legacy Memory descriptor on immutable V1 snapshots. The service
-# receives them as separate kwargs: context_data=context_v2, memory_data=legacy.
-context_v2 = context_data if (context_data or {}).get("kind") == "context" else None
-memory_data = context_data if context_data and not context_v2 else None
+# The first element is a Context descriptor (kind == "context") when a
+# Context node is wired, or the legacy Memory descriptor on input-memory
+# graphs. The service receives them as separate kwargs:
+# context_data=context_descriptor, memory_data=legacy.
+context_descriptor = context_data if (context_data or {}).get("kind") == "context" else None
+memory_data = context_data if context_data and not context_descriptor else None
 
 # 2. Inject task context and strip tools for terminal task notifications
 if task_data:
@@ -265,6 +266,7 @@ return await ai_service.rlm_service.execute(node_id, parameters, ...)
 The LM writes Python code inside `\`\`\`repl` fenced blocks. These are extracted via regex and executed with `exec()` in a sandboxed namespace.
 
 ### Available Functions in REPL
+(provided by the upstream `rlm` package's REPL, not defined under `server/`)
 - `llm_query(prompt)` -- Plain LM call (uses depth+1 backend)
 - `rlm_query(prompt)` -- Recursive child RLM with its own REPL
 - `FINAL(answer)` -- Signal completion with answer string
@@ -322,7 +324,7 @@ Wave 11 / Wave 12 D5 refactors removed the surfaces they named.
 `tests/test_tool_registry.py`); the delegation identity comes from
 `BaseNode.__init_subclass__`, which stamps `tool_name =
 f"delegate_to_{cls.type}"` on every agent plugin (`services/plugin/base.py:257`).
-`rlm_agent` is listed in both `_AGENT_DELEGATION_TYPES` (`services/ai.py:2510`,
+`rlm_agent` is listed in both `_AGENT_DELEGATION_TYPES` (`services/ai.py:2509`,
 the `DelegateToAgentSchema` gate) and `AI_AGENT_TYPES` (`server/constants.py:32`,
 the `execute_tool` dispatch gate). It stays on the legacy fire-and-forget path
 — excluded from `AGENT_WORKFLOW_TYPES` because its REPL state is externalised.

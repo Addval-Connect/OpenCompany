@@ -144,19 +144,29 @@ def test_every_provider_declares_sdk_exception_types():
             )
 
 
-def test_all_registered_providers_are_agent_selectable():
-    """Agent surfaces must not silently omit a native provider."""
+async def test_all_registered_providers_are_agent_selectable():
+    """Agent surfaces must not silently omit a native provider.
 
-    from typing import get_args
+    The ``provider`` field is loader-driven (RFC-0003 D13): a saved endpoint
+    cannot be a ``Literal``. Every agent Params points at the ``aiProviders``
+    loader, and the loader offers every registered provider except the bare
+    endpoint id, which is only selectable as a saved endpoint.
+    """
+    from unittest.mock import AsyncMock, patch
 
     from nodes.agent._specialized import SpecializedAgentParams
     from nodes.agent.ai_agent import AIAgentParams
     from nodes.agent.chat_agent import ChatAgentParams
+    from nodes.model._option_loaders import load_ai_providers
+    from services.llm.config import ENDPOINT_PROVIDER
 
-    expected = set(all_providers())
     for params_type in (AIAgentParams, ChatAgentParams, SpecializedAgentParams):
-        annotation = params_type.model_fields["provider"].annotation
-        assert set(get_args(annotation)) == expected
+        schema = params_type.model_json_schema()["properties"]["provider"]
+        assert schema.get("loadOptionsMethod") == "aiProviders", params_type.__name__
+
+    with patch("nodes.model._option_loaders._endpoints", AsyncMock(return_value=[])):
+        options = await load_ai_providers({})
+    assert {option["value"] for option in options} == set(all_providers()) - {ENDPOINT_PROVIDER}
 
 
 # ---------------------------------------------------------------------------

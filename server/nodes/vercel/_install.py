@@ -1,14 +1,16 @@
 """Vercel CLI auto-installer.
 
 The Vercel CLI ships as the npm package ``vercel`` — it lands in the
-shared OpenCompany npm tree at :func:`core.paths.packages_dir`
+shared OpenCompany packages tree at :func:`core.paths.packages_dir`
 (``<DATA_DIR>/packages/``), the same single ``package.json`` +
 ``node_modules/`` that holds ``@anthropic-ai/claude-code`` /
-``edgymeow`` / ``agent-browser``. ``npm install <pkg> --prefix
-<packages_dir>`` extends the shared tree idempotently.
+``edgymeow`` / ``agent-browser`` / ``cf``.
+:func:`core.js_runtime.add_package` (``bun add --cwd <packages_dir>
+<spec>``) extends the shared tree idempotently and the bin shim runs on
+the bun runtime; no Node or npm is involved.
 
-A system install on PATH is preferred; the npm install only fires when
-no system binary is found. Pin ``_NPM_SPEC`` when bumping (whatsapp
+A system install on PATH is preferred; the install only fires when no
+system binary is found. Pin ``_NPM_SPEC`` when bumping (whatsapp
 precedent — ``@latest`` makes cold installs non-reproducible).
 """
 
@@ -16,13 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
+from core.js_runtime import add_package, shared_tree_bin
 from core.logging import get_logger
-from core.paths import packages_dir
 
 logger = get_logger(__name__)
 
@@ -39,29 +39,16 @@ def vercel_cli_path() -> Optional[Path]:
 
 
 def _shared_tree_bin() -> Path:
-    bin_name = "vercel.cmd" if sys.platform == "win32" else "vercel"
-    return packages_dir() / "node_modules" / ".bin" / bin_name
+    return shared_tree_bin("vercel")
 
 
-def _npm_install() -> Path:
-    """Blocking npm install into the shared tree. Raises on failure."""
-    root = packages_dir()
+def _install() -> Path:
+    """Blocking ``bun add`` into the shared tree. Raises on failure."""
     bin_path = _shared_tree_bin()
-
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        raise RuntimeError("npm not on PATH — install Node.js or the Vercel CLI manually (npm i -g vercel)")
-
-    logger.info("[Vercel] installing %s into shared tree %s", _NPM_SPEC, root)
-    root.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [npm_cmd, "install", _NPM_SPEC, "--prefix", str(root), "--no-audit", "--no-fund"],
-        capture_output=True,
-        text=True,
-    )
+    logger.info("[Vercel] installing %s into the shared packages tree", _NPM_SPEC)
+    result = add_package(_NPM_SPEC)
     if result.returncode != 0 or not bin_path.exists():
-        raise RuntimeError(f"npm install {_NPM_SPEC} failed: {result.stderr.strip()[:500]}")
-
+        raise RuntimeError(f"bun add {_NPM_SPEC} failed: {result.stderr.strip()[:500]}")
     logger.info("[Vercel] CLI installed at %s", bin_path)
     return bin_path
 
@@ -73,8 +60,8 @@ async def ensure_vercel_cli() -> Path:
     Resolution order (stripe idiom):
       1. Cached path from a prior call (in-process).
       2. ``shutil.which("vercel")`` — system install on PATH.
-      3. Previously-installed shim in the shared npm tree.
-      4. Fresh ``npm install`` into the shared tree.
+      3. Previously-installed shim in the shared packages tree.
+      4. Fresh ``bun add`` into the shared tree.
     """
     global _cached_path
     if _cached_path and _cached_path.exists():
@@ -93,8 +80,8 @@ async def ensure_vercel_cli() -> Path:
         if target.exists():
             _cached_path = target
             return target
-        # npm install blocks for tens of seconds — keep the event loop free.
-        installed = await asyncio.to_thread(_npm_install)
+        # The install blocks for tens of seconds — keep the event loop free.
+        installed = await asyncio.to_thread(_install)
         _cached_path = installed
         await _disable_telemetry(installed)
         return installed

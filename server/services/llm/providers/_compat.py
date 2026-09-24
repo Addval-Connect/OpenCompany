@@ -13,6 +13,10 @@ Phase D (see the ``_COMPAT_PROVIDERS`` comment below); Sarvam followed and
 brought the ``supports_model_listing`` flag with it — a provider can be
 wire-compatible yet ship no model-list route, which ``OpenAIProvider``
 handles generically off that JSON key.
+
+One more registration, ``openai_compatible``, carries no ``base_url`` at
+all: it serves every user-named endpoint, each of which stores its own
+resolved URL (RFC-0003 D13).
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from core.logging import get_logger
+from services.llm.config import ENDPOINT_PROVIDER
 from services.llm.providers.openai import OpenAIProvider
 from services.llm.registry import ProviderSpec, register_provider
 
@@ -111,4 +116,23 @@ def _register_compat_providers() -> None:
         )
 
 
+def _register_endpoint_provider() -> None:
+    """Register the one provider behind every named endpoint (RFC-0003 D13).
+
+    Deliberately no ``base_url``: each endpoint's resolved URL lives on its
+    own ``openai_compatible:<slug>_proxy`` row, and the unifier refuses the
+    call when that row is missing rather than let the SDK default to
+    api.openai.com.
+    """
+    register_provider(
+        ProviderSpec(
+            name=ENDPOINT_PROVIDER,
+            factory=OpenAIProvider,
+            sdk_exception_refs=("openai:OpenAIError",),
+            client_kwargs={"provider_name": ENDPOINT_PROVIDER},
+        )
+    )
+
+
 _register_compat_providers()
+_register_endpoint_provider()

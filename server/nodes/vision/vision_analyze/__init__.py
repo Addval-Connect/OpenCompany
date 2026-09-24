@@ -168,7 +168,6 @@ class VisionAnalyzeNode(ToolNode):
         },
     )
     ui_hints = {
-        "isToolPanel": True,
         "hideInputSection": True,
         "hideOutputSection": True,
         "hideRunButton": True,

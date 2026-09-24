@@ -928,11 +928,10 @@ class TestNodeSpecContractInvariants:
             "isMemoryToolPanel",
             "isContextPanel",
             "isDataPanel",
-            "isToolPanel",
             "requiresContext",
             "systemManaged",
             # writeTodos: render the editable Current Todos manager in the
-            # middle section (in addition to isToolPanel).
+            # middle section.
             "isTodoEditor",
             "isMonitorPanel",
             "isTaskManagerPanel",
@@ -947,7 +946,6 @@ class TestNodeSpecContractInvariants:
             # request budget instead of keeping its own list of slow types.
             "executionTimeoutMs",
             "showLocationPanel",
-            "isAndroidToolkit",
             "isChatTrigger",
             "isConsoleSink",
             "hasSkills",
@@ -1123,20 +1121,6 @@ class TestWave10GContractInvariants:
                 continue
             hints = spec.get("uiHints") or {}
             assert hints.get("hasSkills") is True, f"{t}: componentKind=agent must declare uiHints.hasSkills=True"
-
-    def test_every_tool_kind_declares_isToolPanel(self):
-        """Every dedicated tool node (componentKind='tool') must emit
-        `uiHints.isToolPanel=True` so MiddleSection renders the
-        ToolSchemaEditor. Dual-purpose nodes (group includes 'tool' but
-        componentKind='square') don't show the editor — they render as
-        normal squares and become tools only when wired to an agent's
-        input-tools handle."""
-        for t in self._plugin_types():
-            spec = get_node_spec(t)
-            if spec.get("componentKind") != "tool":
-                continue
-            hints = spec.get("uiHints") or {}
-            assert hints.get("isToolPanel") is True, f"{t}: componentKind=tool must declare uiHints.isToolPanel=True"
 
     def test_google_workspace_nodes_have_operation_gating(self):
         """Drive / Sheets / Tasks / Contacts / Gmail all have an

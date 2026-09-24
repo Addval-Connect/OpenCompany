@@ -552,7 +552,7 @@ const MiddleSection: React.FC<MiddleSectionProps> = ({
     <div className="relative flex h-full flex-1 flex-col overflow-hidden">
       {/* Description - hide for code editor nodes (Python, Skill), masterSkill,
           and the todo editor (each renders its own full-panel header). */}
-      {!needsCodeEditorLayout && !isMasterSkillNode && !isContextNode && !isMemoryToolNode && !isTodoEditorNode && !isTaskManagerNode && !isMonitorNode && !isProcessManagerNode && !isGalleryNode && !isCanvasNode && (
+      {!needsCodeEditorLayout && !isMasterSkillNode && !isContextNode && !isMemoryToolNode && !isDataNode && !isTodoEditorNode && !isTaskManagerNode && !isMonitorNode && !isProcessManagerNode && !isGalleryNode && !isCanvasNode && (
         <div className="shrink-0 border-b border-border-default bg-bg-panel px-6 pt-4 pb-2">
           <p className="m-0 text-base leading-[1.5] text-fg-muted">
             {nodeDefinition.description}

@@ -8,13 +8,14 @@ streaming + memory persistence + delegation.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from services.plugin import ActionNode, NodeContext, Operation, TaskQueue
 
 from .._handles import STD_AGENT_HINTS, std_agent_handles
+from .._provider import ProviderRef
 
 
 class AIAgentParams(BaseModel):
@@ -38,30 +39,7 @@ class AIAgentParams(BaseModel):
             "rows": 4,
         },
     )
-    provider: Literal[
-        "openai",
-        "anthropic",
-        # Anthropic models served by AWS Bedrock. A separate entry rather than
-        # a flag on "anthropic" because the credential, the region and the
-        # model-id namespace all differ (us.anthropic.* inference profiles).
-        "bedrock",
-        "gemini",
-        "openrouter",
-        "xai",
-        "groq",
-        "cerebras",
-        "deepseek",
-        "kimi",
-        "mistral",
-        "sarvam",
-        # Local-server providers — agent execution reads
-        # ``{provider}_proxy`` to point the native OpenAI client at the
-        # user's localhost server. Without these entries the dropdown
-        # silently falls back to ``"openai"`` and execute_agent ends
-        # up calling api.openai.com instead.
-        "ollama",
-        "lmstudio",
-    ] = "openai"
+    provider: ProviderRef = "openai"
     model: str = Field(
         default="",
         json_schema_extra={"placeholder": "Select a model..."},

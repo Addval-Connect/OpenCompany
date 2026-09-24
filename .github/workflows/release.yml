@@ -1,5 +1,11 @@
-# Release workflow: predeploy gate, publish npm + GitHub Packages.
-# Triggers on version tag push.
+# Release workflow: predeploy gate, publish the registry tarball to npmjs and
+# GitHub Packages with bun. No npm CLI and no setup-node: bun packs, authenticates
+# (~/.npmrc written from the job's token) and publishes.
+#
+# Triggers on version tag push. Manual dispatch publishes an EXISTING tag
+# again, to one or both registries (a lapsed token, a failed mirror): the
+# publish jobs check out that tag so the tarball is the tag's tree, while the
+# predeploy gate runs against the dispatching branch as it always has.
 
 name: Release
 
@@ -7,6 +13,16 @@ on:
   push:
     tags: ['v*.*.*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish again (e.g. v0.2.0)
+        required: true
+        type: string
+      registries:
+        description: Registries to publish to
+        type: choice
+        options: [both, npmjs, github-packages]
+        default: both
 
 permissions:
   contents: read
@@ -18,35 +34,32 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: predeploy
+    if: github.event_name == 'push' || inputs.registries != 'github-packages'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: '22'
-          package-manager-cache: false
-          registry-url: 'https://registry.npmjs.org'
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: python -m cli version sync
-      - name: Verify npm credentials
-        run: npm whoami
+      - name: Configure npmjs credentials
+        run: printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > ~/.npmrc
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish public npm package
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify npmjs credentials
+        run: bun pm whoami
+      - name: Publish public package
+        run: bun publish --access public
 
   publish-github-packages:
     name: Publish to GitHub Packages
     needs: predeploy
+    if: github.event_name == 'push' || inputs.registries != 'npmjs'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,26 +67,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: '22'
-          package-manager-cache: false
-          registry-url: 'https://npm.pkg.github.com'
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: python -m cli version sync
-      - name: Configure scoped package
-        run: |
-          node -e "
-            const pkg = require('./package.json');
-            pkg.name = '@zeenie-ai/opencompany';
-            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
-      # GitHub Packages uses the repository-scoped GITHUB_TOKEN; npm's OIDC
-      # trusted-publisher flow applies to npmjs.org, not npm.pkg.github.com.
-      - run: npm publish # zizmor: ignore[use-trusted-publishing]
+      # bun 1.4 ignores package.json publishConfig.registry, and it keeps an
+      # .npmrc token only for the registry that same file points at (the
+      # default or a scoped one), so the scope is routed to GitHub Packages
+      # here, next to the token. The v0.2.0 mirror publish went to npmjs
+      # with this GitHub token and failed with "missing authentication"
+      # before that was known. GitHub Packages uses the repository-scoped
+      # GITHUB_TOKEN.
+      - name: Configure GitHub Packages credentials
+        run: printf '@zeenie-ai:registry=https://npm.pkg.github.com/\n//npm.pkg.github.com/:_authToken=%s\n' "$NPM_TOKEN" > ~/.npmrc
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: bun publish

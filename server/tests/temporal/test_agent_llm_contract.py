@@ -377,6 +377,25 @@ class TestLlmStepActivity:
         )
 
     @pytest.mark.asyncio
+    async def test_an_unsaved_named_endpoint_fails_the_step_as_not_configured(self, monkeypatch):
+        import core.container as container_module
+        from services.temporal.agent_activities import _resolve_activity_api_key
+
+        auth = SimpleNamespace(get_api_key=AsyncMock(return_value=None))
+        database = SimpleNamespace(get_node_parameters=AsyncMock(return_value={}))
+        monkeypatch.setattr(container_module.container, "auth_service", lambda: auth)
+        monkeypatch.setattr(container_module.container, "database", lambda: database)
+
+        with pytest.raises(Exception) as raised:
+            await _resolve_activity_api_key({"provider": "openai_compatible:gone", "node_id": "agent-1"})
+
+        error = raised.value
+        assert error.type == "MissingAgentProviderCredential"
+        assert error.non_retryable is True
+        # AgentWorkflow shows this type's ``message`` to the user as is.
+        assert error.message == "The OpenAI-compatible endpoint 'gone' is not configured. Add it under Credentials."
+
+    @pytest.mark.asyncio
     async def test_buffered_call_heartbeats_while_waiting(
         self,
         monkeypatch,

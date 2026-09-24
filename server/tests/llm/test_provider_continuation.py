@@ -633,7 +633,7 @@ async def test_compat_provider_policy_applies_kimi_and_groq_quirks():
         )
         await kimi.chat(
             [Message(role="user", content="hi")],
-            model="kimi-k2.5",
+            model="kimi-k2.6",
             temperature=0.1,
         )
         kimi_params = kimi._client.chat.completions.create.call_args.kwargs
@@ -645,11 +645,11 @@ async def test_compat_provider_policy_applies_kimi_and_groq_quirks():
         groq._client.chat.completions.create = kimi._client.chat.completions.create
         await groq.chat(
             [Message(role="user", content="hi")],
-            model="qwen/qwen3-32b",
+            model="qwen/qwen3.8-27b",
             thinking=ThinkingConfig(enabled=True, format="hidden"),
         )
         groq_params = groq._client.chat.completions.create.call_args.kwargs
-        assert groq_params["model"] == "qwen/qwen3-32b"
+        assert groq_params["model"] == "qwen/qwen3.8-27b"
         assert groq_params["extra_body"]["reasoning_format"] == "hidden"
 
         await groq.chat(

@@ -72,7 +72,7 @@ There are **no** per-agent parameter extras: `orchestrator_agent` and
 | Name | Type | Default | Required | displayOptions.show | Description |
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | no | - | User prompt; falls back to upstream output when empty (4 rows) |
-| `provider` | enum | `openai` | no | - | `openai` / `anthropic` / `gemini` / `openrouter` / `xai` / `groq` / `cerebras` / `deepseek` / `kimi` / `mistral` / `ollama` / `lmstudio` |
+| `provider` | string (`ProviderRef`) | `openai` | no | - | Any registered provider id, or a saved named endpoint `openai_compatible:<slug>`; options come from the `aiProviders` loader |
 | `model` | string | `""` | no | - | Model ID (resolved against the provider; empty falls through to default) |
 | `system_message` | string\|null | `"You are a helpful assistant"` | no | - | System instructions (3 rows) |
 | `temperature` | float\|null | `None` | no | group `options` | 0.0-2.0; `None` -> `agent.default_temperature` in `llm_defaults.json` |

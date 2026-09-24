@@ -34,14 +34,21 @@ StatusBroadcaster (server/services/status_broadcaster.py)
         +-- connection set: Set[WebSocket]
         +-- current status: Dict[str, Any]
         |     |-- android: {connected, paired, device_id, ...}
+        |     |-- twitter: {connected, username, user_id, ...}
+        |     |-- google: {connected, email, name, ...}
+        |     |-- telegram: {connected, bot_id, bot_username, ...}
+        |     |-- api_keys: {provider: validation status}
         |     |-- nodes: {node_id: {status, output, error, ...}}
         |     |-- variables: {name: value}
-        |     `-- workflow: {executing, current_node, progress}
+        |     |-- workflow: {executing, current_node, progress}
+        |     |-- workflow_lock: {locked, workflow_id, locked_at, reason}
+        |     `-- deployment: {isRunning, activeRuns, status, workflow_id}
         |
         +-- connect(ws)        -> accept + send initial_status
+        |                         + deployment_snapshot CloudEvent (_send_deployment_snapshot)
         +-- disconnect(ws)     -> remove from set
-        +-- update_*(...)      -> mutate state + _broadcast()
-        +-- _broadcast(msg)    -> fan out to all connected clients
+        +-- update_*(...)      -> mutate state + broadcast()
+        +-- broadcast(msg)     -> fan out to all connected clients
 ```
 
 ## Connection Lifecycle
@@ -156,7 +163,7 @@ per save. Same pattern as `nodes/telegram/_events.py`. See
 [event_framework.md → UI-only lifecycle events](./event_framework.md).
 
 Payloads are identity + count only — no message bodies, no item content —
-because `_broadcast_in_process` fans out to **every** connected socket with no
+because `StatusBroadcaster.broadcast()` fans out to **every** connected socket with no
 per-workflow filtering. The panels refetch through the authorized
 `get_agent_context` / `list_memory_items` handlers, which is where ownership
 is enforced.

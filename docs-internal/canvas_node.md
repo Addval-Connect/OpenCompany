@@ -68,7 +68,7 @@ despite `component_kind="tool"`.
 
 Two deliberate overrides of what the group/base would otherwise derive:
 
-- `ui_hints = {"isCanvasPanel": True, "isToolPanel": True, "isConfigNode": False}` —
+- `ui_hints = {"isCanvasPanel": True, "isConfigNode": False}` —
   the `tool` group auto-derives `isConfigNode: True`, but the Canvas node's
   `input-main` is a real runtime dataflow edge, so it must present as a
   normal node (no parent-input inheritance). Explicit wins over

@@ -25,7 +25,7 @@ group.
 
 | Handle | Connection type | Required | Purpose |
 |--------|-----------------|----------|---------|
-| `input-main` | main | no | Upstream data for template substitution into `to`, `text`, etc. |
+| `input-main` | main | no | Declared, but `hideInputHandle` is auto-set (`usable_as_tool = True`, class does not declare `hide_input_handle`) |
 
 ## Parameters
 
@@ -68,6 +68,7 @@ There is deliberately **no `phone_number_id` parameter** — see Edge cases.
 | Handle | Shape | Description |
 |--------|-------|-------------|
 | `output-main` | object | Send result, or the template list |
+| `output-tool` | - | Auto-appended for `usable_as_tool` |
 
 ### Output payload (TypeScript shape)
 

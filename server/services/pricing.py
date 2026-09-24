@@ -122,16 +122,21 @@ class PricingService:
         Falls back to '_default' if no match found.
 
         Args:
-            provider: Provider name (openai, anthropic, gemini, groq, cerebras, openrouter)
+            provider: Provider reference (openai, anthropic, ..., or a named
+                endpoint ``openai_compatible:<slug>``, which reads the
+                ``openai_compatible`` block)
             model: Model name or ID
 
         Returns:
             ModelPricing with rates per million tokens
         """
+        from services.llm.config import split_provider_ref
+
         provider_lower = provider.lower()
         model_lower = model.lower() if model else ""
+        name, endpoint_slug = split_provider_ref(provider_lower)
 
-        provider_pricing = self._llm_registry.get(provider_lower, {})
+        provider_pricing = self._llm_registry.get(name, {})
 
         # Try exact match first
         if model_lower in provider_pricing:
@@ -146,6 +151,16 @@ class PricingService:
         for model_key, pricing in provider_pricing.items():
             if model_key != "_default" and model_key in model_lower:
                 return pricing
+
+        # A named endpoint's per-model price, recorded when it was saved
+        # (from the LiteLLM table). Scoped to endpoints so every other
+        # provider keeps its curated pricing.json behaviour.
+        if endpoint_slug:
+            from services.model_registry import get_model_registry
+
+            info = get_model_registry().get_model_info(model or "", provider)
+            if info and (info.input_price_per_mtok or info.output_price_per_mtok):
+                return ModelPricing(info.input_price_per_mtok, info.output_price_per_mtok)
 
         # Fall back to provider default
         default_pricing = provider_pricing.get("_default")

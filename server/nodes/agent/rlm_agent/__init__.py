@@ -64,12 +64,12 @@ class RLMAgentNode(ActionNode):
             database,
             log_prefix="[RLM Agent]",
         )
-        context_v2 = (
+        context_descriptor = (
             context_data
             if (context_data or {}).get("kind") == "context"
             else None
         )
-        memory_data = context_data if context_data and not context_v2 else None
+        memory_data = context_data if context_data and not context_descriptor else None
 
         # 2. Inject task-completion context into the prompt.
         if task_data:
@@ -101,7 +101,7 @@ class RLMAgentNode(ActionNode):
             node_id,
             payload,
             memory_data=memory_data,
-            context_data=context_v2,
+            context_data=context_descriptor,
             skill_data=skill_data if skill_data else None,
             tool_data=tool_data if tool_data else None,
             broadcaster=get_status_broadcaster(),

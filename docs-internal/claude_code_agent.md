@@ -4,10 +4,10 @@
 long-lived **interactive** subprocess (stdio pipes, no PTY) over the VSCode-extension
 stream-json protocol — not the `claude -p` headless path. A warm `ClaudeSessionPool`
 (keyed by the RFC-0002 conversation key when a Context node is connected, or by the
-legacy `simpleMemory.node_id` on immutable V1 graphs — `services/cli_agent/service.py:354-358`)
+legacy `simpleMemory.node_id` on `input-memory` graphs — `services/cli_agent/service.py:359-363`)
 preserves the session across turns;
-memory continuity is claude-native via `--continue` / `--resume <UUID>` on a stable
-`cwd=repo_root`. Connected tools and skills reach claude through an MCP bridge; the spawn
+memory continuity is claude-native via a host-minted `--session-id` on the first run and `--resume <last_session_id>` afterwards in a stable
+per-workflow git worktree (`<workspace>/<node>/wt_session`, branched off the enclosing repo; the repo root is never the cwd). Connected tools and skills reach claude through an MCP bridge; the spawn
 runs under `--permission-mode dontAsk` with a strict `--allowedTools` allowlist and stays
 in interactive billing (entrypoint `claude-vscode`, not `sdk-cli`).
 
@@ -17,9 +17,9 @@ This page is a **router**. The detail lives in the documents below — start her
 
 | Your question | Read |
 |---|---|
-| How does the whole integration work end-to-end? (architecture, memory & context compaction, sub-agent creation, data structures) | [claude_code_agent_architecture.md](./claude_code_agent_architecture.md) |
+| How does the whole integration work end-to-end? (architecture, memory & context compaction, sub-agent creation, data structures) | [claude_code_agent_architecture.md](./ARCHIVE/claude_code_agent_architecture.md) |
 | How does interactive mode work? (stdio pipes vs PTY, stream-json events, `system/init` / `assistant` / `result`, session continuity, the four `claude.session.*` CloudEvents) | [claude_code_interactive_mode.md](./claude_code_interactive_mode.md) |
-| The generic multi-provider runtime (`AICliService.run_batch`, worktree isolation, FastMCP bridge, the memory bridge `--continue`/`--resume`, plugin-folder layout) | [cli_agent_framework.md](./cli_agent_framework.md) |
+| The generic multi-provider runtime (`AICliService.run_batch`, FastMCP bridge, the memory bridge `--session-id`/`--resume`, plugin-folder layout) | [cli_agent_framework.md](./cli_agent_framework.md) |
 | Does our implementation match the official Claude Code spec? (six invariants + status) | [cli_agent_canonical_patterns_rfc.md](./cli_agent_canonical_patterns_rfc.md) |
 | Which CLI subcommands/flags exist, and which subset we emit | [claude_code_cli_reference.md](./claude_code_cli_reference.md) (snapshot) |
 | Environment variables (`CLAUDE_CONFIG_DIR`, `MAX_MCP_OUTPUT_TOKENS`, `ENABLE_TOOL_SEARCH`, Bedrock/Vertex, telemetry) | [claude_code_env_vars_reference.md](./claude_code_env_vars_reference.md) (snapshot) |
@@ -39,13 +39,13 @@ All claude-specific code is self-contained here; the generic framework at
 | File | Responsibility |
 |---|---|
 | `__init__.py` | `ClaudeCodeAgentNode(ActionNode)` (line 238 — it does not go through `SpecializedAgentBase` / the native loop) + `Params`/`Output`; self-registers via `factory.py` (`register_provider` / `register_session_pool` / `register_skill_materialiser`) + `register_ws_handlers`. |
-| `_provider.py` | Builds the spawn argv (`--output-format stream-json --input-format stream-json --verbose --ide`, `--permission-mode dontAsk`, `--allowedTools`, `--continue`/`--resume`). |
-| `_pool.py` | `ClaudeSessionPool` — warm subprocess keyed by `simpleMemory.node_id`; stdout reader, session-UUID capture, crash-recovery respawn. |
+| `_provider.py` | Builds the spawn argv (`--output-format stream-json --input-format stream-json --verbose --ide`, `--permission-mode dontAsk`, `--allowedTools`, `--resume`/`--session-id`). |
+| `_pool.py` | `ClaudeSessionPool` — warm subprocess keyed by the RFC-0002 conversation key `context_bridge.pool_key` (legacy fallback: `simpleMemory.node_id`); stdout reader, session-UUID capture, crash-recovery respawn. |
 | `_skills.py` | `materialise_skills` — writes connected SKILL.md trees under `<workspace>/.claude/skills/`, diff-based on warm reuse. |
 | `_oauth.py` | Isolated `CLAUDE_CONFIG_DIR` (`<DATA_DIR>/claude/`), browser-OAuth bridge, binary install. |
-| `_handlers.py` | WebSocket handlers `claude_code_login` (line 103) / `claude_code_logout` (line 140), exported through `WS_HANDLERS`. |
+| `_handlers.py` | WebSocket handlers `handle_claude_code_login` / `handle_claude_code_logout`, exported through `WS_HANDLERS`. |
 
 ## See also
 
-- Memory bridge specifics (how `simpleMemory` feeds `--continue`, why `last_session_id` is display-only): [cli_agent_framework.md → Memory bridge](./cli_agent_framework.md).
+- Memory bridge specifics (how `simpleMemory.last_session_id` feeds `--resume`, why `--continue` is never used): [cli_agent_framework.md → Memory bridge](./cli_agent_framework.md).
 - Generic CLI agent runtime shared with Codex / Gemini providers: `server/services/cli_agent/`.

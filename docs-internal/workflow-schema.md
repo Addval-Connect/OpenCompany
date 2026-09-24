@@ -68,7 +68,7 @@ A workflow JSON document contains:
 
 ## Supported Node Types
 
-> Authoritative count = the plugin registry: one self-contained folder (or file) per node under `server/nodes/<group>/` — ~118 node types today; live total via `pytest --collect-only`. (A bare `server/nodes/**/__init__.py` glob overcounts — it also matches the 26 group packages.) The breakdown below is illustrative and grouped by category; do not rely on a hand-maintained total.
+> Authoritative count = the plugin registry: one self-contained folder (or file) per node under `server/nodes/<group>/` — 148 node types at time of writing (live total: `len(services.node_registry.NODE_METADATA)` after `import nodes`, or `uv run pytest --collect-only`); 34 palette groups registered in `server/nodes/groups.py`. A bare `server/nodes/**/__init__.py` glob overcounts because it also matches the group packages. The breakdown below is illustrative and grouped by category; do not rely on a hand-maintained total.
 
 > The canonical list of nodes lives in the backend plugin tree at `server/nodes/<category>/<node>/__init__.py`; this section is a human-readable index.
 
@@ -91,7 +91,7 @@ A workflow JSON document contains:
 - `openrouterChatModel` - OpenRouter unified API (200+ models)
 - `groqChatModel` - Groq ultra-fast inference (Llama, Qwen3, GPT-OSS)
 - `cerebrasChatModel` - Cerebras custom AI hardware (Llama, Qwen)
-- `deepseekChatModel` - DeepSeek V4 (deepseek-v4-flash / deepseek-v4-pro; chat/reasoner legacy aliases)
+- `deepseekChatModel` - DeepSeek V4.1 (deepseek-flash / deepseek-v4.1-flash / deepseek-v4-pro; deepseek-v4-flash is a retired alias served by V4.1-Flash, chat/reasoner discontinued)
 - `kimiChatModel` - Moonshot Kimi K2.6 / K2.5 / K2.7-code
 - `mistralChatModel` - Mistral Large / Small / Codestral
 - `ollamaChatModel` - Local Ollama server (OpenAI-compat via `{provider}_proxy` URL)
@@ -120,16 +120,20 @@ Pre-configured agents for specific domains. All inherit `AI_AGENT_PROPERTIES`. S
 - `rlm_agent` - Recursive Language Model (REPL-based, dedicated handler)
 - `claude_code_agent` - Claude Code SDK integration
 
-### AI Tool Nodes (4 dedicated)
+### AI Tool Nodes (9; nodes that connect to an agent's `input-tools` handle, not all under `server/nodes/tool/`)
 Connect to AI Agent's `input-tools` handle:
 - `masterSkill` - Aggregates multiple skills with enable/disable toggles
 - `calculatorTool` - Math operations
 - `currentTimeTool` - Current date/time with timezone
 - `duckduckgoSearch` - DuckDuckGo web search (free, no API key)
 - `taskManager` - Task creation and tracking tool
+- `canvas` - Pushed-content display board (paths / URLs / markdown notes)
+- `dataSource` - Raw local data over workspace paths and operator-approved mounts
+- `writeTodos` - Structured task-list planning with checklist rendering
+- `agentBuilder` - Spawns tools, agents, and skills onto the canvas mid-execution
 
 ### Search Nodes (3 dual-purpose)
-Work as both workflow nodes and AI tools. Defined in `searchNodes.ts`:
+Work as both workflow nodes and AI tools. Defined under `server/nodes/search/<plugin>/__init__.py`:
 - `braveSearch` - Brave Search API
 - `serperSearch` - Google SERP via Serper API
 - `perplexitySearch` - Perplexity Sonar with citations
@@ -220,8 +224,8 @@ Unified multi-platform messaging (WhatsApp, Telegram, Discord, Slack, SMS, Email
 ### Code Nodes (4 nodes)
 All dual-purpose (workflow node + AI tool):
 - `pythonExecutor` - Python code execution (in-process)
-- `javascriptExecutor` - JavaScript execution via persistent Node.js server
-- `typescriptExecutor` - TypeScript execution via persistent Node.js server (tsx)
+- `javascriptExecutor` - JavaScript execution via the persistent JS executor sidecar (Express on bun; `server/nodejs/`)
+- `typescriptExecutor` - TypeScript execution via the same sidecar (bun transpiles TypeScript natively; no tsx)
 - `montyExecutor` - Sandboxed Python via the Monty interpreter
 
 ### Chat Nodes (2 nodes)
@@ -247,7 +251,7 @@ RAG pipeline nodes for document ingestion, processing, and vector storage:
 
 ```json
 {
-  "id": "workflow_1234567890",
+  "id": "1234567890",
   "name": "AI Agent with Start Node",
   "version": "1.0.0",
   "createdAt": "2025-01-06T12:00:00.000Z",
@@ -291,7 +295,7 @@ RAG pipeline nodes for document ingestion, processing, and vector storage:
 
 ```json
 {
-  "id": "workflow_1234567891",
+  "id": "1234567891",
   "name": "AI Agent with Memory",
   "version": "1.0.0",
   "createdAt": "2025-01-06T12:00:00.000Z",
@@ -342,8 +346,8 @@ RAG pipeline nodes for document ingestion, processing, and vector storage:
       "id": "edge-memory",
       "source": "simpleMemory-1",
       "target": "aiAgent-1",
-      "sourceHandle": "output-memory",
-      "targetHandle": "input-memory"
+      "sourceHandle": "output-tool",
+      "targetHandle": "input-tools"
     }
   ]
 }
@@ -351,7 +355,7 @@ RAG pipeline nodes for document ingestion, processing, and vector storage:
 
 **Memory Workflow Behavior:**
 1. Start node provides the user's chat input
-2. Simple Memory connects to AI Agent's memory handle (config connection)
+2. Simple Memory connects to AI Agent's `input-tools` handle via its `output-tool` handle (config connection)
 3. When AI Agent runs, it loads conversation history from the memory session
 4. AI Agent's response is automatically saved to the memory session
 5. Simple Memory node can see Start node's outputs (via AI Agent) for parameter mapping
@@ -403,7 +407,7 @@ fileInput.click();
 import { validateWorkflow } from './schemas/workflowSchema';
 
 const workflow = {
-  id: 'workflow_123',
+  id: '123',
   name: 'My Workflow',
   nodes: [...],
   edges: [...],
@@ -430,22 +434,25 @@ Config nodes (memory, tools) are auxiliary nodes that connect to parent nodes vi
 |----------|-------------|---------------|
 | Group | Contains 'memory' or 'tool' | Other groups |
 | Input Handle | None (passive) | `input-main` |
-| Output Handle | `output-memory`, `output-model` | `output-main` |
-| Target Handle | Parent's `input-memory`, `input-tools` | Parent's `input-main` |
+| Output Handle | `output-tool` (simpleMemory), `output-context` (context node), `output-model` | `output-main` |
+| Target Handle | Parent's `input-context`, `input-tools`, `input-skill`, `input-teammates` (`input-memory` is retired: the validator rejects it, the migration rewrites it) | Parent's `input-main` |
 | Parent Visibility | NOT shown in parent's input panel | Shown in parent's input panel |
 | Input Inheritance | Inherits parent's main inputs | Only direct connections |
 
 ### Config Node Detection
 
-Nodes are identified as config nodes by their group membership:
+Nodes are identified as config nodes by the backend-derived `isConfigNode` uiHint:
 
 ```typescript
 const isConfigNode = (nodeType: string): boolean => {
   const definition = resolveNodeDescription(nodeType);
-  const groups = definition?.group || [];
-  return groups.includes('memory') || groups.includes('tool');
+  return definition?.uiHints?.isConfigNode === true;
 };
 ```
+
+The backend derives the flag from the plugin's `group` tuple via
+`_CONFIG_NODE_GROUPS = frozenset({"memory", "tool"})` in
+`services/plugin/base.py`; the frontend never re-derives it from group strings.
 
 ### Input Inheritance for Config Nodes
 
@@ -538,8 +545,8 @@ OpenRouter model IDs use the format `provider/model-name`:
 ```
 
 Memory nodes are config nodes that:
-- Connect to AI Agent via `input-memory` handle
-- Store conversation history in database (persisted across restarts)
+- Connect to AI Agent via the `input-tools` handle (`output-tool` -> `input-tools`); conversation continuity lives on the context node's `output-context` -> `input-context` edge
+- Store durable facts the agent explicitly remembers (persisted across restarts)
 - Support buffer mode (all messages) or window mode (last N messages)
 - Inherit parent node's main inputs for parameter mapping
 
@@ -580,17 +587,26 @@ Each edge contains:
 
 #### Config Handles (for auxiliary nodes)
 Config handles connect memory/tool nodes to parent nodes without being part of main data flow:
-- `input-memory` - Memory configuration input (AI Agent)
-- `input-tools` - Tools configuration input (AI Agent)
+- `input-context` - Context node input (AI Agent; conversation continuity)
+- `input-tools` - Tools configuration input (AI Agent; includes `simpleMemory`)
+- `input-skill` - Skill configuration input (AI Agent)
+- `input-teammates` - Teammate agents input (team lead)
+- `input-memory` - **retired**; the validator rejects it and `normalize_workflow_graph` rewrites legacy edges
 - `input-model` - Model configuration input
 - `output-model` - Model/config output (circular nodes)
-- `output-memory` - Memory output (simpleMemory node)
+- `output-tool` - Tool output (simpleMemory node)
+- `output-context` - Context output (context node)
 
 #### Handle Detection Pattern
-Config handles follow the pattern `input-<type>` where type is NOT 'main':
+Config handles follow the pattern `input-<type>`, excluding the four data-flow handles
+(`client/src/components/parameterPanel/InputSection.tsx:259-265`):
 ```typescript
-const isConfigHandle = (handle: string): boolean => {
-  return handle.startsWith('input-') && handle !== 'input-main';
+const isConfigHandle = (handle: string | null | undefined): boolean => {
+  if (!handle) return false;
+  if (handle.startsWith('input-') && handle !== 'input-main' && handle !== 'input-chat' && handle !== 'input-task' && handle !== 'input-teammates') {
+    return true;
+  }
+  return false;
 };
 ```
 
@@ -603,8 +619,8 @@ const isConfigHandle = (handle: string): boolean => {
       "id": "edge-memory",
       "source": "simpleMemory-1",
       "target": "aiAgent-1",
-      "sourceHandle": "output-memory",
-      "targetHandle": "input-memory"
+      "sourceHandle": "output-tool",
+      "targetHandle": "input-tools"
     },
     {
       "id": "edge-main",
@@ -618,7 +634,7 @@ const isConfigHandle = (handle: string): boolean => {
 ```
 
 In this example:
-- The simpleMemory node connects to AI Agent's `input-memory` handle (config connection)
+- The simpleMemory node connects to AI Agent's `input-tools` handle via `output-tool` (config connection)
 - The start node connects to AI Agent's `input-main` handle (main data flow)
 - AI Agent does NOT see simpleMemory as an input (config handles are filtered)
 - simpleMemory DOES see Start node's outputs (inherits parent's main inputs)
@@ -656,7 +672,6 @@ This resolves to the `message` property from the Start node's output data.
   - Added chat nodes: chatSend, chatHistory (JSON-RPC 2.0 WebSocket)
   - Added utility nodes: chatTrigger, console (5 utility nodes total)
   - Added javascriptExecutor code node (2 code nodes total)
-  - Updated WebSocket handlers count to 51
 
 - **1.3.0** (2026-01-19): OpenRouter AI provider integration
   - Added openrouterChatModel to AI Nodes list

@@ -2,12 +2,12 @@
 
 | Field | Value |
 |------|-------|
-| **Category** | ai_tools (dual-purpose) |
+| **Category** | ai_tools (tool-only ToolNode; group ("tool", "ai")) |
 | **Backend handler** | [`server/nodes/tool/write_todos/__init__.py`](../../../server/nodes/tool/write_todos/__init__.py) — `WriteTodosNode`, dispatched via `BaseNode.execute()` + the `@Operation("write")` method (logic inlined; the standalone `services/handlers/todo.py::handle_write_todos` / `execute_write_todos` still exist but are no longer the dispatch path) |
 | **Service** | [`server/services/todo_service.py::TodoService`](../../../server/services/todo_service.py) |
 | **Tests** | [`server/tests/nodes/test_ai_tools.py`](../../../server/tests/nodes/test_ai_tools.py) |
 | **Skill (if any)** | [`server/skills/assistant/write-todos-skill/SKILL.md`](../../../server/skills/assistant/write-todos-skill/SKILL.md) |
-| **Dual-purpose tool** | yes - tool name `write_todos` |
+| **Dual-purpose tool** | ToolNode - tool name `write_todos` |
 
 ## Purpose
 
@@ -47,7 +47,7 @@ generic-params card. `uiHints.isTodoEditor` (declared on the plugin) routes
 
 | Handle | Connection type | Required | Purpose |
 |--------|-----------------|----------|---------|
-| (none) | - | - | Passive node - connect `output-tool` to an AI Agent's `input-tools` |
+| `input-main` | main | no | Upstream data (declared but not consumed by the `write` op) |
 
 ## Parameters
 

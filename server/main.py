@@ -26,8 +26,11 @@ except ImportError:
     pass  # Windows - uvloop not available, use default asyncio
 
 import asyncio
+import functools
+import json
 from datetime import datetime
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 # Note: We don't register custom signal handlers.
 # uvicorn already handles SIGINT (Ctrl+C) and SIGTERM (docker stop) gracefully.
@@ -46,6 +49,19 @@ from fastapi.middleware.cors import CORSMiddleware
 # [debug] ...``) because the supervisor already prepends
 # ``[HH:MM:SS.fff]`` to every aggregated line.
 _startup_log("Importing settings + logging...")
+# Layer ``.env.template`` < ``.env`` into the process environment BEFORE
+# ``Settings()`` so every ``os.environ.get`` in a plugin sees the canonical
+# defaults, whether we were launched by the CLI (which does the same
+# layering itself) or directly by the desktop shell / a bare uvicorn.
+from core.env_defaults import apply_file_defaults_to_environ
+
+apply_file_defaults_to_environ()
+
+from core.approot import (
+    client_dist as _client_dist,
+    package_json_path as _package_json_path,
+    resolve_static_asset as _resolve_static_asset,
+)
 from core.config import Settings, cookie_posture_warnings, dev_secret_offenders
 from core.logging import configure_logging, get_logger, setup_websocket_logging, shutdown_websocket_logging
 from core.tracing import init_tracing
@@ -77,6 +93,16 @@ async def lifespan(app: FastAPI):
     """Application lifespan management."""
     # Startup
     _startup_log("Lifespan startup begin")
+
+    # Desktop shell contract (inert unless OPENCOMPANY_DESKTOP=1): Windows
+    # Job Object so children die with us, parent-death watchdogs, and the
+    # token-gated shutdown route. Armed FIRST so every daemon spawned below
+    # inherits job membership. See core/desktop.py.
+    from core.desktop import is_desktop_mode, start_desktop_mode
+
+    if is_desktop_mode():
+        _armed = start_desktop_mode(asyncio.get_running_loop())
+        _startup_log(f"[Desktop] host mode armed: {_armed}")
 
     # Non-fatal security posture check: warn loudly when the shipped dev
     # placeholder secrets are still in use outside a local dev posture
@@ -311,6 +337,10 @@ async def lifespan(app: FastAPI):
     # to parallel/sequential execution until Temporal is ready.
     app.state.temporal_worker_manager = None
     app.state.temporal_pool = None
+    # Coarse readiness phase for /health/ready (the desktop splash reads
+    # it): starting -> installing_temporal | starting_temporal -> connecting
+    # -> ready. Written by services.temporal.lifecycle.
+    app.state.temporal_phase = "starting" if settings.temporal_enabled else "disabled"
     temporal_init_task: asyncio.Task | None = None
 
     if settings.temporal_enabled:
@@ -368,9 +398,13 @@ async def lifespan(app: FastAPI):
     _startup_log("Application startup complete")
     yield
 
-    # Shutdown
+    # Shutdown. Progress markers go through ``_startup_log`` (the same
+    # pre-/post-logger channel used at boot) so a stalled teardown is
+    # diagnosable from the desktop shell's captured stdout.
+    _startup_log("Lifespan shutdown begin")
     # Stop WebSocket logging handler
     shutdown_websocket_logging()
+    _startup_log("Lifespan shutdown: ws logging stopped")
 
     # Cancel the Temporal lifecycle task (connect loop while starting;
     # resident dev-server watchdog once the engine is up).
@@ -380,6 +414,7 @@ async def lifespan(app: FastAPI):
             await temporal_init_task
         except (asyncio.CancelledError, Exception):
             pass
+    _startup_log("Lifespan shutdown: temporal lifecycle task cancelled")
 
     # Stop tenant namespace workers first (pools then managers), then the
     # default-namespace workers.
@@ -429,6 +464,7 @@ async def lifespan(app: FastAPI):
                 await temporal_client_wrapper.disconnect()
         except Exception:
             pass
+    _startup_log("Lifespan shutdown: temporal stopped")
 
     # Shutdown proxy service
     from services.proxy.service import get_proxy_service
@@ -436,6 +472,7 @@ async def lifespan(app: FastAPI):
     _proxy_svc = get_proxy_service()
     if _proxy_svc:
         await _proxy_svc.shutdown()
+    _startup_log("Lifespan shutdown: proxy stopped")
 
     # Wave 12 C4 sub-piece B: drain every plugin that self-registered
     # a shutdown hook via services.plugin.shutdown_hooks. Today:
@@ -446,22 +483,26 @@ async def lifespan(app: FastAPI):
     from services.plugin.shutdown_hooks import run_shutdown_hooks
 
     await run_shutdown_hooks()
+    _startup_log("Lifespan shutdown: plugin shutdown hooks done")
 
     # Kill all managed processes (process manager node)
     from services.process_service import shutdown_process_service
 
     await shutdown_process_service()
+    _startup_log("Lifespan shutdown: process service stopped")
 
     # Stop every supervisor that registered itself via
     # services._supervisor.register_supervisor() (WhatsApp runtime,
-    # Node.js executor runtime, Temporal dev server).
+    # JS executor runtime, Temporal dev server).
     from services._supervisor import shutdown_all_supervisors
 
     await shutdown_all_supervisors()
+    _startup_log("Lifespan shutdown: supervisors stopped")
 
     # Stop cleanup service
     if cleanup_service is not None:
         await cleanup_service.stop()
+    _startup_log("Lifespan shutdown: cleanup service stopped")
 
     # Stop recovery sweeper first
     if settings.redis_enabled:
@@ -475,11 +516,15 @@ async def lifespan(app: FastAPI):
             await cli_mcp_lifespan_ctx.__aexit__(None, None, None)
         except Exception as exc:
             logger.debug("[CLI MCP] lifespan shutdown: %s", exc)
+    _startup_log("Lifespan shutdown: CLI MCP lifespan exited")
 
     # Drain cached native SDK clients before credentials/database teardown.
     await container.chat_unifier().aclose()
+    _startup_log("Lifespan shutdown: LLM clients closed")
     await container.cache().shutdown()
+    _startup_log("Lifespan shutdown: cache closed")
     await container.database().shutdown()
+    _startup_log("Lifespan shutdown complete")
     logger.info("Services shutdown complete")
 
 
@@ -496,7 +541,7 @@ _expose_docs = (
 # Create FastAPI app
 app = FastAPI(
     title="OpenCompany API",
-    version="3.0.0",
+    # version: set from package.json below, once _app_version() exists.
     description="OpenCompany workflow automation backend",
     lifespan=lifespan,
     docs_url="/docs" if _expose_docs else None,
@@ -558,6 +603,15 @@ app.include_router(websocket.router)
 app.include_router(credentials.router)  # Credentials panel - lazy per-tile icon endpoint (n8n pattern)
 app.include_router(schemas.router)  # Per-node output schema endpoint (GET /api/schemas/nodes/{type}.json)
 app.include_router(workspace.router)  # Per-workflow workspace file serving + uploads
+
+# Desktop shell control surface — mounted only under OPENCOMPANY_DESKTOP=1
+# so the token-gated shutdown route does not exist on server deployments.
+from core.desktop import is_desktop_mode as _is_desktop_mode
+
+if _is_desktop_mode():
+    from routers import desktop as _desktop_router
+
+    app.include_router(_desktop_router.router)
 
 # Routers awaiting migration into their plugin folders. As each plugin
 # moves to the self-contained pattern (nodes/<plugin>/_router.py +
@@ -622,6 +676,27 @@ async def _sweep_cli_lockfiles_on_startup() -> None:
         logger.debug("[main] CLI lockfile sweep failed: %s", exc)
 
 
+@functools.lru_cache(maxsize=1)
+def _app_version() -> str:
+    """The published OpenCompany version, read from the root ``package.json``.
+
+    That file is the single source of truth (``company version sync`` writes it
+    from the git tag), and it ships inside the npm package one level above
+    ``server/``. Never hardcode a literal here — ``/health`` previously reported
+    a stale ``3.3.0`` while the package was ``0.1.1``.
+    """
+    try:
+        pkg = json.loads(_package_json_path().read_text(encoding="utf-8"))
+        return str(pkg.get("version") or "0.0.0")
+    except (OSError, json.JSONDecodeError):
+        return "0.0.0"
+
+
+# The OpenAPI document (/docs, /openapi.json) carries the package version
+# too; the FastAPI constructor runs before this helper exists.
+app.version = _app_version()
+
+
 @app.get("/health")
 async def health_check():
     """Detailed health check with resource monitoring."""
@@ -652,7 +727,7 @@ async def health_check():
     return {
         "status": health["status"],
         "service": "python",
-        "version": "3.3.0",  # Bumped for daemon service support
+        "version": _app_version(),
         "environment": "development" if settings.debug else "production",
         "uptime_seconds": health["uptime_seconds"],
         "resources": {
@@ -673,6 +748,44 @@ async def health_check():
     }
 
 
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness (not liveness): 200 only once the app can actually run work.
+
+    ``/health`` answers as soon as uvicorn serves HTTP, which is seconds
+    before the Temporal client has connected and the workers are polling.
+    A desktop shell that navigates on ``/health`` shows a canvas whose
+    first Run fails. This endpoint is what it should wait on; ``phase``
+    is human-readable progress for the splash ("Downloading Temporal (first
+    run)" during the pooch fetch).
+
+    Ready = database reachable AND (Temporal disabled OR the worker
+    manager has started). The worker manager is the last thing
+    ``services.temporal.lifecycle`` wires, so it is the honest signal.
+    """
+    from core.health import check_database, readiness_report
+
+    db_ok = await check_database(container.database())
+    temporal_enabled = settings.temporal_enabled
+    client_connected = False
+    if temporal_enabled:
+        try:
+            wrapper = container.temporal_client()
+            client_connected = bool(wrapper is not None and wrapper.is_connected)
+        except Exception:
+            client_connected = False
+    status_code, body = readiness_report(
+        db_ok=db_ok,
+        temporal_enabled=temporal_enabled,
+        phase=getattr(app.state, "temporal_phase", "disabled" if not temporal_enabled else "starting"),
+        worker_ready=getattr(app.state, "temporal_worker_manager", None) is not None,
+        pool_ready=getattr(app.state, "temporal_pool", None) is not None,
+        client_connected=client_connected,
+        version=_app_version(),
+    )
+    return JSONResponse(status_code=status_code, content=body)
+
+
 # ---------------------------------------------------------------------------
 # Single-port SPA serving (container / Cloud Run)
 # ---------------------------------------------------------------------------
@@ -691,7 +804,9 @@ from pathlib import Path as _SpaPath
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-_CLIENT_DIST = _SpaPath(__file__).resolve().parents[1] / "client" / "dist"
+# Resolved through core.approot (OPENCOMPANY_CLIENT_DIST / OPENCOMPANY_APP_ROOT
+# overrides) so a relocated bundle serves the SPA from wherever it staged it.
+_CLIENT_DIST = _SpaPath(_client_dist())
 _SERVE_STATIC = _spa_os.environ.get("SERVE_STATIC_CLIENT", "true").lower() in ("1", "true", "yes")
 # Path prefixes owned by the backend — never shadowed by the SPA fallback.
 _NON_SPA_PREFIXES = ("api/", "ws/", "webhook/", "mcp/", "health", "docs", "redoc", "openapi.json")
@@ -708,11 +823,12 @@ if _SERVE_STATIC and (_CLIENT_DIST / "index.html").is_file():
         """Serve a built static asset when it exists, else the SPA shell."""
         if full_path.startswith(_NON_SPA_PREFIXES):
             return JSONResponse(status_code=404, content={"detail": "Not Found"})
-        candidate = (_CLIENT_DIST / full_path).resolve()
-        # is_file() + containment check guard against ``..`` path traversal
-        # escaping the build directory.
-        if full_path and candidate.is_file() and _CLIENT_DIST in candidate.parents:
-            return FileResponse(str(candidate))
+        # The request path is user input; core.approot normalises it and
+        # refuses anything that does not stay inside the build directory
+        # (``..`` traversal, absolute paths, prefix siblings).
+        asset = _resolve_static_asset(_CLIENT_DIST, full_path)
+        if asset is not None:
+            return FileResponse(asset)
         return FileResponse(str(_CLIENT_DIST / "index.html"))
 
     logger.info("Serving built client from %s", _CLIENT_DIST)

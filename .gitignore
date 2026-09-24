@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+test-temp*/
 
 # External design handoff bundle (reference-only; merged copy lives in docs-internal/design-system/)
 design_handoff_theme_system/
@@ -109,9 +110,11 @@ venv/
 *.egg-info/
 .eggs/
 
-# uv (Python package manager)
+# uv (Python package manager). server/uv.lock IS tracked: the desktop
+# build runs ``uv sync --frozen`` against it so every install of a given
+# app version gets the same dependency tree, and CI runs ``uv lock --check``.
 uv.lock
-server/uv.lock
+!server/uv.lock
 # .python-version at the repo root IS tracked -- it's the project-wide
 # toolchain pin (read by uv, pyenv, asdf, AND ``setup-python`` via
 # python-version-file: in our GitHub Actions workflows). Per-developer
@@ -170,3 +173,27 @@ server/tests/_test_opencompany_root/
 # Experiments (work in progress)
 # =============================================================================
 server/experiments/
+
+# Terraform provider cache (cli/terraform/*)
+**/.terraform/
+# Terraform state and variable files carry secrets (owner password, JWT keys)
+cli/terraform/**/*.tfstate
+cli/terraform/**/*.tfstate.*
+cli/terraform/**/*.tfvars
+cli/terraform/**/*.tfvars.json
+
+# =============================================================================
+# Desktop shell (desktop/) — build outputs, staged bundle inputs, downloaded
+# runtimes. Only sources, config, runtimes.json and build/icon.svg are tracked.
+# =============================================================================
+desktop/node_modules/
+desktop/out/
+desktop/release/
+desktop/stage/
+desktop/vendor/
+# The generic `build/` rule above would hide the whole electron-builder
+# buildResources dir; only the rendered PNG is derived (from icon.svg).
+!desktop/build/
+desktop/build/icon.png
+desktop/test-results/
+desktop/playwright-report/

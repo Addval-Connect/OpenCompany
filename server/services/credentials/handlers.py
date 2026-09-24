@@ -185,11 +185,15 @@ async def handle_delete_api_key(data: Dict[str, Any], websocket: WebSocket) -> D
         caller = getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
 
     async def _do_delete() -> Dict[str, Any]:
+        from services.llm.endpoints import base_url_key
+        from services.model_registry import get_model_registry
+
         auth_service = container.auth_service()
         broadcaster = get_status_broadcaster()
-        await auth_service.remove_api_key(
-            provider, data.get("session_id", "default"), credential_customer_id=caller
-        )
+        session_id = data.get("session_id", "default")
+        await auth_service.remove_api_key(provider, session_id, credential_customer_id=caller)
+        await auth_service.remove_api_key(base_url_key(provider), session_id)
+        get_model_registry().forget_local_models(provider)
         await broadcaster.update_api_key_status(
             provider,
             valid=False,

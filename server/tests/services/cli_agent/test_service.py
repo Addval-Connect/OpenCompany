@@ -280,6 +280,20 @@ async def test_run_batch_registers_mcp_batch_on_happy_path(monkeypatch):
 
     stub_pool = _StubPool()
     monkeypatch.setattr(factory_mod, "get_session_pool", lambda name: stub_pool)
+    monkeypatch.setattr(svc_mod, "get_session_pool", lambda name: stub_pool)
+
+    # Pooled sessions run in a git worktree under the workspace; stub the
+    # git calls so the test never touches the real checkout.
+    from services.cli_agent import worktree as worktree_mod
+
+    added: list = []
+
+    async def fake_add(repo_root, worktree_dir, branch):  # noqa: ANN001
+        added.append(worktree_dir)
+        return worktree_dir
+
+    monkeypatch.setattr(worktree_mod, "add_worktree", fake_add)
+    monkeypatch.setattr(worktree_mod, "remove_worktree", AsyncMock())
 
     svc = get_ai_cli_service()
     workspace = Path(__file__).resolve().parents[3]  # the repo root (a git repo)
@@ -330,3 +344,8 @@ async def test_run_batch_registers_mcp_batch_on_happy_path(monkeypatch):
     # Unbound run: the ephemeral pooled session is torn down after the batch.
     assert len(terminated) == 1
     assert terminated[0].startswith("ccode_test_happy:")
+    # It ran in its own worktree under the workspace, never in the repo root.
+    assert len(added) == 1
+    assert added[0].parent == workspace / "ccode_test_happy"
+    assert added[0].name.startswith("wt_")
+    assert worktree_mod.remove_worktree.await_count == 1

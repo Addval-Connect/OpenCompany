@@ -197,7 +197,7 @@ describe('InputSection -- config handle filtering for agent nodes', () => {
     });
   });
 
-  it('SKIPS input-context edges on Context V2 agents', async () => {
+  it('SKIPS input-context edges on Context agents', async () => {
     setWorkflow(
       [
         { id: 'ctx', type: 'context', data: { label: 'Context' }, position: { x: 0, y: 0 } },

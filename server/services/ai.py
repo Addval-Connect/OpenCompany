@@ -173,6 +173,21 @@ def _get_default_model(provider: str, fallback: str) -> str:
     return providers.get(provider, {}).get("default_model", fallback)
 
 
+def _require_saved_endpoint(provider: str) -> None:
+    """Called when no key was injected: a named endpoint is unsaved, not keyless.
+
+    Saving an endpoint always stores a key (the user's or the declared
+    placeholder), so a missing key means the endpoint was removed or never
+    chosen. Say that, as a user-correctable error, instead of "API key is
+    required". Any other provider falls through to the caller's own error.
+    """
+    from services.llm.endpoints import unconfigured_endpoint_message
+
+    message = unconfigured_endpoint_message(provider)
+    if message:
+        raise NodeUserError(message)
+
+
 def _resolve_max_tokens(flattened: dict, model: str, provider: str) -> int:
     """Resolve max_tokens: user param (clamped to model max) -> model max.
 
@@ -729,17 +744,18 @@ class AIService:
             # handled separately in execute_agent / execute_chat_agent.
             system_prompt = flattened.get("system_prompt", "")
 
+            # Determine provider from node_type (more reliable than model name detection)
+            from constants import detect_ai_provider
+
+            provider = detect_ai_provider(node_type, flattened)
+
             if not api_key:
+                _require_saved_endpoint(provider)
                 raise ValueError("API key is required")
 
             # Validate prompt is not empty (prevents wasted API calls for all providers)
             if not is_valid_message_content(prompt):
                 raise ValueError("Prompt cannot be empty")
-
-            # Determine provider from node_type (more reliable than model name detection)
-            from constants import detect_ai_provider
-
-            provider = detect_ai_provider(node_type, flattened)
 
             # Build thinking config from parameters
             thinking_config = None
@@ -945,6 +961,7 @@ class AIService:
                     logger.info(f"No model specified, using default: {model}")
 
             if not api_key:
+                _require_saved_endpoint(provider)
                 raise ValueError("API key is required for AI Agent")
 
             # Resolve max_tokens and temperature via model registry
@@ -977,7 +994,7 @@ class AIService:
             if context_runtime is not None:
                 # Simple Memory is an explicit tool when a Context node is
                 # connected; legacy automatic recall/persistence remains only
-                # for immutable V1 snapshots.
+                # for graphs recorded with an input-memory edge.
                 memory_data = None
 
             # Build initial messages for state. The SystemMessage is
@@ -1759,6 +1776,7 @@ class AIService:
                     logger.info(f"No model specified, using default: {model}")
 
             if not api_key:
+                _require_saved_endpoint(provider)
                 raise ValueError("API key is required for Zeenie")
 
             # Resolve max_tokens and temperature via model registry

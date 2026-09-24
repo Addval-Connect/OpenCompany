@@ -70,7 +70,7 @@ class SpecializedAgentBase(ActionNode, abstract=True):
 | `group` | Tuple of palette groupings (first is primary). |
 | `component_kind` | Frontend dispatch: `square` / `trigger` / `agent` / `tool` / `model` / `start` / `generic`. |
 | `handles` | React Flow handle topology (`input-main`, `output-main`, …). |
-| `ui_hints` | Dict of panel flags (`hasCodeEditor`, `isMemoryPanel`, `isMasterSkillEditor`, `isToolPanel`, `hasSkills`, `isConfigNode`, `outputMode: "terminal"` for CLI-wrapper nodes whose textual output must render preformatted, …). See "Auto-derived uiHints" below — `isConfigNode` is set automatically for `('memory', 'tool')` group plugins. Live flag list = the `known` set in `test_node_spec.py`. |
+| `ui_hints` | Dict of panel flags (`hasCodeEditor`, `isMemoryPanel`, `isMasterSkillEditor`, `isDataPanel`, `hasSkills`, `isConfigNode`, `outputMode: "terminal"` for CLI-wrapper nodes whose textual output must render preformatted, …). See "Auto-derived uiHints" below — `isConfigNode` is set automatically for `('memory', 'tool')` group plugins. Live flag list = the `known` set in `test_node_spec.py`. |
 | `annotations` | Pipedream-style: `destructive` / `readonly` / `open_world`. |
 | `credentials` | Sequence of `Credential` subclasses the node uses. More than one is supported — see [Multi-credential nodes](#multi-credential-nodes). |
 | `Params` | Pydantic `BaseModel` — user-facing parameters. Used for both UI rendering and AI tool schemas. |
@@ -551,7 +551,7 @@ themselves** into those registries from their package `__init__.py`.
 
 ```
 server/nodes/telegram/
-├── __init__.py          # imports + register_* calls covering seven registries (no logic)
+├── __init__.py          # imports + register_* calls covering seven of the generic registries (no logic)
 ├── _credentials.py      # TelegramCredential (ApiKeyCredential)
 ├── _service.py          # TelegramService singleton (bot lifecycle)
 ├── _handlers.py         # WebSocket handlers + WS_HANDLERS dict
@@ -566,24 +566,36 @@ Underscore-prefixed files are package-private; the `nodes` walker
 skips them. The two non-underscore files are the plugin classes (one
 per node type) — same pattern as every other folder.
 
-### Up to seven cross-cutting registries — use only what your plugin needs
+### Cross-cutting registries (19 at time of writing, hand-curated below; `grep -rn '^def register_' server/services server/core` also lists the node / group / provider / session-pool registration internals) — use only what your plugin needs
 
 | Concern | Registry module | Register from plugin via |
 |---|---|---|
 | Credentials-modal WebSocket commands (Connect / Disconnect / Send / Status / etc.) | `services.ws_handler_registry` | `register_ws_handlers({type: handler, ...})` |
+| FastAPI HTTP router (OAuth callbacks, webhook receivers, etc.) | `services.ws_handler_registry` | `register_router(router, name='<plugin>')` — Wave 11.I; declare a `_router.py` exposing an `APIRouter` and call from `__init__.py`. Discovered at startup via `services.ws_handler_registry.get_routers()`. |
+| `loadOptionsMethod` async loader for a dynamic dropdown (`json_schema_extra={"loadOptionsMethod": "..."}`) | `services.ws_handler_registry` | `register_option_loader(method_name, fn)` |
+| OAuth callback path (`/api/<provider>/callback`) so `services.oauth_utils.get_redirect_uri` never cross-imports `nodes/<plugin>/_oauth.py` | `services.ws_handler_registry` | `register_oauth_callback_path(provider, path)` |
 | Trigger event-filter builder | `services.event_waiter` | `register_filter_builder(node_type, fn)` |
 | Trigger pre-execution check (e.g. "bot not connected") | `services.event_waiter` | `register_trigger_precheck(node_type, fn)` |
 | Service-status refresh on WebSocket connect | `services.status_broadcaster` | `register_service_refresh(callback)` |
 | Per-node output schema (when not auto-derivable) | `services.node_output_schemas` | `register_output_schema(node_type, ModelClass)` |
-| FastAPI HTTP router (OAuth callbacks, webhook receivers, etc.) | `services.ws_handler_registry` | `register_router(router, name='<plugin>')` — Wave 11.I; declare a `_router.py` exposing an `APIRouter` and call from `__init__.py`. Discovered at startup via `services.ws_handler_registry.get_routers()`. |
+| Master-Skill expander (how a `masterSkill` node expands into its enabled skills during edge walking) | `services.plugin.edge_walker` | `register_master_skill_expander(fn)` — registered by `nodes.skill` on package import. |
 | Agent Context descriptor (node connected on `input-context`) | `services.plugin.edge_walker` | `register_agent_context_builder(async_fn)` — RFC-0002; the framework walks the edge but owns no knowledge of the descriptor's keys or thread-selection rules. Reference: `nodes/context/_descriptor.py`. |
+| HTTP-webhook event source on the shared catch-all (`/webhook/<path>`) | `services.events.webhook` | `register_webhook_source(source)` — same instance for the same path is a no-op; a different source on an existing path raises. |
+| Opt a trigger node type into the Wave 12 canary (Temporal) path | `services.deployment.canary_registry` | `register_canary_trigger_type(node_type, cloudevent_type)` — the CloudEvents type must match the producer's `WorkflowEvent.type` exactly; a diverging re-registration raises `ValueError`. |
+| Polling-coroutine factory for a pull-based trigger (Gmail, Twitter) | `services.deployment.poll_registry` | `register_poll_coroutine_factory(node_type, factory)` |
+| Send handler for one social platform behind the generic `socialSend` node | `services.plugin.social_provider_registry` | `register_social_send_handler(platform, handler)` |
+| FastAPI-lifespan shutdown hook for plugin-owned long-lived state | `services.plugin.shutdown_hooks` | `register_shutdown_hook(label, hook)` — `label` surfaces in shutdown logs. |
+| Service factory for the DI container (`container.<name>()` resolves to a plugin-owned service) | `services.plugin.service_factories` | `register_service_factory(name, factory)` |
+| Short Terminal-UI log tag for a logger-name prefix (only when the `nodes.<plugin>` auto-rule yields an unwanted tag) | `core.logging` | `register_log_source_tag(prefix, tag)` |
+| Callback fired after a conversation durably saves (RFC-0002 Context live-view) | `services.agent_context.listeners` | `register_conversation_listener(listener)` — keyword-args only; a listener can never fail a save. |
+| Long-lived process supervisor (WhatsApp bridge, the JS executor sidecar on bun, Discord gateway) | `services._supervisor` | `register_supervisor(supervisor)` — idempotent per `supervisor.label`; a label collision raises `ValueError`. |
 
 All accept idempotent re-imports (same callable / class for the
 same key is a no-op; conflicts raise `ValueError`).
 
-**Plugins use only the registries they need.** Telegram uses 5 (no
+**Plugins use only the registries they need.** Telegram uses 7 (no
 router); Stripe uses 4 (webhook-driven, no filter/precheck); Android
-uses 4 (with router); WhatsApp uses 5. There is no "register every
+uses 6 (with router); WhatsApp uses 8. There is no "register every
 hook" rule.
 
 ### Telegram `__init__.py` (canonical wiring)
@@ -771,7 +783,7 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
 
 ## Canonical principles
 
-1. **One file = one node.** Adding a new node never edits multiple
+1. **One plugin = one authoring location.** Adding a new node never edits multiple
    files. The filesystem location matches the palette group.
 2. **Backend is SSOT.** Node declaration, visual metadata, handlers,
    schemas, credentials, icons — one authoring location.
@@ -834,8 +846,8 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
   TelegramCredential + ApifyCredential + 12 LLM providers + 3 inline
   search credentials + Stripe / Vercel / GitHub / Cloudflare /
   WhatsApp); 29 plugins declared `credentials = (...)`. Today the live
-  numbers are `len(CREDENTIAL_REGISTRY)` (34) and 53 plugin files with a
-  non-empty `credentials` tuple. Agents stay poly-provider (empty tuple).
+  numbers are `len(CREDENTIAL_REGISTRY)` (35) and 55 node types with a
+  non-empty `credentials` tuple (September 2026). Agents stay poly-provider (empty tuple).
 - Wave 11.E.1 — Modularised credentials into per-domain
   `nodes/<group>/_credentials.py` files. `server/credentials/`
   directory deleted; auto-discovery rides on node-package import.
@@ -889,10 +901,12 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
   shrunk by ~808 LOC; three plugin routers (twitter / google /
   android) moved into `nodes/<plugin>/_router.py` and mount via the
   plugin-router loop in `main.py`. `tests/test_plugin_self_containment.py`
-  locks the contract with 7 invariant classes (forbidden-imports /
+  locks the contract with 10 invariant classes (forbidden-imports /
   no-router-outside-nodes / per-plugin self-registration /
   registry-API sanity / stale-paths-absent / main.py-does-not-mount /
-  WS_HANDLERS-non-empty).
+  WS_HANDLERS-non-empty + plugin-folder-has-node-file /
+  typed-event-factories / package-imports-cleanly; live count via
+  `grep -c '^class Test' server/tests/test_plugin_self_containment.py`).
 - Wave 12 — Generalized event framework
   ([`services/events/`](../server/services/events/)). Adds
   `WorkflowEvent` (CloudEvents v1.0 envelope, in-house Pydantic),

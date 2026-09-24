@@ -194,17 +194,21 @@ Quick cross-reference for the OpenCompany `claude_code_agent` integration:
 | `--mcp-config <json>` | when MCP wired | inline JSON with `{mcpServers: {opencompany: {type: http, url, headers, alwaysLoad: true}}}` |
 | `--strict-mcp-config` | when MCP wired | blocks user-level `~/.claude.json` MCP entries |
 | `--append-system-prompt <text>` | when `system_prompt` is set | append the task prompt to Claude Code's built-in system prompt |
-| `--continue` | first spawn for a memory-bound run | let Claude select the latest conversation for the stable working directory |
-| `--resume <UUID>` | pooled-process crash or reap recovery | resume the session UUID captured from Claude's stream events |
+| `--session-id <UUID>` | cold spawn with no continuity flag | host-minted `uuid4` so the session UUID is known before the first event (must be a valid UUID; rejected if already in use) |
+| `--resume <UUID>` | memory-bound runs (`last_session_id` from the memory node) and pooled-process crash or reap recovery | resume by UUID; works from any directory since 2.1.223 |
+| `--continue` | never set by the node | the reference says it skips sessions created non-interactively (`-p` / stream-json), i.e. every session the pool creates; kept on `ClaudeTaskSpec` for explicit callers only |
 | `--effort <level>` | optional per-task override | reasoning effort |
 | `--add-dir <path>*` | optional per-task override | grant extra working dirs |
 | `--disallowedTools <csv>` | optional per-task override | remove tools from context |
 | `--agent <name>` | optional per-task override | use a specific subagent |
 
-The interactive subprocess path intentionally does not emit `--print`,
-`--include-partial-messages`, `--include-hook-events`, or `--session-id`.
-It also retains `max_turns`, `max_budget_usd`, and `fallback_model` on the
-task specification only for compatibility; their corresponding flags are
-print-mode-only and are not emitted by this path.
+The subprocess path intentionally does not emit `--print` (the official
+Agent SDKs omit it too; the help text's "only works with --print" note
+on the format flags predates that), `--include-partial-messages`, or
+`--include-hook-events`. It retains `max_turns`, `max_budget_usd`, and
+`fallback_model` on the task specification only for compatibility; their
+corresponding flags are print-mode-only and are not emitted by this path.
+The CLI version the argv is verified against is pinned in
+`server/config/ai_cli_providers.json` (`package_version`).
 
 See [`server/nodes/agent/claude_code_agent/_provider.py`](../server/nodes/agent/claude_code_agent/_provider.py) for the argv-construction code.

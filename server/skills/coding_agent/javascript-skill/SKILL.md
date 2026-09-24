@@ -1,6 +1,6 @@
 ---
 name: javascript-skill
-description: Execute JavaScript code for calculations, data processing, and JSON manipulation. Full ES6+ support with Node.js runtime.
+description: Execute JavaScript code for calculations, data processing, and JSON manipulation. Full ES2022+ support on the bun runtime (Node-compatible APIs).
 allowed-tools: "javascript_executor"
 metadata:
   author: opencompany
@@ -192,4 +192,4 @@ const obj = Object.fromEntries(arr.map(x => [x.id, x.name]));
 ## Setup Requirements
 
 1. Connect the **JavaScript Executor** node to Zeenie's `input-tools` handle
-2. Node.js must be installed on the server
+2. bun must be available to the backend (the desktop app bundles it; the terminal install requires it)

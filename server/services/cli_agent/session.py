@@ -49,7 +49,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import anyio
 
 from core.logging import get_logger
 from core.paths import safe_path_component
@@ -143,7 +142,7 @@ class AICliSession(BaseProcessSupervisor):
         # incompatible with this — every spawn would land under a
         # brand-new project_key with no prior JSONL.
         self._memory_bound: bool = bool(memory_bound)
-        # Backend Context V2 raw-event sink. It receives each decoded
+        # Backend Context raw-event sink. It receives each decoded
         # provider event before UI logging and before result presentation
         # truncates the assistant text to 4,000 characters.
         self._context_event_sink = context_event_sink
@@ -242,30 +241,9 @@ class AICliSession(BaseProcessSupervisor):
         # 1. Per-task git worktree — skipped for memory-bound runs
         # which use cwd=repo_root to keep claude's project_key stable.
         if not self._memory_bound:
-            self._worktree_dir.parent.mkdir(parents=True, exist_ok=True)
-            wt_proc = await anyio.run_process(
-                [
-                    "git",
-                    "-C",
-                    str(self._repo_root),
-                    "worktree",
-                    "add",
-                    str(self._worktree_dir),
-                    "-b",
-                    self._branch,
-                ],
-                check=False,
-            )
-            if wt_proc.returncode != 0:
-                err = (
-                    (wt_proc.stderr or b"")
-                    .decode(
-                        "utf-8",
-                        errors="replace",
-                    )
-                    .strip()
-                )
-                raise RuntimeError(f"git worktree add failed: {err}")
+            from services.cli_agent.worktree import add_worktree
+
+            await add_worktree(self._repo_root, self._worktree_dir, self._branch)
         else:
             logger.info(
                 "[%s] memory-bound: skipping worktree, using cwd=%s",
@@ -801,18 +779,9 @@ class AICliSession(BaseProcessSupervisor):
         # runs; memory-bound spawns ran directly under repo_root).
         if not self._memory_bound:
             try:
-                await anyio.run_process(
-                    [
-                        "git",
-                        "-C",
-                        str(self._repo_root),
-                        "worktree",
-                        "remove",
-                        "--force",
-                        str(self._worktree_dir),
-                    ],
-                    check=False,
-                )
+                from services.cli_agent.worktree import remove_worktree
+
+                await remove_worktree(self._repo_root, self._worktree_dir)
             except Exception as exc:
                 self._logger.debug("[%s] worktree remove: %s", self.label, exc)
 

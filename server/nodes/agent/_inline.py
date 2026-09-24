@@ -1,6 +1,6 @@
 """Shared pre-dispatch logic for every agent plugin.
 
-Every agent (ai_agent, chat_agent, 13 specialized agents, team leads)
+Every agent (ai_agent, chat_agent, the 13 SpecializedAgentBase plugins: 11 specialized plus the 2 team leads)
 shares the same 3-step preamble before calling its specific AIService
 method:
 

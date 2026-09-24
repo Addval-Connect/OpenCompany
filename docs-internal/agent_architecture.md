@@ -5,7 +5,7 @@ Detailed architecture reference for how AI Agent (`aiAgent`) and Chat Agent (`ch
 > **Related Documentation:**
 > - [Node Creation Guide](./node_creation.md) - Canonical plugin recipe (covers tool nodes, dual-purpose nodes, specialized agents)
 > - [Tool Building Pipeline](./tool_building_pipeline.md) - Canonical home for `_build_tool_from_node`, tool discovery, per-type Temporal dispatch
-> - [Agent Context Flow](./agent_context_flow.md) - Canonical home for conversation continuity (RFC-0002 Context store); [Memory Lifecycle](./memory_lifecycle.md) covers only the retired V1 markdown model
+> - [Agent Context Flow](./agent_context_flow.md) - Canonical home for conversation continuity (RFC-0002 Context store). The retired markdown memory model is archived at [ARCHIVE/memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) and is not an SSOT for anything current.
 > - [CLAUDE.md](../CLAUDE.md) - Project overview and full node inventory
 
 ## Table of Contents
@@ -53,7 +53,7 @@ collect_agent_connections()               server/services/plugin/edge_walker.py
   Groups by targetHandle into 5 buckets (returns a 5-tuple
    context_data, skill_data, tool_data, input_data, task_data —
    edge_walker.py:181-199; the first element is the Context descriptor,
-   or the legacy Memory descriptor on immutable V1 snapshots):
+   or the legacy Memory descriptor on `input-memory` graphs):
     input-context            -> context_data
     input-skill              -> skill_data[]
     input-tools              -> tool_data[]
@@ -67,8 +67,8 @@ AIService.execute_agent() / execute_chat_agent()   server/services/ai.py
      skills ride the Skill tool instead
   2. Build provider-neutral AgentToolSpecs from tool_data
   3. Call run_native_agent_loop(ChatUnifier, ...)
-  4. Save the conversation (Context store; legacy V1 memory markdown
-     only for immutable V1 snapshots), return result
+  4. Save the conversation (Context store; legacy memory markdown
+     only for `input-memory` graphs), return result
         |
         v
 run_native_agent_loop() execution
@@ -182,12 +182,12 @@ next iteration.
 
 ### `max_iterations` precedence
 
-Resolved per-execution by `execute_agent` / `execute_chat_agent` (and `prepare_agent_payload` for F4.B), highest to lowest:
+Resolved per-execution, and the two runtimes differ. **Temporal** (`prepare_agent_payload`, `services/temporal/agent_activities.py`) applies tiers 1-3 below and falls back to a hardcoded 200 if `Settings` cannot instantiate; it never reads `llm_defaults.json`. **In-process** (`execute_agent` / `execute_chat_agent` in `services/ai.py`) applies tiers 2-4 through `get_model_registry().get_agent_defaults()`, where the env value wins and the JSON is the last resort; only tier 1 is unreachable there. Highest to lowest:
 
-1. **Per-agent-node** `parameters.max_iterations` — set by the user on the agent node itself.
+1. **Per-agent-node** `parameters.max_iterations` — set by the user on the agent node itself. Temporal path only; no agent plugin currently declares a `max_iterations` Params field, so this tier is reachable only from a hand-written graph.
 2. **Per-user** `UserSettings.agent_recursion_limit` — Settings tab override (DB-backed).
 3. **Env** `Settings.agent_recursion_limit` from `AGENT_RECURSION_LIMIT` (default 200).
-4. **JSON** `llm_defaults.json:agent.recursion_limit` — last-resort fallback when Settings can't load.
+4. **JSON** `llm_defaults.json:agent.recursion_limit` — in-process only, reached when `Settings` cannot instantiate; the Temporal path uses a hardcoded 200 instead.
 
 The iteration limit is the termination backstop. Compaction is a post-turn
 context-pressure control (on the Temporal path for every agent, in-process for
@@ -469,7 +469,7 @@ it; `normalize_workflow_graph` rewrites legacy `simpleMemory -> input-memory`
 edges into a Context node plus an ordinary tool edge. The legacy markdown
 memory path (`memory_data`, `parse_memory_markdown`,
 `append_to_memory_markdown`, `trim_markdown_window`, the vector store) is
-reached only for immutable V1 snapshots: `execute_agent` passes the tuple's
+reached only for `input-memory` graphs: `execute_agent` passes the tuple's
 first element as `context_data` to `_prepare_context` and sets `memory_data =
 None` whenever a Context runtime resolves (`ai.py:969-980`). Token tracking
 and compaction thresholds are in [memory_compaction.md](memory_compaction.md).
@@ -543,15 +543,12 @@ Two settings flags route agent execution through different Temporal paths (see [
 
 Both flags default to `true` in `.env.template`.
 
-New `AgentWorkflow` executions record `llm_engine="native"` and
-`message_wire_version=2` in the `agent.prepare_payload` result by default.
-Recorded histories whose prepare result predates those markers cannot run:
-`agent.execute_llm_step` refuses them with a non-retryable
-`InvalidAgentLLMEngine`, because their messages are in a retired wire format.
-Marker-bearing
-native executions never fall back after a provider request starts, and changing
-the environment does not alter an execution whose prepare result is already in
-history.
+`AgentWorkflow` executions carry messages in the single `MessageWire` shape;
+there is one engine and one wire standard, with no `llm_engine` or
+`message_wire_version` discriminator recorded (locked by
+`tests/llm/test_single_wire_standard.py`). Native executions never fall back
+after a provider request starts, and changing the environment does not alter an
+execution whose `agent.prepare_payload` result is already in history.
 
 **Team leads** (`orchestrator_agent`, `ai_employee`) run the same
 `execute_chat_agent` path as the other specialized agents but add an
@@ -656,7 +653,7 @@ Both agents resolve their prompt the same way (logic in `server/nodes/agent/_inl
    - When `not parameters.get("prompt") and input_data`, the agent reads the output of the node wired to its `input-main` / `input-chat` handle (`input_data`, surfaced by `collect_agent_connections`).
    - Extraction order: `input_data["message"]` → `input_data["text"]` → `input_data["content"]` → `str(input_data)` (whole-output fallback).
 
-**Task-context injection (Step 1)** runs before the prompt fallback: when an `input-task` edge supplies `task_data`, `format_task_context(task_data)` is prepended to the prompt and tools may be stripped (the agent is reacting to a completed delegation, not starting fresh).
+**Task-context injection (Step 1)** runs before the prompt fallback: when an `input-task` edge supplies `task_data`, `format_task_context(task_data)` is prepended to the prompt. Tools are deliberately **kept**: the injected guidance tells a lead to `list_tasks` / `accept_task` / `reassign_task`, which needs the Task Manager tool (`nodes/agent/_inline.py` module docstring). The only agent that strips tools on task completion is `rlm_agent` (`nodes/agent/rlm_agent/__init__.py`, status in `("completed", "error")`).
 
 **Example workflow:**
 ```

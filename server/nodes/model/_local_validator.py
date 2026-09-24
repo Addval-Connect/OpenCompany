@@ -1,67 +1,71 @@
-"""Local-LLM credential validator (Ollama, LM Studio).
+"""Saving a server the user runs: Ollama, LM Studio, or a named endpoint.
 
-Lives next to the chat-model plugins so all per-provider behaviour for
-the local servers stays in `nodes/model/`. Registered into
-`routers.websocket._SPECIAL_PROVIDER_VALIDATORS` from the same place
-the cloud-provider mapping is declared — same shim shape as apify and
-google_maps, the function body just lives here instead.
+One save path for every credential whose value is a base URL (RFC-0003 §6):
 
-The frontend reuses the standard ``validate_api_key`` WebSocket message
-for these providers; the ``api_key`` field carries the user's Base URL,
-not a secret. We:
+- ``ollama`` / ``lmstudio``: one server each; the kind is the provider id.
+- ``openai_compatible:<slug>``: any number of named endpoints (llama.cpp,
+  vLLM, a LiteLLM proxy, a second Ollama host, ...); the kind is detected
+  once, here, and stored.
 
-1. Save the URL under ``{provider}_proxy`` — the existing Ollama-style
-   auth-delegation key that the runtime path in ``services/ai.py``
-   already reads.
-2. Probe the user's server via the *official* SDK (``ollama`` for
-   Ollama, ``lmstudio`` for LM Studio) — list installed models and
-   their actually-loaded ``context_length``. SDK-driven introspection
-   beats hand-rolled httpx against ``/api/show`` / ``/api/v0/models``
-   because the SDK ships the typed result struct (``ShowResponse``,
-   ``LlmInstanceInfo``) and stays compatible with version drift
-   upstream.
-3. Store the placeholder api_key + discovered model list + per-model
-   ``context_length`` under the provider id. ``model_registry`` reads
-   the per-model context at runtime so a chat call never assumes a
-   bogus 32K when the user has a 4K-loaded model.
-4. Return ``valid=True`` only when at least one model was found, so a
-   misconfigured URL surfaces as a clear "no models" message instead
-   of a silent success.
+The frontend reuses the standard ``validate_api_key`` message; its
+``api_key`` field carries the Base URL, not a secret. Steps, in order:
 
-Connection failures (server down, wrong port, auth refused, timeout)
-are caught off the SDK's own exceptions and mapped to specific
-user-facing toasts — operators see "is the server running?" for
-connect-refused, "wrong path" for 404, etc. The catalogue ``stored``
-flag flips to False on every failure path via the broadcaster, so a
-failed re-probe clears the previously-green palette dot.
+1. Resolve the credential: the user's key, else the placeholder the vendor
+   documents (``auth.placeholder_key`` in llm_defaults.json).
+2. Root the URL through the OpenAI surface the runtime uses
+   (:func:`services.llm.endpoints.resolve_base_url`). This is what makes a
+   green panel mean a working runtime: the old probe talked to each server's
+   native API, so a URL missing ``/v1`` validated and then failed every run.
+3. Kind: declared, or detected from native routes by body shape.
+4. Models and per-model params, per kind. Ollama and LM Studio keep their
+   official SDK probes, which report the context each loaded model actually
+   runs with; llama.cpp reports ``n_ctx`` on ``/props``; anything else is
+   sized from vLLM's ``max_model_len``, then the LiteLLM table.
+5. Persist ``{ref}_proxy`` (the resolved URL) and ``{ref}`` (key, models,
+   params), register the models, broadcast.
+
+A failure at any step writes nothing and broadcasts nothing (D5): a typo in
+a re-Fetch must not take down a configuration that works.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, Dict, List, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import lmstudio
 import ollama
 from core.logging import get_logger
+from services.llm.config import resolve_credential
+from services.llm.endpoints import SERVER_META_KEY, base_url_key, redact_url, resolve_base_url
 from services.plugin.deps import get_auth_service
 from services.status_broadcaster import get_status_broadcaster
 
 logger = get_logger(__name__)
 
+_DISPLAY_NAMES = {"ollama": "Ollama", "lmstudio": "LM Studio"}
 
-def _classify_http_error(provider: str, base_url: str, exc: BaseException) -> Tuple[str, str]:
-    """Map an httpx / generic exception to (log_summary, user_message).
+# A save runs inside one WS request, so every step after rooting is bounded
+# (the frontend waits CREDENTIAL_PROBE_REQUEST_TIMEOUT). Native routes are
+# only asked once the host is known to answer, so a short timeout is enough;
+# the three are asked at once, so a slow host costs one timeout, not three.
+_NATIVE_TIMEOUT_SECONDS = 3.0
+# The Ollama and LM Studio SDK probes. Ollama's client times out on its own;
+# LM Studio's takes no timeout, so the bound is applied around both.
+_SDK_PROBE_TIMEOUT_SECONDS = 10.0
+
+
+def _classify_http_error(display: str, base_url: str, exc: BaseException) -> Tuple[str, str]:
+    """Map a native-probe exception to (log_summary, user_message).
 
     Both SDKs (ollama-python, lmstudio) raise httpx errors underneath.
-    Mapping these directly gives clean operator logs ("connect-refused"
-    vs "404 vs "timeout") + actionable user toasts without depending
-    on the openai SDK exception hierarchy.
+    Rooting has already succeeded by the time a native probe runs, so a
+    failure here is about the native API, not the base URL.
     """
-    display = "LM Studio" if provider == "lmstudio" else provider.capitalize()
-
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
         return ("timeout", f"Request to {base_url} timed out — server may be overloaded or unreachable")
 
     if isinstance(exc, httpx.ConnectError):
@@ -72,12 +76,7 @@ def _classify_http_error(provider: str, base_url: str, exc: BaseException) -> Tu
         if status in (401, 403):
             return (f"HTTP {status}", f"{display} rejected the request — server requires auth.")
         if status == 404:
-            url = base_url.rstrip("/")
-            if url.endswith("/v1"):
-                hint = f"the {display} server is reachable but expected endpoints aren't exposed — check the server version."
-            else:
-                hint = f"the URL likely needs to end with `/v1` (e.g. {url}/v1)."
-            return (f"HTTP {status}", f"{display} returned 404 — {hint}")
+            return (f"HTTP {status}", f"{display} returned 404 for its model list — check the server version.")
         if status == 429:
             return (f"HTTP {status}", f"{display} rate-limited the request — try again shortly.")
         return (f"HTTP {status}", f"{display} returned HTTP {status} — check the server logs.")
@@ -90,29 +89,10 @@ def _classify_http_error(provider: str, base_url: str, exc: BaseException) -> Tu
     return (type(exc).__name__, f"Could not reach {display}: {exc}")
 
 
-async def _fail(
-    provider: str,
-    message: str,
-    *,
-    has_key: bool = False,
-) -> Dict[str, Any]:
-    """Common rejection path: broadcast invalid status + return envelope.
-
-    `has_key=True` is used after the URL has been persisted so the
-    palette doesn't go straight to the "unconfigured" gray dot — the
-    user's URL is on file, it just can't reach a working server right
-    now. `has_key=False` is used when we abort before persisting (only
-    the "Base URL required" early-exit today).
-    """
-    await get_status_broadcaster().update_api_key_status(
-        provider=provider,
-        valid=False,
-        message=message,
-        has_key=has_key,
-        models=[],
-    )
+def _failure(provider_ref: str, message: str) -> Dict[str, Any]:
+    """Rejection envelope. Deliberately no broadcast: nothing changed (D5)."""
     return {
-        "provider": provider,
+        "provider": provider_ref,
         "success": True,
         "valid": False,
         "message": message,
@@ -121,12 +101,26 @@ async def _fail(
     }
 
 
+def _store_failed(display: str) -> str:
+    return f"Could not save {display}: the credential store did not accept the write. See the server log."
+
+
+async def _restore_url_row(auth_service: Any, url_key: str, previous: Optional[str]) -> None:
+    """Undo the URL-row write of a save whose key-row write failed (D5)."""
+    if previous:
+        restored = await auth_service.store_api_key(provider=url_key, api_key=previous, models=[])
+    else:
+        restored = await auth_service.remove_api_key(url_key)
+    if not restored:
+        logger.error("LLM server save could not restore its URL row", provider=url_key)
+
+
 def _strip_v1_path(base_url: str) -> str:
     """Return ``base_url`` with a trailing ``/v1`` segment stripped.
 
-    The user's stored URL is the OpenAI-compatible base
-    (``http://host:port/v1``). Both Ollama's REST API and LM Studio's
-    SDK want the host:port without the OpenAI-compat suffix.
+    The stored URL is the OpenAI-compatible base (``http://host:port/v1``).
+    Native APIs (Ollama's REST API, LM Studio's SDK, llama.cpp's ``/props``)
+    live beside it, at the host without the OpenAI-compat suffix.
     """
     u = base_url.rstrip("/")
     if u.endswith("/v1"):
@@ -151,8 +145,8 @@ async def _fetch_ollama_models(base_url: str) -> List[Dict[str, Any]]:
 
     If the user has models *pulled* but none currently loaded, ``ps()``
     returns an empty list — same semantics as LM Studio's
-    ``list_loaded()``. The validator surfaces this as the "load a model
-    and click Fetch again" message, which is already accurate.
+    ``list_loaded()``. The save surfaces this as the "load a model and
+    click Fetch again" message, which is accurate.
     """
     host = _strip_v1_path(base_url)
     client = ollama.AsyncClient(host=host, timeout=10.0)
@@ -195,8 +189,8 @@ async def _fetch_lmstudio_models(base_url: str) -> List[Dict[str, Any]]:
     ``params_string``); no string parsing.
 
     LM Studio's SDK takes ``api_host`` as ``host:port`` (no scheme, no
-    path), so the user's stored ``http://host:port/v1`` is stripped
-    before construction.
+    path), so the stored ``http://host:port/v1`` is stripped before
+    construction.
     """
     host = _strip_v1_path(base_url)
     api_host = host.split("://", 1)[-1]
@@ -233,117 +227,240 @@ async def _fetch_lmstudio_models(base_url: str) -> List[Dict[str, Any]]:
     return out
 
 
-async def _fetch_local_models(provider: str, base_url: str) -> List[Dict[str, Any]]:
-    """Dispatch to the per-provider SDK probe."""
-    if provider == "ollama":
-        return await _fetch_ollama_models(base_url)
-    if provider == "lmstudio":
-        return await _fetch_lmstudio_models(base_url)
-    raise ValueError(f"Unsupported local provider: {provider}")
+async def _get_json(client: httpx.AsyncClient, url: str) -> Any:
+    """GET ``url`` and return its JSON body, or ``None`` on any failure."""
+    try:
+        response = await client.get(url)
+        if response.status_code // 100 != 2:
+            return None
+        return response.json()
+    except Exception:  # noqa: BLE001 — a missing route just means "not this kind"
+        return None
 
 
-async def validate_local_llm(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Validator for ollama / lmstudio. Returns the standard response envelope.
+async def _detect_kind(base_url: str, api_key: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Which server answers at ``base_url``, from its native routes.
 
-    Called from :meth:`nodes.model._credentials._LocalLLM.validate` (the
-    ``Credential.validate`` hook ``handle_validate_api_key`` dispatches
-    to). All side effects (URL persistence, status broadcasts, model
-    registry registration) go through the ``StatusBroadcaster`` /
-    ``AuthService`` singletons — no per-request WebSocket reference is
-    needed.
+    Each route is accepted only by body shape, never by status: LM Studio
+    answers HTTP 200 to routes it does not serve. The three routes are asked
+    at once; llama.cpp wins when several answer, because its server also
+    mimics some Ollama routes. Returns the kind and, for llama.cpp, the
+    ``/props`` body (it carries ``n_ctx``).
     """
-    provider = data["provider"].lower()
-    base_url = data.get("api_key", "").strip()
-    session_id = data.get("session_id", "default")
+    host = _strip_v1_path(base_url)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    async with httpx.AsyncClient(timeout=_NATIVE_TIMEOUT_SECONDS, headers=headers) as client:
+        props, lmstudio_models, ollama_version = await asyncio.gather(
+            _get_json(client, f"{host}/props"),
+            _get_json(client, f"{host}/api/v1/models"),
+            _get_json(client, f"{host}/api/version"),
+        )
+    if isinstance(props, dict) and isinstance(props.get("default_generation_settings"), dict):
+        return "llamacpp", props
+    if isinstance(lmstudio_models, dict) and isinstance(lmstudio_models.get("models"), list):
+        return "lmstudio", None
+    if isinstance(ollama_version, dict) and isinstance(ollama_version.get("version"), str):
+        return "ollama", None
+    return "generic", None
 
-    if not base_url:
-        return {"success": False, "valid": False, "error": "Base URL required"}
 
-    auth_service = get_auth_service()
+def _positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = int(value)
+    return number if number > 0 else None
 
-    # Persist the URL first so the runtime path (services/ai.py) can
-    # read it via the existing {provider}_proxy lookup even before the
-    # probe succeeds. The URL stays persisted on probe failure so the
-    # user can re-click "Fetch" without re-entering it; the failure
-    # branch broadcasts has_key=True so the palette dot reflects "URL
-    # on file but currently unreachable" rather than "unconfigured".
-    await auth_service.store_api_key(
-        provider=f"{provider}_proxy",
-        api_key=base_url,
-        models=[],
-        session_id=session_id,
-    )
+
+def _generic_params(entry: Any) -> Dict[str, Any]:
+    """Size and price one model on a server that does not describe it.
+
+    The server's own figure wins: vLLM reports ``max_model_len`` on its
+    ``/models`` entries, and that is the context it enforces. Otherwise the
+    LiteLLM table, by model id. Otherwise nothing, and the declared
+    ``openai_compatible`` defaults apply at run time.
+    """
+    from services.model_registry import get_model_registry
+
+    params: Dict[str, Any] = {}
+    extra = getattr(entry, "model_extra", None) or {}
+    context = _positive_int(extra.get("max_model_len"))
+    if context:
+        params["context_length"] = context
+
+    spec = get_model_registry().lookup_litellm(getattr(entry, "id", "") or "")
+    if spec:
+        params.setdefault("context_length", _positive_int(spec.get("max_input_tokens")))
+        max_out = _positive_int(spec.get("max_output_tokens"))
+        # An output budget as large as the window leaves no room for the
+        # prompt; drop it and let the registry derive one from the context.
+        if max_out and (not params.get("context_length") or max_out < params["context_length"]):
+            params["max_output_tokens"] = max_out
+        for field, key in (("input_cost_per_token", "input_price_per_mtok"), ("output_cost_per_token", "output_price_per_mtok")):
+            cost = spec.get(field)
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                params[key] = round(float(cost) * 1_000_000, 4)
+    return {key: value for key, value in params.items() if value is not None}
+
+
+async def _describe_models(
+    kind: str,
+    base_url: str,
+    entries: List[Any],
+    props: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """``{model_id: params}`` for the server, per kind (RFC-0003 D15).
+
+    Local kinds never take LiteLLM figures: the bound that matters is the
+    context the server was started with, not the model's trained maximum,
+    and a local run costs nothing.
+    """
+    if kind in ("ollama", "lmstudio"):
+        fetch = _fetch_ollama_models if kind == "ollama" else _fetch_lmstudio_models
+        loaded = await asyncio.wait_for(fetch(base_url), _SDK_PROBE_TIMEOUT_SECONDS)
+        return {e["id"]: {k: v for k, v in e.items() if k != "id"} for e in loaded}
+
+    ids = [entry for entry in entries if isinstance(getattr(entry, "id", None), str) and entry.id]
+    if kind == "llamacpp":
+        settings = (props or {}).get("default_generation_settings") or {}
+        n_ctx = _positive_int(settings.get("n_ctx"))
+        return {entry.id: ({"context_length": n_ctx} if n_ctx else {}) for entry in ids}
+
+    from services.model_registry import get_model_registry
+
+    await get_model_registry().ensure_litellm_table()
+    return {entry.id: _generic_params(entry) for entry in ids}
+
+
+def _no_models_message(kind: str, display: str, base_url: str) -> str:
+    if kind in ("ollama", "lmstudio"):
+        return (
+            f"Connected to {display} at {redact_url(base_url)}, but no models are loaded. "
+            f"Load a model in {display} and click Fetch again."
+        )
+    return f"{display} at {redact_url(base_url)} lists no models."
+
+
+async def save_llm_server(
+    provider_ref: str,
+    candidate_url: str,
+    user_key: Optional[str],
+    *,
+    display: str,
+    kind: Optional[str] = None,
+    label: str = "",
+) -> Dict[str, Any]:
+    """Root, describe and persist one server. Returns the WS envelope.
+
+    ``kind`` is passed for providers that declare it (ollama, lmstudio) and
+    left ``None`` for named endpoints, which are detected once here.
+    """
+    try:
+        api_key = resolve_credential(provider_ref, user_key)
+    except ValueError:
+        return _failure(provider_ref, f"No API key is available for {display}.")
+
+    resolved = await resolve_base_url(candidate_url, api_key=api_key)
+    if not resolved.ok:
+        logger.warning("LLM server save failed", provider=provider_ref, reason=resolved.reason)
+        return _failure(provider_ref, resolved.reason)
+    base_url = resolved.base_url
+
+    props: Optional[Dict[str, Any]] = None
+    if kind is None:
+        kind, props = await _detect_kind(base_url, api_key)
 
     try:
-        entries = await _fetch_local_models(provider, base_url)
-    except (httpx.HTTPError, lmstudio.LMStudioError) as e:
-        log_summary, user_msg = _classify_http_error(provider, base_url, e)
-        logger.warning("[%s] model probe failed (%s) at %s", provider, log_summary, base_url)
-        return await _fail(provider, user_msg, has_key=True)
-    except Exception as e:
-        log_summary, user_msg = _classify_http_error(provider, base_url, e)
-        logger.warning("[%s] model probe unexpected error (%s) at %s: %s", provider, log_summary, base_url, e)
-        return await _fail(provider, user_msg, has_key=True)
+        model_params = await _describe_models(kind, base_url, resolved.models, props)
+    except Exception as exc:  # noqa: BLE001 — SDK and httpx failures, classified below
+        log_summary, message = _classify_http_error(display, redact_url(base_url), exc)
+        logger.warning("LLM server model probe failed", provider=provider_ref, error=log_summary, url=redact_url(base_url))
+        return _failure(provider_ref, message)
 
-    if not entries:
-        # Server reachable, responded with empty model list. Different
-        # failure mode from the connect-error branches above — keep the
-        # original "load a model" hint here since it's now accurate.
-        display = "LM Studio" if provider == "lmstudio" else provider.capitalize()
-        message = f"Connected to {display} at {base_url}, but no models are loaded. Load a model in {display} and click Fetch again."
-        logger.info("[%s] reachable at %s but returned 0 models", provider, base_url)
-        return await _fail(provider, message, has_key=True)
+    if not model_params:
+        logger.info("LLM server reachable but lists no models", provider=provider_ref, url=redact_url(base_url))
+        return _failure(provider_ref, _no_models_message(kind, display, base_url))
 
-    # Pivot the SDK-probed entries into the storage shape: a parallel
-    # ``models`` list (for the legacy readers) plus a ``model_params``
-    # dict carrying every typed field the SDK exposed
-    # (``context_length``, ``vision``, ``supports_tools``,
-    # ``architecture``, ``param_size``, ``quantization``,
-    # ``max_context_length``). ``model_registry.register_local_model``
-    # consumes these directly to populate ``ModelInfo``.
-    models = [e["id"] for e in entries]
-    model_params: Dict[str, Dict[str, Any]] = {
-        e["id"]: {k: v for k, v in e.items() if k != "id"} for e in entries if any(k != "id" for k in e)
+    models = list(model_params)
+    # Only the redacted form is stored here: this JSON column is not
+    # encrypted, and a URL can carry userinfo. The full URL lives in the
+    # encrypted ``{ref}_proxy`` row.
+    server_meta = {
+        "label": label or display,
+        "base_url": redact_url(base_url),
+        "kind": kind,
+        "probed_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Store placeholder api_key + the real model list + per-model params.
-    # The placeholder ("ollama") is the documented value the OpenAI-style
-    # auth-delegation path expects when no real key is needed; it never
-    # leaves the process because the runtime SDK rewrites it when
-    # proxy_url is set.
-    await auth_service.store_api_key(
-        provider=provider,
-        api_key="ollama",
+    auth_service = get_auth_service()
+    url_key = base_url_key(provider_ref)
+    previous_url = await auth_service.get_api_key(url_key)
+    # The URL row first: a key row with no URL row is exactly what the
+    # runtime reports as "not configured". store_api_key reports a failed
+    # write by returning False; a save it rejected is not a save.
+    if not await auth_service.store_api_key(provider=url_key, api_key=base_url, models=[]):
+        return _failure(provider_ref, _store_failed(display))
+    if not await auth_service.store_api_key(
+        provider=provider_ref,
+        api_key=api_key,
         models=models,
-        session_id=session_id,
-        model_params=model_params,
-    )
+        model_params={**model_params, SERVER_META_KEY: server_meta},
+    ):
+        await _restore_url_row(auth_service, url_key, previous_url)
+        return _failure(provider_ref, _store_failed(display))
 
-    # Register each model in the in-memory model registry so the sync
-    # ``get_context_length`` / ``get_max_output_tokens`` lookups pick up
-    # the real loaded n_ctx without re-querying the DB on every chat
-    # call. Also keeps the runtime path branchless — local and cloud
-    # models share the same ``provider/model_id`` registry key.
+    # Keep the sync ``get_context_length`` / ``get_max_output_tokens``
+    # lookups on the real per-model values without a DB read per call.
     from services.model_registry import get_model_registry
 
     registry = get_model_registry()
+    registry.forget_local_models(provider_ref)
     for mid, params in model_params.items():
-        registry.register_local_model(provider, mid, params)
+        if params:
+            registry.register_local_model(provider_ref, mid, params)
 
+    message = f"{len(models)} model(s) at {redact_url(base_url)}"
     await get_status_broadcaster().update_api_key_status(
-        provider=provider,
+        provider=provider_ref,
         valid=True,
-        message=f"{len(models)} model(s) discovered at {base_url}",
+        message=message,
         has_key=True,
         models=models,
     )
-    ctx_summary = ", ".join(f"{mid}={p['context_length']}" for mid, p in model_params.items()) or "no per-model context info"
-    logger.info("[%s] discovered %d model(s) at %s (%s)", provider, len(models), base_url, ctx_summary)
+    ctx_summary = ", ".join(f"{mid}={p['context_length']}" for mid, p in model_params.items() if p.get("context_length"))
+    logger.info(
+        "LLM server saved",
+        provider=provider_ref,
+        kind=kind,
+        url=redact_url(base_url),
+        rewritten=resolved.rewritten,
+        models=len(models),
+        context=ctx_summary or "server did not report one",
+    )
     return {
-        "provider": provider,
+        "provider": provider_ref,
         "success": True,
         "valid": True,
         "models": models,
-        "message": f"Connected to {provider} at {base_url}",
+        "message": message,
+        "base_url": redact_url(base_url),
+        "kind": kind,
         "timestamp": time.time(),
     }
+
+
+async def validate_local_llm(data: Dict[str, Any]) -> Dict[str, Any]:
+    """``validate_api_key`` for ollama / lmstudio: one server, kind declared.
+
+    Called from :meth:`nodes.model._credentials._LocalLLM.validate`.
+    """
+    provider = data["provider"].lower()
+    base_url = (data.get("api_key") or "").strip()
+    if not base_url:
+        return {"success": False, "valid": False, "error": "Base URL required"}
+    return await save_llm_server(
+        provider,
+        base_url,
+        None,
+        display=_DISPLAY_NAMES.get(provider, provider),
+        kind=provider,
+    )
