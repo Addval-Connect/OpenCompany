@@ -17,7 +17,9 @@ import { useCredentialPanel } from '../useCredentialPanel';
 import { ProviderDefaultsSection, LlmUsageSection, ApiUsageSection } from '../sections';
 import { NodeIcon } from '../../../assets/icons';
 import { theme } from '../../../styles/theme';
+import type { ServerEndpointSummary } from '@/hooks/useCatalogueQuery';
 import type { ProviderConfig } from '../types';
+import EndpointList from './EndpointList';
 
 const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ config, visible }) => {
   const panel = useCredentialPanel(config, visible);
@@ -33,9 +35,40 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
   // Reactive — when the query resolves the input re-renders. No
   // separate useState/useEffect mirror.
   const inputValue = field ? (panel.values[field.key] ?? '') : '';
-  // ``validated`` mirrors panel.stored (real server state). Pre-filled
-  // catalogue defaults do NOT flip it to true.
-  const validated = panel.stored;
+  // A provider that holds several rows (named OpenAI-compatible endpoints)
+  // gets them from the catalogue, and its fields become a form adding one.
+  const endpoints = config.endpoints;
+  // ``validated`` mirrors real server state: panel.stored, or for a
+  // several-row provider the catalogue's own flag. Pre-filled catalogue
+  // defaults do NOT flip it to true.
+  const validated = endpoints ? Boolean(config.stored) : panel.stored;
+  const busy = panel.loading !== null;
+
+  // Every field goes out under its catalogue key; the backend Credential
+  // decides what each means. A rejected save carries its reason in
+  // `message`, which the generic executor does not surface on its own.
+  const addEndpoint = async () => {
+    const res = await panel.actions.sendWs('validate_api_key', {
+      provider: config.id,
+      api_key: inputValue.trim(),
+      ...Object.fromEntries(secondaryFields.map((sf) => [sf.key, String(panel.values[sf.key] ?? '').trim()])),
+    });
+    if (res?.valid) {
+      for (const f of config.fields ?? []) panel.form.setFieldValue(f.key, '');
+    } else if (res?.message) {
+      panel.setError(res.message);
+    }
+  };
+  const refreshEndpoint = async (endpoint: ServerEndpointSummary) => {
+    const res = await panel.actions.sendWs('validate_api_key', {
+      provider: config.id,
+      api_key: endpoint.base_url || endpoint.ref,
+      ref: endpoint.ref,
+    });
+    if (res && !res.valid && res.message) panel.setError(res.message);
+  };
+  const removeEndpoint = (endpoint: ServerEndpointSummary) =>
+    panel.actions.sendWs('delete_api_key', { provider: endpoint.ref });
 
   return (
     <div className="flex flex-col gap-5 p-5">
@@ -70,7 +103,10 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
           )}
         </CardHeader>
         <CardContent>
-          {field && (
+          {endpoints && config.instructions && (
+            <p className="text-xs text-muted-foreground">{config.instructions}</p>
+          )}
+          {field && !endpoints && (
             <ApiKeyInput
               value={inputValue}
               onChange={(v) => panel.form.setFieldValue(field.key, v)}
@@ -100,7 +136,7 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
               savedLabel={field.key === 'apiKey' ? 'Valid' : 'Connected'}
             />
           )}
-          {field?.help && (
+          {field?.help && !endpoints && (
             <p className="mt-2 text-xs text-muted-foreground">{field.help}</p>
           )}
         </CardContent>
@@ -117,7 +153,7 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
           path because these are operator metadata, not credentials
           to probe upstream. Save writes via the same auth_service
           path the primary uses (panel.actions.save). */}
-      {secondaryFields.map((sf) => (
+      {(endpoints ? config.fields ?? [] : secondaryFields).map((sf) => (
         <SecondaryFieldRow
           key={sf.key}
           fieldKey={sf.key}
@@ -127,10 +163,21 @@ const ApiKeyPanel: React.FC<{ config: ProviderConfig; visible: boolean }> = ({ c
           secret={sf.secret}
           value={panel.values[sf.key] ?? ''}
           onChange={(v) => panel.form.setFieldValue(sf.key, v)}
-          onSave={() => panel.actions.save(sf.key, panel.values[sf.key] ?? '')}
+          onSave={endpoints ? undefined : () => panel.actions.save(sf.key, panel.values[sf.key] ?? '')}
           loading={panel.loading === 'save'}
         />
       ))}
+
+      {endpoints && (
+        <>
+          <div className="flex justify-end">
+            <ActionButton intent="save" onClick={addEndpoint} disabled={busy || !inputValue.trim()}>
+              Add endpoint
+            </ActionButton>
+          </div>
+          <EndpointList endpoints={endpoints} busy={busy} onRefresh={refreshEndpoint} onRemove={removeEndpoint} />
+        </>
+      )}
 
       {config.hasDefaults && <ProviderDefaultsSection providerId={config.id} />}
       {config.hasDefaults && <LlmUsageSection providerId={config.id} providerName={config.name} />}
@@ -147,7 +194,8 @@ interface SecondaryFieldRowProps {
   secret?: boolean;
   value: string;
   onChange: (v: string) => void;
-  onSave: () => void;
+  /** Absent for a field of an add-row form, which is submitted as a whole. */
+  onSave?: () => void;
   loading: boolean;
 }
 
@@ -172,13 +220,15 @@ const SecondaryFieldRow: React.FC<SecondaryFieldRowProps> = ({
           placeholder={placeholder}
           className="flex-1"
         />
-        <ActionButton
-          intent="save"
-          onClick={onSave}
-          disabled={loading}
-        >
-          Save
-        </ActionButton>
+        {onSave && (
+          <ActionButton
+            intent="save"
+            onClick={onSave}
+            disabled={loading}
+          >
+            Save
+          </ActionButton>
+        )}
       </div>
       {help && (
         <p className="text-xs text-muted-foreground">{help}</p>

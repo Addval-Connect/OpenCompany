@@ -91,6 +91,17 @@ export interface ServerQrDef {
   scan_text: string;
 }
 
+/** One saved row of a provider that holds several (named OpenAI-compatible
+ *  endpoints). `ref` is the provider reference agents select; `base_url`
+ *  is already redacted server-side. */
+export interface ServerEndpointSummary {
+  ref: string;
+  label: string;
+  base_url: string;
+  kind: string;
+  model_count: number;
+}
+
 /** One entry as it appears in the `providers` array of the catalogue response. */
 export interface ServerProviderConfig {
   id: string;
@@ -118,6 +129,8 @@ export interface ServerProviderConfig {
   stored?: boolean;
   /** Connected account identifier (email or display name) for OAuth providers. */
   account_label?: string | null;
+  /** Saved rows, for a provider that holds several (server-resolved). */
+  endpoints?: ServerEndpointSummary[];
 }
 
 export interface CatalogueResponse {

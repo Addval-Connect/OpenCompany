@@ -5,6 +5,7 @@
  */
 
 import type { ActionButtonIntent } from '@/components/ui/action-button';
+import type { ServerEndpointSummary } from '@/hooks/useCatalogueQuery';
 export type { ActionButtonIntent };
 
 // ============================================================================
@@ -127,6 +128,10 @@ export interface ProviderConfig {
   stored?: boolean;
   /** Connected account identifier (email or display name) for OAuth providers. */
   account_label?: string | null;
+  /** Saved rows of a provider that holds several (named OpenAI-compatible
+   *  endpoints). Present only for such providers; the panel then adds rows
+   *  instead of storing one value. */
+  endpoints?: ServerEndpointSummary[];
 }
 
 // ============================================================================
