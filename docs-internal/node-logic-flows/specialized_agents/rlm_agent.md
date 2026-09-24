@@ -31,7 +31,7 @@ params; REPL iteration bounding lives inside `RLMService` /
 | Name | Type | Default | Required | displayOptions.show | Description |
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | no | - | Reasoning task; falls back to upstream input |
-| `provider` | enum | `openai` | no | - | Big-LM provider |
+| `provider` | string (`ProviderRef`) | `openai` | no | - | Big-LM provider. RLM builds its own clients and ignores user base URLs, so only `openai`, `anthropic`, `gemini`, `groq`, `openrouter` and `cerebras` run; any other provider, including Ollama, LM Studio and named endpoints, is refused at run time |
 | `model` | string | `""` | no | - | Big-LM model ID |
 | `system_message` | string\|null | `"You are a helpful assistant"` | no | - | System instructions |
 | `temperature` | float\|null | `None` | no | group `options` | 0.0-2.0 |
@@ -93,7 +93,9 @@ flowchart TD
 ## External Dependencies
 
 - **Credentials**: `auth_service.get_api_key(<provider>)` for big LM, and
-  optionally the small-LM provider wired as a connected chat-model node.
+  optionally the small-LM provider wired as a connected chat-model node. That
+  node's provider comes from its type (or its `endpoint`), and one RLM cannot
+  route (Ollama, LM Studio, a named endpoint) is refused like the agent's own.
 - **Services**: `RLMService`, `StatusBroadcaster`, `PricingService`.
 - **Python packages**: the `rlm` package plus the native OpenCompany LLM
   configuration and tool-bridge helpers.

@@ -315,6 +315,9 @@ class LLMErrorCategory(str, Enum):
     TIMEOUT = "timeout"
     CONNECTION = "connection"
     SERVER = "server"
+    # A 2xx whose body is not a completion: the request reached something
+    # that does not speak this wire format at that path (RFC-0003 D9).
+    PROTOCOL = "protocol"
     UNKNOWN = "unknown"
 
 
@@ -331,6 +334,11 @@ class LLMError(Exception):
     request_id: Optional[str] = None
     retry_after: Optional[float] = None
     retry_after_raw: Optional[str] = None
+    # Set by the raiser when the category text alone cannot say what the
+    # user must change (e.g. which URL answered with a non-completion).
+    # Must already be safe for public surfaces: no credential, no query
+    # string, no userinfo.
+    public_message: Optional[str] = None
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.message)
@@ -344,6 +352,9 @@ class LLMError(Exception):
         request payload fragments, internal endpoint URLs, or credential
         details, so execution boundaries must expose this property instead.
         """
+
+        if self.public_message:
+            return self.public_message
 
         provider_names = {
             "anthropic": "Anthropic",
@@ -360,15 +371,23 @@ class LLMError(Exception):
             "ollama": "Ollama",
             "lmstudio": "LM Studio",
         }
-        provider_key = str(self.provider or "").strip().lower()
-        provider = provider_names.get(
-            provider_key, "The language model provider"
-        )
-        provider_object = (
-            provider
-            if provider_key in provider_names
-            else "the language model provider"
-        )
+        # Common nouns take an article, so they read "The <noun>" as a
+        # subject and "the <noun>" as an object. A name also works as an
+        # adjective ("the configured OpenAI model"); a noun with its article
+        # does not, so the two model-scoped messages are phrased around it.
+        generic_nouns = {"openai_compatible": "OpenAI-compatible endpoint"}
+        # A named endpoint's reference is "openai_compatible:<slug>".
+        provider_key = str(self.provider or "").strip().lower().partition(":")[0]
+        if provider_key in provider_names:
+            provider = provider_object = provider_names[provider_key]
+            not_found = f"The configured {provider} model or endpoint was not found."
+            context_length = f"The request exceeds the {provider} model context window."
+        else:
+            noun = generic_nouns.get(provider_key, "language model provider")
+            provider = f"The {noun}"
+            provider_object = f"the {noun}"
+            not_found = f"{provider} did not find the configured model."
+            context_length = f"The request exceeds the context window of the model at {provider_object}."
         category = (
             self.category.value
             if isinstance(self.category, LLMErrorCategory)
@@ -390,14 +409,8 @@ class LLMError(Exception):
             LLMErrorCategory.INVALID_REQUEST.value: (
                 f"{provider} rejected the model request configuration."
             ),
-            LLMErrorCategory.NOT_FOUND.value: (
-                f"The configured {provider_object} model or endpoint "
-                "was not found."
-            ),
-            LLMErrorCategory.CONTEXT_LENGTH.value: (
-                f"The request exceeds the {provider_object} model "
-                "context window."
-            ),
+            LLMErrorCategory.NOT_FOUND.value: not_found,
+            LLMErrorCategory.CONTEXT_LENGTH.value: context_length,
             LLMErrorCategory.TIMEOUT.value: (
                 f"The request to {provider_object} timed out."
             ),
@@ -406,6 +419,10 @@ class LLMError(Exception):
             ),
             LLMErrorCategory.SERVER.value: (
                 f"{provider} is temporarily unavailable."
+            ),
+            LLMErrorCategory.PROTOCOL.value: (
+                f"{provider} answered without a completion. "
+                "Check the configured base URL."
             ),
             LLMErrorCategory.UNKNOWN.value: (
                 f"{provider} request failed."

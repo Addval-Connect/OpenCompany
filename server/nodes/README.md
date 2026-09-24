@@ -112,7 +112,8 @@ Match the palette group. Current folders (see
 agent/       — AI agents (ai_agent, chat_agent + specialized/variant folders incl. 2 team leads,
                CLI agents (claude_code, codex, rlm) and Vertex agents; SSOT: AI_AGENT_TYPES
                in server/constants.py + the folder glob)
-model/       — LLM chat models (openai, anthropic, gemini, …)
+model/       — LLM chat models (openai, anthropic, gemini, …, and openai_compatible for
+               a user-named endpoint); also owns the LLM provider dropdown loaders
 android/     — Android device services
 google/      — Google Workspace (gmail / calendar / drive / sheets / …)
 twitter/     — Twitter/X (send / search / user / receive)
@@ -172,7 +173,7 @@ these first before writing new code:
 |---|---|---|
 | `agent/` | `_inline.prepare_agent_call` | One-shot pre-dispatch for every agent (memory + skill + tool + teammate collection) |
 | `agent/` | `_specialized.SpecializedAgentBase` | Base for 13 specialized agents |
-| `model/` | `_base.ChatModelBase` | 12 chat models inherit → same `@Operation("chat")` body that calls `ai_service.execute_chat` |
+| `model/` | `_base.ChatModelBase` | 13 chat models inherit → same `@Operation("chat")` body that calls `ai_service.execute_chat` |
 | `speech/` + `translate/` | `_config` / `_registry` / `_unifier` / `_providers/` | The multi-vendor shape. Capability data is JSON (`services/plugin/capabilities.CapabilityConfig`), registration is `services/provider_registry`, and each `_providers/<vendor>.py` owns that vendor's auth scheme, request transport and response shape |
 | `android/` | `_base.AndroidServiceBase` | 16 Android services inherit; payload translation + `SERVICE_ID_MAP` lives on this base |
 | `android/` | `_base.execute_android_service_tool` | AI-tool dispatcher — called from `services/handlers/tools.py` for direct service tools (the `androidTool` aggregator + `execute_android_toolkit` were retired) |
@@ -215,7 +216,7 @@ from ._credentials import TwitterCredential              # shared with 3 sibling
 | `nodes/telegram/` | `TelegramCredential` (bot token + owner chat id) | telegram_send / _receive |
 | `nodes/discord/` | `DiscordBotCredential` (bot token; overrides `inject()` because Discord uses `Bot <token>`, not the inherited `Bearer `) + `DiscordUserCredential` (OAuth2 user context, separate id so connecting a user never overwrites the bot) | discord_send / _action / _receive / _interaction |
 | `nodes/scraper/` | `ApifyCredential` (Bearer, SDK probe) + `TikHubCredential` (Bearer, declarative httpx probe against `tikhub/user/get_user_info` — kept SDK-free so the modal validates even if the `tikhub` import fails) | apify_actor / tikhub_action |
-| `nodes/model/` | 13 LLM credential classes: 11 cloud (`OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / xAI / Sarvam`) plus Ollama / LM Studio | 12 chat models (xAI has no standalone chat-model node) **plus the 5 `nodes/sarvam/` service nodes**, which import `SarvamCredential` from here — one stored key serves Sarvam's OpenAI-compatible chat endpoint *and* its `api-subscription-key` REST APIs |
+| `nodes/model/` | 14 LLM credential classes: 11 cloud (`OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / xAI / Sarvam`), Ollama / LM Studio, and `OpenAICompatibleCredential` (any number of named endpoints, RFC-0003) | 13 chat models (xAI has no standalone chat-model node) **plus the `nodes/speech/` and `nodes/translate/` Sarvam providers**, which import `SarvamCredential` from here — one stored key serves Sarvam's OpenAI-compatible chat endpoint *and* its `api-subscription-key` REST APIs |
 | `nodes/search/` | `BraveSearch / Serper / Perplexity` inlined in each plugin file | single-use per plugin |
 
 Declare inline only when genuinely single-use (see

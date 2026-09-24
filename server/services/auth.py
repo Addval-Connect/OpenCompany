@@ -234,6 +234,25 @@ class AuthService:
             logger.error("Failed to list key scopes", provider=provider, error=str(e))
             return []
 
+    async def list_api_key_providers(self, session_id: str = "default") -> List[str]:
+        """List every provider name holding a key in one session.
+
+        The other axis of :meth:`list_key_scopes`. Reads the database, not
+        the lazily populated cache. Used to enumerate named OpenAI-compatible
+        endpoints, whose provider names are ``openai_compatible:<slug>``.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Provider names, empty on failure
+        """
+        try:
+            return await self.credentials_db.list_api_keys(session_id)
+        except Exception as e:
+            logger.error("Failed to list API key providers", session_id=session_id, error=str(e))
+            return []
+
     async def get_stored_models(self, provider: str, session_id: str = "default") -> List[str]:
         """Get stored models for provider.
 

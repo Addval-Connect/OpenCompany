@@ -97,7 +97,59 @@ PROVIDER_CONFIGS: Dict[str, ProviderConfig] = _build_provider_configs()
 
 
 def get_provider_config(provider: str) -> Optional[ProviderConfig]:
-    return PROVIDER_CONFIGS.get(provider)
+    return PROVIDER_CONFIGS.get(split_provider_ref(provider)[0])
+
+
+# ---------------------------------------------------------------------------
+# Provider references (RFC-0003 D13)
+# ---------------------------------------------------------------------------
+
+#: The provider whose instances are user-named endpoints.
+ENDPOINT_PROVIDER = "openai_compatible"
+
+
+def split_provider_ref(ref: str) -> Tuple[str, str]:
+    """Split a provider reference into ``(provider, endpoint_slug)``.
+
+    A reference is either a registered provider id (``"ollama"``) or a
+    named OpenAI-compatible endpoint (``"openai_compatible:home-vllm"``);
+    the slug is ``""`` for a plain provider. This is the only parser of
+    the format. Every lookup keyed by ``llm_defaults.json`` resolves the
+    reference through it, so an endpoint reads the ``openai_compatible``
+    block while its credential rows stay keyed by the full reference.
+    """
+    name, _, slug = (ref or "").partition(":")
+    return name, slug
+
+
+def endpoint_ref(slug: str) -> str:
+    """The provider reference of the named endpoint ``slug``."""
+    return f"{ENDPOINT_PROVIDER}:{slug}"
+
+
+def _provider_block(provider: str) -> Dict[str, Any]:
+    """The ``llm_defaults.json`` block for a provider reference."""
+    return LLM_DEFAULTS.get("providers", {}).get(split_provider_ref(provider)[0], {})
+
+
+def resolve_credential(provider: str, stored: Optional[str]) -> str:
+    """Return the key to send for ``provider``.
+
+    The stored key when there is one, else the placeholder the vendor
+    documents for keyless servers, declared as
+    ``providers.<name>.auth.placeholder_key`` (Ollama's docs: ``"ollama"``,
+    "required but ignored"). Raises ``ValueError`` when neither exists.
+
+    Never returns ``None``: the OpenAI SDK reads ``OPENAI_API_KEY`` when
+    handed ``api_key=None`` and would send the operator's OpenAI key to
+    whatever ``base_url`` is configured (RFC-0003 D7).
+    """
+    if stored:
+        return stored
+    placeholder = (_provider_block(provider).get("auth") or {}).get("placeholder_key")
+    if placeholder:
+        return placeholder
+    raise ValueError(f"no API key configured for provider {provider!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -114,14 +166,15 @@ def detect_provider_from_model(model: str) -> str:
 
 
 def is_model_valid_for_provider(model: str, provider: str) -> bool:
-    # Open-world providers — OpenRouter is a multi-vendor proxy, Ollama and
-    # LM Studio serve user-installed models, and Groq's owner-qualified model
-    # IDs (for example ``openai/gpt-oss-120b``) do not contain "groq".
-    # Treat them as provider-selected; the upstream API will return a clear
-    # 404 for a genuinely missing model.
-    if provider in ("openrouter", "ollama", "lmstudio", "groq"):
+    # Open-world providers serve ids no pattern can check: a proxy's
+    # catalogue (OpenRouter), a local server's pulls (Ollama, LM Studio),
+    # owner-qualified ids (Groq's ``openai/gpt-oss-120b``), or whatever a
+    # named endpoint lists. They declare ``open_world_models`` and are
+    # treated as provider-selected; the upstream returns a clear 404 for a
+    # genuinely missing model.
+    if _provider_block(provider).get("open_world_models"):
         return True
-    cfg = PROVIDER_CONFIGS.get(provider)
+    cfg = get_provider_config(provider)
     if not cfg:
         return True
     model_lower = model.lower()
@@ -134,7 +187,7 @@ def is_model_valid_for_provider(model: str, provider: str) -> bool:
 
 
 def get_default_model(provider: str) -> str:
-    cfg = PROVIDER_CONFIGS.get(provider)
+    cfg = get_provider_config(provider)
     return cfg.default_model if cfg else "gpt-5.2"
 
 
@@ -168,7 +221,7 @@ def curated_models(provider: str) -> list:
     are real model names while gemini's ``popular_models`` carries
     ``-latest`` aliases the Vertex backend rejects.
     """
-    provider_cfg = LLM_DEFAULTS.get("providers", {}).get(provider, {})
+    provider_cfg = _provider_block(provider)
     explicit = provider_cfg.get("popular_models") or []
     if explicit:
         return list(explicit)
@@ -185,8 +238,7 @@ def supports_model_listing(provider: str) -> bool:
     ships no model-list route at all (verified against its published
     OpenAPI spec), so calling ``client.models.list()`` there 404s.
     """
-    provider_cfg = LLM_DEFAULTS.get("providers", {}).get(provider, {})
-    return bool(provider_cfg.get("supports_model_listing", True))
+    return bool(_provider_block(provider).get("supports_model_listing", True))
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +292,7 @@ def resolve_temperature(params: dict, model: str, provider: str, thinking_enable
         return 1.0
 
     # Fixed temperature per model from llm_defaults.json (e.g. kimi-k2.5 = 0.6)
-    prov_json = LLM_DEFAULTS.get("providers", {}).get(provider, {})
-    fixed_temps = prov_json.get("fixed_temperature", {})
+    fixed_temps = _provider_block(provider).get("fixed_temperature", {})
     for prefix, fixed_temp in fixed_temps.items():
         if model.startswith(prefix):
             return float(fixed_temp)

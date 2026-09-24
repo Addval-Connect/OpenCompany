@@ -179,6 +179,43 @@ def test_structured_error_exposes_only_category_based_user_message():
     assert "Bearer secret" not in error.user_message
 
 
+@pytest.mark.parametrize(
+    ("provider", "not_found", "context_length"),
+    [
+        (
+            "openai",
+            "The configured OpenAI model or endpoint was not found.",
+            "The request exceeds the OpenAI model context window.",
+        ),
+        (
+            "openai_compatible:home",
+            "The OpenAI-compatible endpoint did not find the configured model.",
+            "The request exceeds the context window of the model at the OpenAI-compatible endpoint.",
+        ),
+        (
+            "some-unregistered-provider",
+            "The language model provider did not find the configured model.",
+            "The request exceeds the context window of the model at the language model provider.",
+        ),
+    ],
+)
+def test_model_scoped_messages_read_for_names_and_common_nouns(provider, not_found, context_length):
+    def message(category: LLMErrorCategory) -> str:
+        return LLMError(message="raw", provider=provider, category=category).user_message
+
+    assert message(LLMErrorCategory.NOT_FOUND) == not_found
+    assert message(LLMErrorCategory.CONTEXT_LENGTH) == context_length
+
+
+@pytest.mark.parametrize("provider", ["openai_compatible:home", "some-unregistered-provider"])
+@pytest.mark.parametrize("category", list(LLMErrorCategory))
+def test_no_message_doubles_the_article_of_a_common_noun(provider, category):
+    text = LLMError(message="raw", provider=provider, category=category).user_message.lower()
+
+    assert "the the " not in text
+    assert "configured the " not in text
+
+
 def test_structured_error_preserves_http_date_retry_after():
     class Response:
         status_code = 429

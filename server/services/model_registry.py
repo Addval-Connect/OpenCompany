@@ -1,10 +1,22 @@
 """Model Parameter Management Service.
 
 Centralized registry for model metadata (max_output_tokens, context_length,
-temperature constraints, thinking capabilities). Fetches from OpenRouter's
-public API and caches to JSON. Falls back to llm_defaults.json offline.
+temperature constraints, thinking capabilities). Three sources, three files:
+
+- OpenRouter's public model list, cached to ``config/model_registry.json``
+  (a tracked, curated snapshot) and refreshed on a 24 h gate.
+- Models registered from the user's own servers (Ollama, LM Studio, named
+  OpenAI-compatible endpoints) when their credential is saved. These are
+  per-install state, so they persist under DATA_DIR, never in the tracked
+  snapshot, and an OpenRouter refresh never replaces them.
+- LiteLLM's ``model_prices_and_context_window.json``, consulted only when an
+  endpoint is saved, to size and price model ids its server does not
+  describe (RFC-0003 D15). Cached under DATA_DIR on the same 24 h gate.
+
+Falls back to llm_defaults.json offline.
 """
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, asdict, field
@@ -25,6 +37,35 @@ logger = get_logger(__name__)
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 CACHE_FILE = Path(__file__).parent.parent / "config" / "model_registry.json"
 CACHE_MAX_AGE = timedelta(hours=24)
+
+LITELLM_MODELS_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+# The only LiteLLM fields anything reads. Everything else is dropped at
+# fetch time, so the cache holds a few hundred KB, not the full table.
+_LITELLM_FIELDS = (
+    "max_input_tokens",
+    "max_output_tokens",
+    "input_cost_per_token",
+    "output_cost_per_token",
+)
+# An on-demand fetch runs inside an endpoint save, so it is bounded in
+# total, and a failed one is not repeated on every save: offline, each save
+# would otherwise wait out the timeout. The 24 h refresh is not affected.
+_LITELLM_ON_DEMAND_TIMEOUT_SECONDS = 8.0
+_LITELLM_RETRY_AFTER = timedelta(minutes=10)
+
+
+def _local_models_path() -> Path:
+    """Where models registered from the user's own servers persist."""
+    from core.paths import data_path
+
+    return data_path("local_models.json")
+
+
+def _litellm_cache_path() -> Path:
+    """Where the trimmed LiteLLM table is cached."""
+    from core.paths import data_path
+
+    return data_path("litellm_models.json")
 
 # Provider normalization: OpenRouter provider -> OpenCompany provider
 PROVIDER_MAP = {
@@ -115,7 +156,12 @@ class ModelRegistryService:
     """
 
     def __init__(self):
-        self._models: Dict[str, ModelInfo] = {}  # keyed by "provider/local_id"
+        self._models: Dict[str, ModelInfo] = {}  # OpenRouter, keyed by "provider/local_id"
+        # Registered from the user's own servers, keyed "<provider ref>/<model id>".
+        # Kept apart so an OpenRouter refresh cannot replace them.
+        self._local_models: Dict[str, ModelInfo] = {}
+        self._litellm: Dict[str, Dict[str, Any]] = {}
+        self._litellm_failed_at: Optional[datetime] = None
         self._cache_timestamp: Optional[datetime] = None
         self._llm_defaults: Dict[str, Any] = {}
 
@@ -124,9 +170,11 @@ class ModelRegistryService:
     # -------------------------------------------------------------------------
 
     def startup(self) -> None:
-        """Synchronously load from cache file and llm_defaults.json."""
+        """Synchronously load the caches and llm_defaults.json."""
         self._load_llm_defaults()
         self._load_cache()
+        self._load_local_models()
+        self._load_litellm_cache()
         count = len(self._models)
         if count > 0:
             logger.info(f"Model registry loaded {count} models from cache")
@@ -141,6 +189,16 @@ class ModelRegistryService:
         return age > CACHE_MAX_AGE
 
     async def refresh(self) -> int:
+        """Refresh the LiteLLM table, then the OpenRouter snapshot.
+
+        The LiteLLM refresh never raises: it only sizes endpoint models at
+        save time, and a stale copy beats none. Returns the number of
+        OpenRouter models loaded.
+        """
+        await self._refresh_litellm()
+        return await self._refresh_openrouter()
+
+    async def _refresh_openrouter(self) -> int:
         """Fetch model data from OpenRouter public API and update cache.
 
         Returns the number of models loaded.
@@ -206,19 +264,24 @@ class ModelRegistryService:
         # Strip [FREE] prefix if present
         model = model.replace("[FREE] ", "")
         variants = self._model_variants(model)
+        # Models registered from the user's own servers go first: they
+        # carry the context the server actually loaded.
+        sources = (self._local_models, self._models)
 
         # 1. Exact match (try all dot/hyphen variants)
-        for variant in variants:
-            key = f"{provider}/{variant}"
-            if key in self._models:
-                return self._models[key]
+        for source in sources:
+            for variant in variants:
+                key = f"{provider}/{variant}"
+                if key in source:
+                    return source[key]
 
         # 2. Prefix match (e.g., claude-3-5-sonnet-20241022 -> claude-3-5-sonnet)
-        for stored_key, info in self._models.items():
-            if info.provider == provider:
-                for variant in variants:
-                    if variant.startswith(info.local_id) or info.local_id.startswith(variant):
-                        return info
+        for source in sources:
+            for stored_key, info in source.items():
+                if info.provider == provider:
+                    for variant in variants:
+                        if variant.startswith(info.local_id) or info.local_id.startswith(variant):
+                            return info
 
         # 3. Cross-provider lookup (OpenRouter only - same model on different
         #    providers can have different context windows and limits)
@@ -243,30 +306,27 @@ class ModelRegistryService:
         model_id: str,
         params: Dict[str, Any],
     ) -> None:
-        """Register an Ollama / LM Studio model with its actual params.
+        """Register a model served by the user's own server, with its params.
 
-        Called from ``validate_local_llm`` after the official SDK probe
-        (``ollama.AsyncClient.ps()`` / ``lmstudio.AsyncClient.llm.list_loaded()``)
-        returns each currently-loaded model with its typed params:
-        ``context_length`` (live n_ctx the server enforces),
-        ``vision`` / ``supports_tools`` capability flags, and metadata
-        (``architecture``, ``param_size``, ``quantization``). The sync
-        ``get_context_length`` / ``get_max_output_tokens`` lookups find
-        this entry first, so chat / agent execution honour the real
-        n_ctx the server is serving — no JSON guess, no string parsing.
+        Called when an Ollama, LM Studio or named OpenAI-compatible
+        endpoint credential is saved (``nodes/model/_local_validator.py``).
+        ``params`` carries what the server reported, or what save-time
+        enrichment found: ``context_length`` (the n_ctx the server
+        enforces), optional ``max_output_tokens``, ``vision`` /
+        ``supports_tools`` flags, and optional ``input_price_per_mtok`` /
+        ``output_price_per_mtok``. The sync ``get_context_length`` /
+        ``get_max_output_tokens`` lookups find this entry first, so chat
+        and agent execution honour the real n_ctx — no JSON guess.
 
-        Stored under the same ``{provider}/{local_id}`` key shape as
-        cloud models so ``get_model_info``'s waterfall matches without
-        any per-provider branching. ``provider`` is canonical
-        (``ollama`` / ``lmstudio``).
+        ``provider`` is the provider reference (``ollama``, ``lmstudio``,
+        ``openai_compatible:<slug>``); the key shape is the same
+        ``{provider}/{local_id}`` as cloud models, so ``get_model_info``
+        matches without per-provider branching.
 
-        Idempotent: a re-validation overwrites the prior entry.
-
-        Persisted to the same ``model_registry.json`` cache the
-        OpenRouter refresh writes — the entry survives a server
-        restart, so the user doesn't have to re-click "Fetch" every
-        time the process bounces just to keep the n_ctx context
-        registered for their local model.
+        Idempotent: a re-validation overwrites the prior entry. Persisted
+        under DATA_DIR, not in the tracked OpenRouter snapshot, so it
+        survives a restart without dirtying the repo, and an OpenRouter
+        refresh cannot replace it.
         """
         ctx = int(params.get("context_length") or 0)
         max_out = int(params.get("max_output_tokens") or 0)
@@ -297,10 +357,12 @@ class ModelRegistryService:
             local_id=model_id,
             context_length=ctx,
             max_output_tokens=max_out,
+            input_price_per_mtok=float(params.get("input_price_per_mtok") or 0.0),
+            output_price_per_mtok=float(params.get("output_price_per_mtok") or 0.0),
             temperature_range=(0.0, 2.0),
             supported_parameters=supported,
         )
-        self._models[f"{provider}/{model_id}"] = info
+        self._local_models[f"{provider}/{model_id}"] = info
         logger.info(
             "[%s] registered model %s (ctx=%s, max_out=%s, tools=%s, vision=%s)",
             provider,
@@ -311,10 +373,21 @@ class ModelRegistryService:
             params.get("vision", False),
         )
         # Persist so the entry survives process restart.
-        try:
-            self._save_cache()
-        except Exception as e:  # noqa: BLE001 — best-effort persistence
-            logger.warning("Failed to persist local model entry %s/%s: %s", provider, model_id, e)
+        self._save_local_models()
+
+    def forget_local_models(self, provider: str) -> None:
+        """Drop every model registered for ``provider`` (a provider reference).
+
+        Called when an endpoint is removed or re-saved, so a model the
+        server no longer serves cannot keep answering lookups.
+        """
+        prefix = f"{provider}/"
+        stale = [key for key in self._local_models if key.startswith(prefix)]
+        if not stale:
+            return
+        for key in stale:
+            del self._local_models[key]
+        self._save_local_models()
 
     def get_max_output_tokens(self, model: str, provider: str) -> int:
         """Get max output tokens: registry -> llm_defaults -> 4096."""
@@ -339,9 +412,7 @@ class ModelRegistryService:
             return info.temperature_range
 
         # Fallback to llm_defaults or provider default
-        providers = self._llm_defaults.get("providers", {})
-        prov_cfg = providers.get(provider, {})
-        temp_range = prov_cfg.get("temperature_range")
+        temp_range = self._provider_defaults(provider).get("temperature_range")
         if temp_range and isinstance(temp_range, list) and len(temp_range) == 2:
             return tuple(temp_range)
 
@@ -354,8 +425,7 @@ class ModelRegistryService:
             return info.is_reasoning_model
 
         # Fallback: check llm_defaults reasoning_models list
-        providers = self._llm_defaults.get("providers", {})
-        reasoning_list = providers.get(provider, {}).get("reasoning_models", [])
+        reasoning_list = self._provider_defaults(provider).get("reasoning_models", [])
         for pattern in reasoning_list:
             if model.startswith(pattern):
                 return True
@@ -377,8 +447,7 @@ class ModelRegistryService:
             return info.thinking_type
 
         # Fallback: check llm_defaults
-        providers = self._llm_defaults.get("providers", {})
-        prov_cfg = providers.get(provider, {})
+        prov_cfg = self._provider_defaults(provider)
 
         # Check if model matches thinking_models patterns
         thinking_models = prov_cfg.get("thinking_models", [])
@@ -559,6 +628,144 @@ class ModelRegistryService:
         except Exception as e:
             logger.warning(f"Failed to save model registry cache: {e}")
 
+    def _load_local_models(self) -> None:
+        """Load models registered from the user's own servers."""
+        path = _local_models_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw_models = json.load(f).get("models", {})
+            for key, model_data in raw_models.items():
+                try:
+                    self._local_models[key] = ModelInfo.from_dict(model_data)
+                except (TypeError, KeyError) as e:
+                    logger.debug(f"Skipping invalid local model entry {key}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load local model registry: {e}")
+
+    def _save_local_models(self) -> None:
+        """Persist models registered from the user's own servers. Best effort."""
+        path = _local_models_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"models": {key: info.to_dict() for key, info in self._local_models.items()}},
+                    f,
+                    indent=2,
+                    default=str,
+                )
+        except Exception as e:  # noqa: BLE001 — the in-memory entry still serves this process
+            logger.warning(f"Failed to persist local model registry: {e}")
+
+    # -------------------------------------------------------------------------
+    # LiteLLM table (endpoint save-time sizing and pricing, RFC-0003 D15)
+    # -------------------------------------------------------------------------
+
+    def lookup_litellm(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """LiteLLM's entry for ``model_id``, or ``None``.
+
+        An exact key wins. Otherwise a key whose part after the first ``/``
+        (LiteLLM prefixes non-OpenAI ids with their host, e.g.
+        ``together_ai/...``) equals the id, but only when exactly one key
+        matches: hosts size and price the same model differently, so an
+        ambiguous match is no match.
+        """
+        if not model_id:
+            return None
+        entry = self._litellm.get(model_id)
+        if entry is not None:
+            return entry
+        matches = [spec for key, spec in self._litellm.items() if key.partition("/")[2] == model_id]
+        return matches[0] if len(matches) == 1 else None
+
+    async def ensure_litellm_table(self, timeout: float = _LITELLM_ON_DEMAND_TIMEOUT_SECONDS) -> None:
+        """Fetch the LiteLLM table if this process has none yet.
+
+        The 24 h refresh keeps it current; this covers a first endpoint
+        save on a machine whose OpenRouter snapshot was still fresh, so
+        the refresh has not run yet. It runs inside that save, so it gets
+        ``timeout`` seconds in total, and after a failure it waits
+        ``_LITELLM_RETRY_AFTER`` before trying again. Never raises.
+        """
+        if self._litellm:
+            return
+        if self._litellm_failed_at and datetime.now(timezone.utc) - self._litellm_failed_at < _LITELLM_RETRY_AFTER:
+            return
+        try:
+            await asyncio.wait_for(self._refresh_litellm(), timeout)
+        except asyncio.TimeoutError:
+            self._litellm_failed_at = datetime.now(timezone.utc)
+            logger.warning(f"Model registry: LiteLLM table fetch took longer than {timeout:g}s; not retried for a while")
+
+    async def _refresh_litellm(self) -> None:
+        """Fetch and trim the LiteLLM table. Never raises."""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(LITELLM_MODELS_URL)
+                response.raise_for_status()
+                raw = response.json()
+        except Exception as e:  # noqa: BLE001 — a stale copy beats none
+            self._litellm_failed_at = datetime.now(timezone.utc)
+            logger.warning(f"Model registry: LiteLLM table refresh failed, keeping the cached copy: {e}")
+            return
+
+        table = self._parse_litellm(raw)
+        if not table:
+            self._litellm_failed_at = datetime.now(timezone.utc)
+            logger.warning("Model registry: LiteLLM table had no chat models, keeping the cached copy")
+            return
+        self._litellm = table
+        self._litellm_failed_at = None
+        self._save_litellm_cache()
+        logger.info(f"Model registry: loaded {len(table)} chat models from LiteLLM")
+
+    @staticmethod
+    def _parse_litellm(raw: Any) -> Dict[str, Dict[str, Any]]:
+        """Keep chat-mode entries and the four fields anything reads."""
+        table: Dict[str, Dict[str, Any]] = {}
+        if not isinstance(raw, dict):
+            return table
+        for model_id, spec in raw.items():
+            if not isinstance(spec, dict) or spec.get("mode") != "chat":
+                continue
+            entry = {
+                name: spec[name]
+                for name in _LITELLM_FIELDS
+                if isinstance(spec.get(name), (int, float)) and not isinstance(spec.get(name), bool)
+            }
+            if entry:
+                table[model_id] = entry
+        return table
+
+    def _load_litellm_cache(self) -> None:
+        path = _litellm_cache_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                self._litellm = self._parse_litellm(json.load(f).get("models", {}))
+        except Exception as e:
+            logger.warning(f"Failed to load LiteLLM table cache: {e}")
+
+    def _save_litellm_cache(self) -> None:
+        path = _litellm_cache_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                # Re-stamped with "mode" so the loader's parse applies unchanged.
+                json.dump(
+                    {
+                        "_source": LITELLM_MODELS_URL,
+                        "_generated": datetime.now(timezone.utc).isoformat(),
+                        "models": {key: {**spec, "mode": "chat"} for key, spec in self._litellm.items()},
+                    },
+                    f,
+                )
+        except Exception as e:  # noqa: BLE001 — the in-memory table still serves this process
+            logger.warning(f"Failed to persist LiteLLM table cache: {e}")
+
     # -------------------------------------------------------------------------
     # LLM defaults fallback
     # -------------------------------------------------------------------------
@@ -601,10 +808,19 @@ class ModelRegistryService:
             pass
         return block
 
+    def _provider_defaults(self, provider: str) -> Dict[str, Any]:
+        """The llm_defaults.json block for a provider reference.
+
+        A named endpoint (``openai_compatible:<slug>``) reads the shared
+        ``openai_compatible`` block.
+        """
+        from services.llm.config import split_provider_ref
+
+        return self._llm_defaults.get("providers", {}).get(split_provider_ref(provider)[0], {})
+
     def _get_default_max_output_tokens(self, provider: str, model: str) -> int:
         """Fallback: get max output tokens from llm_defaults.json."""
-        providers = self._llm_defaults.get("providers", {})
-        token_map = providers.get(provider, {}).get("max_output_tokens", {})
+        token_map = self._provider_defaults(provider).get("max_output_tokens", {})
         variants = self._model_variants(model)
 
         # Exact match (try dot/hyphen variants)
@@ -623,8 +839,7 @@ class ModelRegistryService:
 
     def _get_default_context_length(self, provider: str, model: str) -> int:
         """Fallback: get context length from llm_defaults.json."""
-        providers = self._llm_defaults.get("providers", {})
-        ctx_map = providers.get(provider, {}).get("context_length", {})
+        ctx_map = self._provider_defaults(provider).get("context_length", {})
         variants = self._model_variants(model)
 
         # Exact match (try dot/hyphen variants)

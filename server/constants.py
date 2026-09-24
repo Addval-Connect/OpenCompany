@@ -26,6 +26,8 @@ AI_CHAT_MODEL_TYPES: FrozenSet[str] = frozenset(
         # format; routed through OpenAIProvider with a localhost base_url).
         "ollamaChatModel",
         "lmstudioChatModel",
+        # A user-named OpenAI-compatible endpoint (RFC-0003 D13).
+        "openaiCompatibleChatModel",
     ]
 )
 
@@ -466,6 +468,14 @@ def detect_ai_provider(node_type: str, parameters: dict = None) -> str:
         return "anthropic"
     if "gemini" in nt:
         return "gemini"
+    # A named endpoint: the node's ``endpoint`` parameter holds its
+    # provider reference, ``openai_compatible:<slug>``. Without one the
+    # bare id comes back; it holds no key, so the run stops before any
+    # request and asks the user to choose an endpoint.
+    if "openaicompatible" in nt:
+        from services.llm.config import ENDPOINT_PROVIDER
+
+        return (parameters or {}).get("endpoint") or ENDPOINT_PROVIDER
     # Local-server providers — match the LMStudioChatModelNode /
     # OllamaChatModelNode plugin types so the runtime path reads the
     # correct {provider}_proxy credential and the openai SDK is pointed

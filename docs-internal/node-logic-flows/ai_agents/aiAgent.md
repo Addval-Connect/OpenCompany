@@ -38,7 +38,7 @@ Source: `AIAgentParams` in [`ai_agent/__init__.py`](../../../server/nodes/agent/
 | Name | Type | Default | Required | Group | Description |
 |------|------|---------|----------|-------|-------------|
 | `prompt` | string (textarea, rows 4) | `""` | no | - | User prompt; may reference upstream node outputs via templates. Empty -> auto-prompt fallback from `input-main`. |
-| `provider` | Literal | `openai` | no | - | One of openai, anthropic, gemini, openrouter, xai, groq, cerebras, deepseek, kimi, mistral, ollama, lmstudio. |
+| `provider` | string (`ProviderRef`) | `openai` | no | - | A provider reference: any registered provider id, or a saved named endpoint `openai_compatible:<slug>`. Options come from the `aiProviders` loader, so a new endpoint appears without a schema change; `nodes/agent/_provider.py` validates the value. |
 | `model` | string | `""` | no | - | Model id; loaded dynamically from the provider. |
 | `system_message` | string (rows 3) | `You are a helpful assistant` | no | - | System prompt prepended to the conversation. |
 | `temperature` | number (optional) | `None` | no | options | 0-2, step 0.1. Unset falls through to `agent.default_temperature` in `llm_defaults.json`. |
@@ -134,12 +134,12 @@ flowchart TD
   and potentially `compaction_starting` / `compaction_completed` events.
   `BaseNode.execute()` additionally wraps the body in a `node.aiAgent.execute`
   OpenTelemetry span + `log_context(node_id, node_type, workflow_id)`.
-- **External API calls**: all 13 providers run through `ChatUnifier` and the
-  native provider layer: Anthropic uses `anthropic`, Gemini uses
+- **External API calls**: every registered provider runs through `ChatUnifier`
+  and the native provider layer: Anthropic uses `anthropic`, Gemini uses
   `google-genai`, and OpenAI plus the OpenAI-compatible providers (OpenRouter,
-  Groq, Cerebras, xAI, DeepSeek, Kimi, Mistral, Ollama, and LM Studio) use
-  `openai` with the configured endpoint. Tool nodes may spawn their own HTTP
-  or subprocess calls via `execute_tool`.
+  Groq, Cerebras, xAI, DeepSeek, Kimi, Mistral, Sarvam, Ollama, LM Studio and
+  named endpoints) use `openai` with the configured or saved endpoint. Tool
+  nodes may spawn their own HTTP or subprocess calls via `execute_tool`.
 - **File I/O**: none in `execute_op`. Filesystem tool nodes may read/write the
   per-workflow workspace (`context.workspace_dir`).
 - **Subprocess**: none directly. Tool executors (shell, process manager,
