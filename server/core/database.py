@@ -124,7 +124,10 @@ class Database:
             await self._migrate_workflow_controls()
             await self._migrate_generation_scoped_runtime_data()
             await self._migrate_tenant_namespaces()
+            await self._migrate_user_namespaces()
+            await self._migrate_workflow_namespace()
             await self._migrate_workflow_owner()
+            await self._migrate_credentials_to_namespace()
 
             logger.info("Database initialized successfully")
 
@@ -788,6 +791,7 @@ class Database:
         description: Optional[str] = None,
         context_id_aliases: Optional[Dict[str, str]] = None,
         owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> bool:
         """Save or update workflow.
 
@@ -825,6 +829,7 @@ class Database:
                         description=description,
                         data=data,
                         owner_user_id=effective_owner,
+                        namespace=namespace or "default",
                     )
                     session.add(existing)
 
@@ -854,19 +859,28 @@ class Database:
             return False
 
     async def get_workflow(
-        self, workflow_id: str, owner_user_id: Optional[str] = None
+        self,
+        workflow_id: str,
+        owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> Optional[Workflow]:
         """Get workflow by ID.
 
-        When ``owner_user_id`` is provided, the workflow is returned only if
-        its ``owner_user_id`` column matches — callers that know the principal
-        (WS handlers, HTTP routes) should always pass it so an ID-guessing
-        attack returns the same "not found" as a real miss.
+        Access predicate (namespace takes priority over owner_user_id):
+        - ``namespace``: return the workflow only if it belongs to that
+          namespace — the caller is a namespace member, so any workflow in
+          the namespace is accessible regardless of who created it.
+        - ``owner_user_id`` (fallback when no namespace): return only if the
+          workflow was created by that principal (original single-namespace
+          behaviour; guards against ID-guessing attacks).
+        - Neither provided: internal calls that need the record unconditionally.
         """
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
-                if owner_user_id is not None:
+                if namespace is not None:
+                    stmt = stmt.where(Workflow.namespace == namespace)
+                elif owner_user_id is not None:
                     stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalar_one_or_none()
@@ -875,10 +889,15 @@ class Database:
             logger.error("Failed to get workflow", workflow_id=workflow_id, error=str(e))
             return None
 
-    async def get_all_workflows(self, owner_user_id: Optional[str] = None) -> List[Workflow]:
-        """Get workflows, optionally filtered to one owner.
+    async def get_all_workflows(
+        self,
+        owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+    ) -> List[Workflow]:
+        """Get workflows, optionally filtered to one owner and/or namespace.
 
         Pass ``owner_user_id`` to return only that principal's workflows.
+        Pass ``namespace`` to return only workflows in that namespace.
         Callers that know the principal (WS ``get_all_workflows`` handler,
         REST database router) must always pass it; internal system calls that
         genuinely need the full list (boot-time reconciliation, example loader)
@@ -887,7 +906,12 @@ class Database:
         try:
             async with self.get_session() as session:
                 stmt = select(Workflow).order_by(Workflow.updated_at.desc())
-                if owner_user_id is not None:
+                if namespace is not None:
+                    # Namespace is the ownership boundary: everyone in the
+                    # namespace sees all its workflows regardless of creator.
+                    stmt = stmt.where(Workflow.namespace == namespace)
+                elif owner_user_id is not None:
+                    # Single-namespace fallback: filter by creator.
                     stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalars().all()
@@ -2245,6 +2269,7 @@ class Database:
                     "agent_recursion_limit": settings.agent_recursion_limit,
                     "max_concurrent_subagents": settings.max_concurrent_subagents,
                     "max_delegation_depth": settings.max_delegation_depth,
+                    "active_namespace": settings.active_namespace,
                     "created_at": settings.created_at.isoformat() if settings.created_at else None,
                     "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
                 }
@@ -4413,3 +4438,239 @@ class Database:
             await session.refresh(row)
             logger.info(f"Tenant namespace status set: user_id={user_id} status={status}")
             return self._tenant_row_to_dict(row)
+
+    # ============================================================================
+    # User-namespace many-to-many (multi-namespace per user)
+    # ============================================================================
+
+    async def _migrate_user_namespaces(self) -> None:
+        """Create namespaces and user_namespaces tables; seed 'default'.
+
+        Safe to call on every startup — all DDL uses CREATE IF NOT EXISTS /
+        INSERT OR IGNORE. Existing rows are never overwritten.
+        """
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS namespaces (
+                        namespace VARCHAR(255) NOT NULL PRIMARY KEY,
+                        display_name VARCHAR(255) NOT NULL DEFAULT '',
+                        status VARCHAR(32) NOT NULL DEFAULT 'provisioning',
+                        temporal_provisioned BOOLEAN NOT NULL DEFAULT 0,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                """))
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS user_namespaces (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id VARCHAR(255) NOT NULL,
+                        namespace VARCHAR(255) NOT NULL,
+                        role VARCHAR(32) NOT NULL DEFAULT 'member',
+                        assigned_at DATETIME,
+                        CONSTRAINT uq_user_namespace UNIQUE (user_id, namespace)
+                    )
+                """))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_user_namespaces_user_id "
+                    "ON user_namespaces(user_id)"
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_user_namespaces_namespace "
+                    "ON user_namespaces(namespace)"
+                ))
+                # Add active_namespace to user_settings if missing
+                result = await conn.execute(text("PRAGMA table_info(user_settings)"))
+                cols = {row[1] for row in result.fetchall()}
+                if "active_namespace" not in cols:
+                    await conn.execute(text(
+                        "ALTER TABLE user_settings "
+                        "ADD COLUMN active_namespace VARCHAR(255) DEFAULT 'default'"
+                    ))
+                # Seed 'default' namespace (always-ready; Temporal ships it)
+                await conn.execute(text("""
+                    INSERT OR IGNORE INTO namespaces
+                        (namespace, display_name, status, temporal_provisioned,
+                         created_at, updated_at)
+                    VALUES ('default', 'Default', 'ready', 1,
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """))
+                # Assign every existing user to 'default' (idempotent).
+                # Guard against test isolation environments where the users
+                # table may not exist in the current metadata scope.
+                try:
+                    await conn.execute(text("""
+                        INSERT OR IGNORE INTO user_namespaces
+                            (user_id, namespace, role, assigned_at)
+                        SELECT CAST(id AS TEXT), 'default', 'member', CURRENT_TIMESTAMP
+                        FROM users
+                    """))
+                    await conn.execute(text("""
+                        UPDATE user_namespaces
+                        SET role = 'owner'
+                        WHERE namespace = 'default'
+                          AND user_id IN (
+                              SELECT CAST(id AS TEXT) FROM users WHERE is_owner = 1
+                          )
+                    """))
+                except Exception:
+                    pass  # users table not yet created (fresh test DB)
+        except Exception as exc:
+            logger.error("_migrate_user_namespaces failed", error=str(exc))
+            raise
+
+    async def _migrate_workflow_namespace(self) -> None:
+        """Add 'namespace' column to workflows; backfill existing rows to 'default'."""
+        try:
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA table_info(workflows)"))
+                cols = {row[1] for row in result.fetchall()}
+                if "namespace" not in cols:
+                    await conn.execute(text(
+                        "ALTER TABLE workflows ADD COLUMN namespace VARCHAR(255) NOT NULL DEFAULT 'default'"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_workflows_namespace ON workflows(namespace)"
+                    ))
+        except Exception as exc:
+            logger.error("_migrate_workflow_namespace failed", error=str(exc))
+            raise
+
+    async def _migrate_credentials_to_namespace(self) -> None:
+        """Migrate per-user credential rows to the default namespace slot.
+
+        Old format: session_id = 't:1:default'  (legacy per-user prefix)
+        New format: session_id = 'default'       (default namespace, no prefix)
+
+        All rows with a 't:{user_id}:*' prefix belonged to the default namespace
+        (there was only one namespace before this migration), so they are safely
+        moved to the unprefixed slot.  The credentials.db engine is NOT the same
+        SQLAlchemy engine as self.engine — open it directly via aiosqlite.
+        """
+        import os
+        import aiosqlite
+
+        try:
+            creds_path = self.settings.credentials_db_resolved
+            if not os.path.exists(creds_path):
+                return
+            async with aiosqlite.connect(creds_path) as db:
+                # Migrate encrypted_api_keys: strip 't:{x}:' prefix from session_id
+                await db.execute(
+                    "UPDATE encrypted_api_keys "
+                    "SET session_id = SUBSTR(session_id, INSTR(SUBSTR(session_id, 3), ':') + 3) "
+                    "WHERE session_id LIKE 't:%:%'"
+                )
+                await db.commit()
+                rows = await db.execute(
+                    "SELECT COUNT(*) FROM encrypted_api_keys WHERE session_id LIKE 't:%:%'"
+                )
+                remaining = (await rows.fetchone())[0]
+                if remaining == 0:
+                    logger.info("credentials migration: all t:x: prefixed rows moved to default")
+        except Exception as exc:
+            logger.warning("_migrate_credentials_to_namespace failed", error=str(exc))
+
+    async def list_user_namespaces(self, user_id: str) -> List[Dict[str, Any]]:
+        """All namespaces accessible to user_id, with namespace status info."""
+        async with self.get_session() as session:
+            result = await session.execute(
+                text("""
+                    SELECT n.namespace, n.display_name, n.status,
+                           n.temporal_provisioned, un.role, un.assigned_at
+                    FROM user_namespaces un
+                    JOIN namespaces n ON n.namespace = un.namespace
+                    WHERE un.user_id = :uid
+                    ORDER BY un.assigned_at
+                """),
+                {"uid": user_id},
+            )
+            rows = result.mappings().all()
+            return [dict(r) for r in rows]
+
+    async def assign_user_namespace(
+        self, user_id: str, namespace: str, role: str = "member"
+    ) -> None:
+        """Assign a user to a namespace (idempotent — silently ignores duplicates)."""
+        async with self.get_session() as session:
+            await session.execute(
+                text("""
+                    INSERT OR IGNORE INTO user_namespaces
+                        (user_id, namespace, role, assigned_at)
+                    VALUES (:uid, :ns, :role, :now)
+                """),
+                {"uid": user_id, "ns": namespace, "role": role,
+                 "now": datetime.now(timezone.utc)},
+            )
+            await session.commit()
+
+    async def get_active_namespace_for_user(self, user_id: str) -> str:
+        """Return the persisted active namespace for user_id, defaulting to 'default'."""
+        settings = await self.get_user_settings(user_id)
+        if settings:
+            return settings.get("active_namespace", "default") or "default"
+        return "default"
+
+    async def set_active_namespace_for_user(
+        self, user_id: str, namespace: str
+    ) -> None:
+        """Persist the user's active namespace choice in user_settings."""
+        settings = await self.get_user_settings(user_id) or {}
+        settings["active_namespace"] = namespace
+        await self.save_user_settings(settings, user_id)
+
+    async def upsert_namespace(
+        self, namespace: str, display_name: str = "", status: str = "ready"
+    ) -> None:
+        """Create or update a namespace in the registry."""
+        async with self.get_session() as session:
+            await session.execute(
+                text("""
+                    INSERT INTO namespaces
+                        (namespace, display_name, status, temporal_provisioned,
+                         created_at, updated_at)
+                    VALUES (:ns, :dn, :st, 0, :now, :now)
+                    ON CONFLICT(namespace) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        status       = excluded.status,
+                        updated_at   = excluded.updated_at
+                """),
+                {"ns": namespace, "dn": display_name, "st": status,
+                 "now": datetime.now(timezone.utc)},
+            )
+            await session.commit()
+
+    async def is_user_in_namespace(self, user_id: str, namespace: str) -> bool:
+        """True if user_id has a ready-status assignment to namespace."""
+        async with self.get_session() as session:
+            result = await session.execute(
+                text("""
+                    SELECT 1
+                    FROM user_namespaces un
+                    JOIN namespaces n ON n.namespace = un.namespace
+                    WHERE un.user_id = :uid
+                      AND un.namespace = :ns
+                      AND n.status = 'ready'
+                    LIMIT 1
+                """),
+                {"uid": user_id, "ns": namespace},
+            )
+            return result.first() is not None
+
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Return basic user info dict, or None if the user does not exist."""
+        from models.auth import User
+        async with self.get_session() as session:
+            try:
+                row = await session.get(User, int(user_id))
+            except (ValueError, TypeError):
+                return None
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "email": row.email,
+                "display_name": row.display_name,
+                "is_owner": row.is_owner,
+                "is_active": row.is_active,
+            }

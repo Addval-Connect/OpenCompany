@@ -64,6 +64,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.user_id = OWNER_PRINCIPAL_ID
             request.state.user_email = "anonymous"
             request.state.is_owner = True
+            request.state.active_namespace = "default"
             return await call_next(request)
 
         # Auth enabled - check token
@@ -83,6 +84,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.user_id = payload.get("sub")
         request.state.user_email = payload.get("email")
         request.state.is_owner = payload.get("is_owner", False)
+        request.state.active_namespace = payload.get("active_namespace", "default")
 
         return await call_next(request)
 

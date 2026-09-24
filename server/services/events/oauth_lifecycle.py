@@ -133,11 +133,16 @@ def make_oauth_lifecycle_handlers(
             drop legacy API-key entries from the pre-OAuth layout.
     """
 
+    def _active_ns(websocket: WebSocket) -> str:
+        """Active namespace from WS state; falls back to 'default'."""
+        return getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
+
     async def login(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
         from core.container import container
         from services.oauth_utils import get_redirect_uri
 
         auth_service = container.auth_service()
+        # client_id / client_secret are instance-level — always stored under "owner".
         client_id = await auth_service.get_api_key(f"{provider}_client_id")
         if not client_id:
             return {
@@ -145,9 +150,12 @@ def make_oauth_lifecycle_handlers(
                 "error": (f"{provider.capitalize()} Client ID not configured. " f"Add your {provider.capitalize()} API credentials first."),
             }
 
+        ns = _active_ns(websocket)
         redirect_uri = get_redirect_uri(websocket, provider)
         oauth = await oauth_factory(redirect_uri=redirect_uri)
-        auth_data = oauth.generate_authorization_url()
+        # Pass the active namespace in state_data so the callback stores
+        # the tokens in the correct namespace slot.
+        auth_data = oauth.generate_authorization_url(state_data={"namespace": ns})
 
         return {
             "success": True,
@@ -160,8 +168,9 @@ def make_oauth_lifecycle_handlers(
         from core.container import container
         from services.oauth_utils import get_redirect_uri
 
+        ns = _active_ns(websocket)
         auth_service = container.auth_service()
-        tokens = await auth_service.get_oauth_tokens(provider, customer_id="owner")
+        tokens = await auth_service.get_oauth_tokens(provider, customer_id=ns)
         if not tokens or not tokens.get("access_token"):
             # Match pre-S handler shape -- frontends key on these
             # exact field names. Both Twitter (username/user_id) and
@@ -181,7 +190,7 @@ def make_oauth_lifecycle_handlers(
         if not user_info.get("success"):
             refresh_token = await auth_service.get_oauth_refresh_token(
                 provider,
-                customer_id="owner",
+                customer_id=ns,
             )
             if refresh_token:
                 refresh = await oauth.refresh_access_token(refresh_token)
@@ -193,7 +202,7 @@ def make_oauth_lifecycle_handlers(
                         email=tokens.get("email", ""),
                         name=tokens.get("name", ""),
                         scopes=tokens.get("scopes", ""),
-                        customer_id="owner",
+                        customer_id=ns,
                     )
                     user_info = await oauth.fetch_user_info(refresh["access_token"])
 
@@ -217,10 +226,11 @@ def make_oauth_lifecycle_handlers(
         from services.oauth_utils import get_redirect_uri
         from services.status_broadcaster import get_status_broadcaster
 
+        ns = _active_ns(websocket)
         auth_service = container.auth_service()
-        tokens = await auth_service.get_oauth_tokens(provider, customer_id="owner")
+        tokens = await auth_service.get_oauth_tokens(provider, customer_id=ns)
         access_token = tokens.get("access_token") if tokens else None
-        refresh_token = await auth_service.get_oauth_refresh_token(provider, customer_id="owner") if tokens else None
+        refresh_token = await auth_service.get_oauth_refresh_token(provider, customer_id=ns) if tokens else None
 
         if access_token or refresh_token:
             redirect_uri = get_redirect_uri(websocket, provider)
@@ -230,7 +240,7 @@ def make_oauth_lifecycle_handlers(
             if refresh_token:
                 await oauth.revoke_token(refresh_token, "refresh_token")
 
-        await auth_service.remove_oauth_tokens(provider, customer_id="owner")
+        await auth_service.remove_oauth_tokens(provider, customer_id=ns)
 
         if extra_logout is not None:
             try:
@@ -242,7 +252,7 @@ def make_oauth_lifecycle_handlers(
         await broadcaster.broadcast_credential_event(
             "credential.oauth.disconnected",
             provider=provider,
-            customer_id="owner",
+            customer_id=ns,
         )
 
         return {"success": True, "message": f"{provider.capitalize()} disconnected"}
@@ -405,6 +415,10 @@ def make_oauth_callback_router(
         from core.container import container
 
         auth_service = container.auth_service()
+        # Use namespace from state_data if present (set by the login handler),
+        # falling back to any customer_id override (customer-mode Google), then "default".
+        ns_from_state = (state_data or {}).get("namespace", "default")
+        effective_customer = store_overrides.pop("customer_id", ns_from_state)
         await auth_service.store_oauth_tokens(
             provider=provider,
             access_token=access_token,
@@ -412,7 +426,7 @@ def make_oauth_callback_router(
             email=email,
             name=name,
             scopes=",".join((result.get("scope") or "").split()),
-            customer_id=store_overrides.pop("customer_id", "owner"),
+            customer_id=effective_customer,
             **store_overrides,
         )
 
@@ -433,7 +447,7 @@ def make_oauth_callback_router(
         await broadcaster.broadcast_credential_event(
             "credential.oauth.connected",
             provider=provider,
-            customer_id=store_overrides.get("customer_id", "owner"),
+            customer_id=effective_customer,
         )
 
         if redirect_after:

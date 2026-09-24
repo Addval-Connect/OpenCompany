@@ -401,6 +401,24 @@ async def _run(args: argparse.Namespace) -> int:
         if args.command == "namespace":
             return await _run_namespace(args, service, database, settings)
 
+        if args.command == "assign-namespace":
+            user = await service.get_user_by_email(args.email)
+            if user is None:
+                print(f"Error: user '{args.email}' not found", file=sys.stderr)
+                return 1
+            from services.tenancy import is_valid_namespace, RESERVED_NAMESPACES
+            if args.namespace not in RESERVED_NAMESPACES and not is_valid_namespace(args.namespace):
+                print(
+                    f"Error: namespace {args.namespace!r} is not valid "
+                    "(3-63 chars, lowercase letters/digits/hyphens, no leading digit or trailing hyphen)",
+                    file=sys.stderr,
+                )
+                return 1
+            await database.upsert_namespace(args.namespace)
+            await database.assign_user_namespace(str(user.id), args.namespace, role=args.role)
+            print(f"Assigned {args.email} to namespace '{args.namespace}' (role: {args.role}).")
+            return 0
+
         print(f"unknown command: {args.command}", file=sys.stderr)
         return 2
     finally:
@@ -461,6 +479,20 @@ def main() -> int:
             "Temporal rejects values below 1. Retention reaps only CLOSED executions -- "
             "running/paused deployments are never affected."
         ),
+    )
+
+    # assign-namespace: many-to-many user<->namespace assignment
+    ans = sub.add_parser(
+        "assign-namespace",
+        help="add a user to a namespace (many-to-many; does not remove existing assignments)",
+    )
+    ans.add_argument("--email", required=True, help="account email")
+    ans.add_argument("--namespace", required=True, metavar="NAME", help="namespace to assign")
+    ans.add_argument(
+        "--role",
+        default="member",
+        choices=["owner", "member"],
+        help="role within the namespace (default: member)",
     )
 
     args = parser.parse_args()

@@ -458,6 +458,9 @@ async def handle_save_workflow(data: Dict[str, Any], websocket: WebSocket) -> Di
         # Stored only for new workflows (save_workflow is a no-op on
         # update for owner_user_id so the column never changes on rename).
         "owner_user_id": _trusted_owner_id(websocket, existing),
+        # Namespace from the caller's active JWT claim — only set on new
+        # workflows (existing workflows keep their original namespace).
+        "namespace": getattr(existing, "namespace", None) or getattr(websocket.state, "active_namespace", "default"),
     }
     if _supports_context_archive_outbox(database):
         save_kwargs["context_id_aliases"] = normalization.aliases
@@ -531,10 +534,15 @@ async def handle_import_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
     orchestrator contract.
     """
     from services.workflow_import import import_workflow
+    from constants import OWNER_PRINCIPAL_ID
 
     workflow_payload = data.get("workflow")
     if not isinstance(workflow_payload, dict):
         return {"success": False, "error": "workflow payload required"}
+
+    state = getattr(websocket, "state", None)
+    active_namespace = getattr(state, "active_namespace", None) or "default"
+    caller = str(getattr(state, "user_id", None) or OWNER_PRINCIPAL_ID)
 
     return await import_workflow(
         workflow_payload,
@@ -542,6 +550,8 @@ async def handle_import_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
         force_credentials=bool(data.get("force_credentials")),
         auth_service=container.auth_service(),
         database=container.database(),
+        namespace=active_namespace,
+        owner_user_id=caller,
     )
 
 
@@ -551,11 +561,15 @@ async def handle_get_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dic
 
     database = container.database()
     workflow_id = str(data["workflow_id"])
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
-    )
+    state = getattr(websocket, "state", None)
+    caller = str(getattr(state, "user_id", None) or OWNER_PRINCIPAL_ID)
+    active_namespace = getattr(state, "active_namespace", None)
     recovered_archives, pending_archives = await _drain_context_archive_outbox(database, workflow_id)
-    workflow = await database.get_workflow(workflow_id, owner_user_id=caller)
+    workflow = await database.get_workflow(
+        workflow_id,
+        owner_user_id=caller,
+        namespace=active_namespace,
+    )
     if workflow:
         workflow_data = workflow.data or {}
         from services.workflow_context_migration import (
@@ -655,10 +669,13 @@ async def handle_get_all_workflows(data: Dict[str, Any], websocket: WebSocket) -
     from constants import OWNER_PRINCIPAL_ID
 
     database = container.database()
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
+    state = getattr(websocket, "state", None)
+    caller = str(getattr(state, "user_id", None) or OWNER_PRINCIPAL_ID)
+    active_namespace = getattr(state, "active_namespace", None)
+    workflows = await database.get_all_workflows(
+        owner_user_id=caller,
+        namespace=active_namespace,
     )
-    workflows = await database.get_all_workflows(owner_user_id=caller)
     return {
         "success": True,
         "workflows": [

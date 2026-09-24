@@ -102,16 +102,16 @@ async def handle_get_stored_api_key(data: Dict[str, Any], websocket: WebSocket) 
     validated/connected badge stays honest.
     """
 
-    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
-
+    _INSTANCE_LEVEL_SUFFIXES = ("_client_id", "_client_secret")
     auth_service = container.auth_service()
     provider = data["provider"].lower()
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or DEFAULT_CREDENTIAL_CUSTOMER_ID
-    )
+    if any(provider.endswith(s) for s in _INSTANCE_LEVEL_SUFFIXES):
+        cred_customer = "owner"
+    else:
+        cred_customer = getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
     session_id = data.get("session_id", "default")
     api_key = await auth_service.get_api_key(
-        provider, session_id, credential_customer_id=caller
+        provider, session_id, credential_customer_id=cred_customer
     )
     if not api_key:
         default = _lookup_credential_default(provider)
@@ -119,7 +119,7 @@ async def handle_get_stored_api_key(data: Dict[str, Any], websocket: WebSocket) 
             return {"provider": provider, "hasKey": False, "apiKey": default}
         return {"provider": provider, "hasKey": False}
     models = await auth_service.get_stored_models(
-        provider, session_id, credential_customer_id=caller
+        provider, session_id, credential_customer_id=cred_customer
     )
     return {
         "provider": provider,
@@ -143,11 +143,14 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
     store = get_idempotency_store("credentials")
     provider = data["provider"].lower()
 
-    # Credential owner is the authenticated WS principal, not the client
-    # payload.  Auth disabled → "owner" (OWNER_PRINCIPAL_ID = DEFAULT_CREDENTIAL_CUSTOMER_ID).
-    credential_customer_id = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or "owner"
-    )
+    # Instance-level OAuth app credentials (client_id / client_secret) are
+    # shared by the whole deployment — always store them under "owner".
+    # All other credentials are namespace-scoped.
+    _INSTANCE_LEVEL_SUFFIXES = ("_client_id", "_client_secret")
+    if any(provider.endswith(s) for s in _INSTANCE_LEVEL_SUFFIXES):
+        credential_customer_id = "owner"
+    else:
+        credential_customer_id = getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
 
     async def _do_save() -> Dict[str, Any]:
         auth_service = container.auth_service()
@@ -171,14 +174,15 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
 @ws_handler("provider")
 async def handle_delete_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
     """Delete stored API key. Idempotent on ``request_id``."""
-    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
     from services.idempotency import get_idempotency_store
 
+    _INSTANCE_LEVEL_SUFFIXES = ("_client_id", "_client_secret")
     store = get_idempotency_store("credentials")
     provider = data["provider"].lower()
-    caller = str(
-        getattr(getattr(websocket, "state", None), "user_id", None) or DEFAULT_CREDENTIAL_CUSTOMER_ID
-    )
+    if any(provider.endswith(s) for s in _INSTANCE_LEVEL_SUFFIXES):
+        caller = "owner"
+    else:
+        caller = getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
 
     async def _do_delete() -> Dict[str, Any]:
         auth_service = container.auth_service()

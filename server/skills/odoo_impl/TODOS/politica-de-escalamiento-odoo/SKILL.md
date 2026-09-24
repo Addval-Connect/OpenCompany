@@ -109,9 +109,24 @@ contrato (`contrato-implementacion-odoo`):
 }
 ```
 
-Un pendiente útil tiene tres cosas: la **pregunta cerrada** (respondible en una línea), las
-**opciones** viables (quien responde no debería tener que investigar), y la **referencia** exacta
-(archivo, fila, columna). Sin las tres, el ciclo de respuesta se duplica.
+Un pendiente útil tiene **cuatro** cosas: la **pregunta cerrada** (respondible en una línea), las
+**opciones** viables (quien responde no debería tener que investigar), la **referencia** exacta
+(archivo, fila, columna), y una **propuesta concreta**. Sin las cuatro, el ciclo de respuesta se
+duplica.
+
+**La propuesta concreta es obligatoria.** El consultor no debería necesitar entender el problema técnico
+para decidir: el pendiente le presenta la situación en términos funcionales y le ofrece la acción
+recomendada con los datos necesarios para aprobarla o ajustarla. Ejemplos de propuesta bien escrita:
+
+> PROPUESTA: El xmlid `adv_ecominera.company_ecominera` no existe. Crearlo apuntando a la empresa principal
+> (id=1). Si hay varias empresas, indicar cuál corresponde.
+
+> PROPUESTA: La cuenta 999999 "Resultado del ejercicio" del CSV colisiona con la que instala l10n_cl (código
+> 891000). Opciones: A) excluir 999999 del CSV (recomendada — l10n_cl ya cubre esa función), B) reclasificar
+> 999999 a tipo "income" antes de cargar.
+
+Una propuesta que requiere que el consultor investigue por su cuenta es un pendiente mal escrito — igual
+que uno sin opciones.
 
 Los tres campos `respuesta` / `respondido_por` / `respondido_en` los llena el Coordinador tras
 consultar al usuario. Un worker nunca los escribe.

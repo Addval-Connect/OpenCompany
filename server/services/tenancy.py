@@ -146,6 +146,27 @@ async def resolve_tenant_namespace(
     return namespace
 
 
+def resolve_namespace_from_state(
+    request_state: Any,
+    *,
+    settings: Any,
+) -> str:
+    """Read the active namespace from request.state (decoded from JWT).
+
+    Hot-path resolver: the auth middleware already verified the JWT and
+    stamped ``request.state.active_namespace``, so no DB round-trip here.
+    Falls back to the settings default when the claim is absent (e.g. tokens
+    issued before this feature was deployed).
+    """
+    default_ns: str = getattr(settings, "temporal_namespace", "default")
+    if not getattr(settings, "multi_tenant_namespaces", False):
+        return default_ns
+    ns = getattr(request_state, "active_namespace", None)
+    if not ns:
+        return default_ns
+    return ns
+
+
 __all__ = [
     "NAMESPACE_PATTERN",
     "RESERVED_NAMESPACES",
@@ -154,6 +175,7 @@ __all__ = [
     "STATUS_READY",
     "TENANT_STATUSES",
     "is_valid_namespace",
+    "resolve_namespace_from_state",
     "resolve_tenant_namespace",
     "validate_namespace",
 ]

@@ -41,9 +41,21 @@ def get_redirect_uri(connection, provider: str) -> str:
         provider: Lowercase plugin id (``"google"``, ``"twitter"``, ...).
 
     Returns:
-        Full redirect URI, e.g. ``http://localhost:5678/api/google/callback``.
+        Full redirect URI, e.g. ``https://opencompany.example.com/api/google/callback``.
         Falls back to ``/api/<provider>/callback`` if the plugin hasn't
         registered an explicit path (the default for the existing 8+ plugins).
+
+    When ``PUBLIC_BASE_URL`` is set in the environment it overrides the
+    auto-detected base so that callbacks work correctly behind a reverse proxy
+    (nginx → localhost:5678) where the connection appears to come from
+    localhost rather than the public domain.
     """
+    from core.container import container
     path = get_oauth_callback_path(provider)
+    try:
+        settings = container.settings()
+        if getattr(settings, "public_base_url", None):
+            return settings.public_base_url.rstrip("/") + path
+    except Exception:  # noqa: BLE001 — container not wired in tests
+        pass
     return get_base_url(connection) + path

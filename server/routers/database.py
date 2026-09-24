@@ -135,7 +135,8 @@ async def get_all_workflows(request: Request, database: Database = Depends(lambd
             current["examples_loaded"] = True
             await database.save_user_settings(current, user_id)
 
-        workflows = await database.get_all_workflows(owner_user_id=owner)
+        active_namespace = getattr(request.state, "active_namespace", None)
+        workflows = await database.get_all_workflows(owner_user_id=owner, namespace=active_namespace)
         return {
             "success": True,
             "workflows": [
@@ -161,7 +162,10 @@ async def get_workflow(workflow_id: str, request: Request, database: Database = 
     try:
         from types import SimpleNamespace
 
-        ws_shim = SimpleNamespace(state=SimpleNamespace(user_id=_request_owner(request)))
+        ws_shim = SimpleNamespace(state=SimpleNamespace(
+            user_id=_request_owner(request),
+            active_namespace=getattr(request.state, "active_namespace", None),
+        ))
         result = await handle_get_workflow(
             {"workflow_id": workflow_id},
             websocket=ws_shim,  # type: ignore[arg-type]

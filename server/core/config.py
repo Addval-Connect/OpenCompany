@@ -349,6 +349,12 @@ class Settings(BaseSettings):
         gt=0,
     )
 
+    # Public base URL for OAuth callbacks — set this when the server runs
+    # behind a reverse proxy that changes the visible host/scheme.
+    # Example: PUBLIC_BASE_URL=https://opencompany.addvalconnect.com
+    # When not set, the URL is derived from the incoming connection.
+    public_base_url: Optional[str] = Field(default=None, env="PUBLIC_BASE_URL")
+
     # API Keys (all optional, injected at runtime)
     google_maps_api_key: Optional[str] = Field(default=None, env="GOOGLE_MAPS_API_KEY")
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")

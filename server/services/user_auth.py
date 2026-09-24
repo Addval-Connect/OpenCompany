@@ -404,7 +404,7 @@ class UserAuthService:
         """
         logger.debug("User logged out")
 
-    def create_access_token(self, user: User) -> str:
+    def create_access_token(self, user: User, active_namespace: str = "default") -> str:
         """Create JWT access token for user.
 
         ``jti`` / ``nbf`` are additive -- unknown claims are ignored on
@@ -412,6 +412,9 @@ class UserAuthService:
         and ``aud`` are deliberately absent: enforcing them would invalidate
         every token currently held by a browser, for negligible benefit in a
         single-audience app with a per-deployment secret.
+
+        ``active_namespace`` is stamped into the JWT so the auth middleware can
+        read it without a DB round-trip on every request.
         """
         now = datetime.now(timezone.utc)
         expire = now + timedelta(minutes=self.settings.jwt_expire_minutes)
@@ -420,12 +423,36 @@ class UserAuthService:
             "email": user.email,
             "display_name": user.display_name,
             "is_owner": user.is_owner,
+            "active_namespace": active_namespace,
             "exp": expire,
             "iat": now,
             "nbf": now,
             "jti": uuid.uuid4().hex,
         }
         return jwt.encode(payload, self.settings.jwt_secret_key, algorithm=self._algorithm)
+
+    async def switch_namespace(
+        self,
+        user_id: str,
+        namespace: str,
+        database: Any,
+    ) -> Optional[str]:
+        """Issue a new JWT with active_namespace = namespace.
+
+        Returns the new token string, or None when the user is not assigned
+        to that namespace (or the namespace is not ready).
+        """
+        if not await database.is_user_in_namespace(user_id, namespace):
+            return None
+        await database.set_active_namespace_for_user(user_id, namespace)
+        try:
+            numeric_id = int(user_id)
+        except (ValueError, TypeError):
+            return None
+        user = await self.get_user_by_id(numeric_id)
+        if user is None:
+            return None
+        return self.create_access_token(user, active_namespace=namespace)
 
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """

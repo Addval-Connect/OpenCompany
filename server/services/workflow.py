@@ -192,6 +192,7 @@ class WorkflowService:
         outputs: Dict[str, Any] = None,
         extras: Optional[Dict[str, Any]] = None,
         user_id: str = "owner",
+        credential_customer_id: str = "default",
     ) -> Dict[str, Any]:
         """Execute a single workflow node.
 
@@ -199,6 +200,9 @@ class WorkflowService:
         (notably the F4.A per-type activity wrapper) can plumb context
         fields like ``auto_rebind_tools`` through without adding a
         dedicated parameter per flag.
+        ``credential_customer_id`` scopes API key and OAuth token lookups
+        to the active namespace. Defaults to "default" (= no prefix, same
+        as the legacy "owner" slot) for backward compatibility.
         """
         # Resolve slug from DB if caller passed only workflow_id.
         if workflow_slug is None:
@@ -212,6 +216,7 @@ class WorkflowService:
             "workflow_id": workflow_id,  # UUID — stable system identity, FK target
             "workflow_slug": workflow_slug,  # Human-readable, mutable on rename
             "user_id": str(user_id or "owner"),
+            "credential_customer_id": credential_customer_id or "default",
             "workspace_dir": workspace_dir,  # Per-workflow filesystem for nodes and agents
             "get_output_fn": self.get_node_output,
             "outputs": outputs or {},  # Upstream node outputs for data flow (e.g., taskTrigger -> chatAgent)

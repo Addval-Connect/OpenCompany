@@ -102,6 +102,11 @@ class Workflow(SQLModel, table=True):
     # backfilled by _migrate_workflow_owner(); new rows receive the
     # save_workflow caller's principal.  Never empty after the migration.
     owner_user_id: str = Field(default="owner", max_length=255, index=True)
+    # Namespace this workflow belongs to. Existing rows default to "default"
+    # (backfilled by _migrate_workflow_namespace). New workflows inherit the
+    # active_namespace from the caller's JWT so switching namespaces shows
+    # only that namespace's workflows.
+    namespace: str = Field(default="default", max_length=255, index=True)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
@@ -326,6 +331,7 @@ class UserSettings(SQLModel, table=True):
     auto_rebind_tools_after_canvas_change: bool = Field(
         default=True
     )  # After agentBuilder mutates the canvas mid-run, refresh the LLM's bound tools so the new wiring is callable in the same execution
+    active_namespace: str = Field(default="default", max_length=255)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
@@ -583,6 +589,46 @@ class TenantNamespace(SQLModel, table=True):
     status: str = Field(default="provisioning", max_length=32)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class Namespace(SQLModel, table=True):
+    """Registry of all Temporal namespaces managed by this instance.
+
+    This is the authoritative list of provisioned namespaces. The
+    ``TenantNamespace`` table (1:1 user→namespace) is kept for backward
+    compatibility; ``UserNamespace`` is the new many-to-many join.
+    """
+
+    __tablename__ = "namespaces"
+
+    namespace: str = Field(primary_key=True, max_length=255)
+    display_name: str = Field(default="", max_length=255)
+    # provisioning | ready | disabled
+    status: str = Field(default="provisioning", max_length=32)
+    temporal_provisioned: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UserNamespace(SQLModel, table=True):
+    """Many-to-many: which namespaces a user can access.
+
+    A user may hold rows in multiple namespaces. ``active_namespace`` in
+    ``UserSettings`` (and the JWT ``active_namespace`` claim) determines
+    which row is active for the current session.
+    """
+
+    __tablename__ = "user_namespaces"
+    __table_args__ = (
+        UniqueConstraint("user_id", "namespace", name="uq_user_namespace"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True, max_length=255)
+    namespace: str = Field(index=True, max_length=255)
+    # owner | member
+    role: str = Field(default="member", max_length=32)
+    assigned_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowRunDataScope(SQLModel, table=True):

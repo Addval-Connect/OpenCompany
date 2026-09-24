@@ -12,7 +12,9 @@ import {
   X,
   Volume2,
   ListChecks,
+  Layers,
 } from 'lucide-react';
+import { NamespaceSwitcher } from '@/components/ui/NamespaceSwitcher';
 import { useAppStore } from '../../store/useAppStore';
 
 import { Button } from '@/components/ui/button';
@@ -404,6 +406,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 onCheckedChange={setSoundEnabled}
               />
             </Row>
+          </Section>
+
+          {/* Namespace */}
+          <Section title="Workspace Namespace" Icon={Layers} tone="workflow">
+            <NamespaceSwitcher />
           </Section>
 
           {/* Help */}
