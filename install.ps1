@@ -29,7 +29,7 @@ function Error-Exit { Write-Color "[ERROR] $args" "Red"; exit 1 }
 Write-Host ""
 Write-Color "  OpenCompany" "Cyan"
 Write-Host ""
-Write-Host "Open-source workflow automation with AI agents"
+Write-Host "Self-improving AI employees, running on your own computer"
 Write-Host ""
 
 # Check if command exists

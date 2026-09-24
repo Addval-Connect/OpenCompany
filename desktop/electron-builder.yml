@@ -95,7 +95,7 @@ linux:
   artifactName: ${productName}-linux-${arch}.${ext}
   category: Office
   maintainer: OpenCompany contributors
-  synopsis: Agent-first workflow automation, running locally
+  synopsis: Self-improving AI employees, running on your own computer
   description: OpenCompany desktop app. Bundles uv, Python and bun; provisions the backend on first launch.
 deb:
   depends:

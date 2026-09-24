@@ -2,7 +2,7 @@
   "name": "opencompany-desktop",
   "version": "0.2.1",
   "private": true,
-  "description": "OpenCompany desktop shell: bundles uv, Python and Node, provisions the backend venv on first run, and hosts the app in a native window.",
+  "description": "OpenCompany desktop shell: bundles uv, Python and bun, provisions the backend venv on first run, and hosts the app in a native window.",
   "license": "MIT",
   "author": "OpenCompany contributors",
   "homepage": "https://opencompany.sh",

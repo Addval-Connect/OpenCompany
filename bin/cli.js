@@ -37,7 +37,7 @@ const SUBCOMMAND_VERBS = new Set(['daemon', 'deploy', 'docs', 'version']);
 
 function printHelp() {
   console.log(`
-OpenCompany - Workflow Automation Platform
+OpenCompany - Self-improving AI employees
 
 Usage: company <command> [flags]
 

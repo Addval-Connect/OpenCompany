@@ -35,7 +35,7 @@ error_exit() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 echo ""
 echo -e "${CYAN}  OpenCompany${NC}"
 echo ""
-echo "Open-source workflow automation with AI agents"
+echo "Self-improving AI employees, running on your own computer"
 echo ""
 
 # Detect OS
