@@ -570,6 +570,52 @@ async def test_ai_service_agent_entrypoints_use_native_unifier(method_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["execute_agent", "execute_chat_agent"])
+async def test_an_unsaved_named_endpoint_is_reported_as_not_configured(method_name):
+    # No key was injected because the endpoint's rows are gone; the agent
+    # must say so, not "API key is required", and send nothing.
+    from services.ai import AIService
+
+    unifier = _FakeUnifier([])
+    database = _Database()
+    service = AIService(
+        auth_service=_Auth(),
+        database=database,
+        cache=None,
+        settings=object(),
+        chat_unifier=unifier,
+    )
+
+    with pytest.raises(NodeUserError, match="endpoint 'gone' is not configured"):
+        await getattr(service, method_name)(
+            node_id="agent-1",
+            parameters={"provider": "openai_compatible:gone", "model": "qwen3", "prompt": "hello"},
+            database=database,
+        )
+
+    assert unifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_chat_model_with_no_endpoint_chosen_asks_for_one():
+    from services.ai import AIService
+
+    unifier = _FakeUnifier([])
+    service = AIService(
+        auth_service=_Auth(),
+        database=_Database(),
+        cache=None,
+        settings=object(),
+        chat_unifier=unifier,
+    )
+
+    with pytest.raises(NodeUserError, match="Choose an OpenAI-compatible endpoint"):
+        await service.execute_chat("chat-1", "openaiCompatibleChatModel", {"prompt": "hi", "model": "qwen3"})
+
+    assert unifier.calls == []
+
+
+@pytest.mark.asyncio
 async def test_chat_agent_connected_tool_uses_agent_tool_spec_schema():
     from services.ai import AIService
 

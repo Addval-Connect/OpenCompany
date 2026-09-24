@@ -22,8 +22,8 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from core.encryption import fingerprint_credential
 from core.logging import get_logger
-from services.llm.config import ENDPOINT_PROVIDER, resolve_credential, split_provider_ref
-from services.llm.endpoints import base_url_key, redact_url
+from services.llm.config import resolve_credential, split_provider_ref
+from services.llm.endpoints import base_url_key, redact_url, unconfigured_endpoint_message
 from services.llm.protocol import (
     LLMError,
     LLMErrorCategory,
@@ -305,14 +305,11 @@ class ChatUnifier:
         # endpoint reads its own URL while sharing one registration.
         ref = provider_ref or spec.name
         proxy_url = await self._auth.get_api_key(base_url_key(ref))
-        if spec.name == ENDPOINT_PROVIDER and not proxy_url:
+        unconfigured = unconfigured_endpoint_message(ref)
+        if unconfigured and not proxy_url:
             # A named endpoint exists only as its credential rows. Without
             # the URL row the SDK would default to api.openai.com.
-            slug = split_provider_ref(ref)[1] or ref
-            raise NodeUserError(
-                f"The OpenAI-compatible endpoint '{slug}' is not configured. "
-                "Add it under Credentials."
-            )
+            raise NodeUserError(unconfigured)
         factory_kwargs = {
             "api_key": api_key,
             "proxy_url": proxy_url,

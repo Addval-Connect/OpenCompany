@@ -58,6 +58,22 @@ def base_url_key(provider_ref: str) -> str:
     return f"{provider_ref}{BASE_URL_SUFFIX}"
 
 
+def unconfigured_endpoint_message(provider_ref: str) -> Optional[str]:
+    """What to tell the user when ``provider_ref`` names a named endpoint with no rows.
+
+    ``None`` for every other provider. A named endpoint exists only as its
+    credential rows, so a missing row means the endpoint was never saved or
+    was removed, not that a key is missing. A bare ``openai_compatible``
+    means no endpoint was chosen at all.
+    """
+    name, slug = split_provider_ref(provider_ref)
+    if name != ENDPOINT_PROVIDER:
+        return None
+    if not slug:
+        return "Choose an OpenAI-compatible endpoint. Save one under Credentials first if there is none."
+    return f"The OpenAI-compatible endpoint '{slug}' is not configured. Add it under Credentials."
+
+
 def redact_url(url: Any) -> str:
     """Render ``url`` for a log line or a user-facing message.
 
@@ -230,4 +246,5 @@ __all__ = [
     "list_endpoints",
     "redact_url",
     "resolve_base_url",
+    "unconfigured_endpoint_message",
 ]

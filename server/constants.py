@@ -470,7 +470,8 @@ def detect_ai_provider(node_type: str, parameters: dict = None) -> str:
         return "gemini"
     # A named endpoint: the node's ``endpoint`` parameter holds its
     # provider reference, ``openai_compatible:<slug>``. Without one the
-    # bare id reaches the unifier, which reports "not configured".
+    # bare id comes back; it holds no key, so the run stops before any
+    # request and asks the user to choose an endpoint.
     if "openaicompatible" in nt:
         from services.llm.config import ENDPOINT_PROVIDER
 

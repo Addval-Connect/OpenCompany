@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from services.llm.endpoints import redact_url, resolve_base_url
+from services.llm.endpoints import redact_url, resolve_base_url, unconfigured_endpoint_message
 
 MODELS = {
     "object": "list",
@@ -133,3 +133,16 @@ async def test_the_probe_sends_the_resolved_key_as_a_bearer_token():
 )
 def test_redact_url_drops_what_can_carry_a_credential(url, expected):
     assert redact_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        ("openai_compatible:home", "The OpenAI-compatible endpoint 'home' is not configured. Add it under Credentials."),
+        ("openai_compatible", "Choose an OpenAI-compatible endpoint. Save one under Credentials first if there is none."),
+        ("openai", None),
+        ("ollama", None),
+    ],
+)
+def test_an_unsaved_endpoint_is_named_as_such(provider, expected):
+    assert unconfigured_endpoint_message(provider) == expected
