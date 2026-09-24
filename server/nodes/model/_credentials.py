@@ -309,3 +309,9 @@ class OpenAICompatibleCredential(_LLMApiKey):
             for e in await list_endpoints(get_auth_service())
         ]
         return {"stored": bool(endpoints), "endpoints": endpoints}
+
+    @classmethod
+    async def is_configured(cls, auth_service: Any, parameters: Dict[str, Any]) -> bool:
+        """The endpoint the node names is saved. Nothing is stored under the bare id."""
+        ref = str(parameters.get("endpoint") or "")
+        return bool(ref) and bool(await auth_service.has_valid_key(ref))

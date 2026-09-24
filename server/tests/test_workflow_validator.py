@@ -165,6 +165,44 @@ async def test_missing_credential_is_warning(monkeypatch):
     assert issue["node_id"] == "n1"
 
 
+class _NamedRowsCredential:
+    """A credential holding several named rows: it checks the one the node names."""
+
+    id = "fake_rows"
+    auth = "api_key"
+
+    @classmethod
+    async def is_configured(cls, auth_service, parameters):
+        return parameters.get("row") == "fake_rows:saved"
+
+
+class _NamedRowsNodeClass:
+    type = "fakeRowsNode"
+
+    class Params(BaseModel):
+        row: str = ""
+
+    credentials = (_NamedRowsCredential,)
+
+
+async def test_a_credential_can_check_the_row_the_node_names(monkeypatch):
+    from services.workflow_validator import validate_workflow
+
+    _patch_registry(monkeypatch, {"fakeRowsNode": _NamedRowsNodeClass})
+    _patch_auth(monkeypatch, False)  # nothing stored under the bare id
+
+    report = await validate_workflow(
+        nodes=[
+            {"id": "saved", "type": "fakeRowsNode", "data": {"parameters": {"row": "fake_rows:saved"}}},
+            {"id": "gone", "type": "fakeRowsNode", "data": {"parameters": {"row": "fake_rows:gone"}}},
+        ],
+        edges=[],
+    )
+
+    missing = [iss["node_id"] for iss in report["warnings"] if iss["code"] == "MISSING_CREDENTIAL"]
+    assert missing == ["gone"]
+
+
 async def test_cycle_is_error(monkeypatch):
     from services.workflow_validator import validate_workflow
 

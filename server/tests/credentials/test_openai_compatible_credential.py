@@ -161,6 +161,34 @@ class TestDelete:
         broadcaster.broadcast_credential_event.assert_awaited_once()
 
 
+class TestLint:
+    """MISSING_CREDENTIAL asks about the endpoint the node names, not the bare id."""
+
+    async def test_a_node_is_configured_when_its_endpoint_is_saved(self, auth):
+        await _store_endpoint(auth, REF, "http://host:8000/v1", "sk-1", "Home vLLM")
+
+        assert await OpenAICompatibleCredential.is_configured(auth, {"endpoint": REF}) is True
+        assert await OpenAICompatibleCredential.is_configured(auth, {"endpoint": "openai_compatible:gone"}) is False
+        assert await OpenAICompatibleCredential.is_configured(auth, {}) is False
+
+    async def test_the_validator_warns_only_for_an_unsaved_endpoint(self, auth):
+        from services.workflow_validator import validate_workflow
+
+        await _store_endpoint(auth, REF, "http://host:8000/v1", "sk-1", "Home vLLM")
+
+        async def missing(endpoint: str) -> list:
+            report = await validate_workflow(
+                nodes=[{"id": "n1", "type": "openaiCompatibleChatModel", "data": {}}],
+                edges=[],
+                parameters_by_id={"n1": {"endpoint": endpoint, "prompt": "hi"}},
+                auth_service=auth,
+            )
+            return [w for w in report["warnings"] if w["code"] == "MISSING_CREDENTIAL"]
+
+        assert await missing(REF) == []
+        assert [w["provider_id"] for w in await missing("openai_compatible:gone")] == ["openai_compatible"]
+
+
 def test_the_credential_is_registered_for_dispatch():
     from services.plugin.credential import CREDENTIAL_REGISTRY
 

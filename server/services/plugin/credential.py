@@ -353,6 +353,17 @@ class Credential:
         """
         return None
 
+    @classmethod
+    async def is_configured(cls, auth_service: Any, parameters: Dict[str, Any]) -> bool:
+        """Whether a node with these ``parameters`` has what this credential needs.
+
+        Read by the workflow validator's MISSING_CREDENTIAL check. The
+        default asks whether anything is stored under ``cls.id``. A
+        credential holding several named rows overrides it to check the
+        row the node's parameters name.
+        """
+        return bool(await auth_service.has_valid_key(cls.id))
+
 
 class OAuth2Credential(Credential):
     """OAuth 2.0 with refresh-token support.
