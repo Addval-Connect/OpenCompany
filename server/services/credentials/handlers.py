@@ -160,9 +160,18 @@ async def handle_delete_api_key(data: Dict[str, Any], websocket: WebSocket) -> D
     provider = data["provider"].lower()
 
     async def _do_delete() -> Dict[str, Any]:
+        from services.llm.endpoints import base_url_key
+        from services.model_registry import get_model_registry
+
         auth_service = container.auth_service()
         broadcaster = get_status_broadcaster()
-        await auth_service.remove_api_key(provider, data.get("session_id", "default"))
+        session_id = data.get("session_id", "default")
+        await auth_service.remove_api_key(provider, session_id)
+        # A provider's Base URL row and its registered models belong to it:
+        # deleting a named endpoint (or a local server's key) must leave
+        # neither behind. Both are no-ops for a provider that has none.
+        await auth_service.remove_api_key(base_url_key(provider), session_id)
+        get_model_registry().forget_local_models(provider)
         await broadcaster.update_api_key_status(
             provider,
             valid=False,

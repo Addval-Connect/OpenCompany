@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from core.encryption import fingerprint_credential
 from core.logging import get_logger
+from services.llm.config import ENDPOINT_PROVIDER, resolve_credential, split_provider_ref
+from services.llm.endpoints import base_url_key, redact_url
 from services.llm.protocol import (
     LLMError,
     LLMErrorCategory,
@@ -99,12 +101,16 @@ class ChatUnifier:
         exception flows through unchanged so genuine server bugs keep
         their full traceback via ``BaseNode.execute()`` 's generic
         ``except Exception``.
+
+        ``provider`` is a provider reference: a registered id, or a named
+        endpoint ``openai_compatible:<slug>`` (RFC-0003 D13).
         """
-        spec = get_provider(provider)
+        spec = get_provider(split_provider_ref(provider)[0])
+        api_key = self._resolve_credential(provider, api_key)
         entry: Optional[_ClientEntry] = None
         try:
             entry = await self._acquire_client(
-                spec, api_key, sdk_max_retries=sdk_max_retries
+                spec, api_key, provider_ref=provider, sdk_max_retries=sdk_max_retries
             )
             return await entry.client.chat(
                 messages,
@@ -115,19 +121,18 @@ class ChatUnifier:
                 tools=tools,
                 context_management=context_management,
             )
+        except LLMError as error:
+            # Raised by provider logic rather than the SDK, e.g. a 2xx that
+            # carried an error body instead of a completion.
+            if not translate_errors:
+                raise
+            self._log_failure("LLM provider request failed", error, entry)
+            raise NodeUserError(error.user_message) from error
         except spec.sdk_exception_types as e:
             error = LLMError.from_exception(provider, e)
             if not translate_errors:
                 raise error from e
-            logger.warning(
-                "LLM provider request failed",
-                provider=error.provider,
-                category=error.category.value,
-                retryable=error.retryable,
-                status_code=error.status_code,
-                provider_code=error.provider_code,
-                request_id=error.request_id,
-            )
+            self._log_failure("LLM provider request failed", error, entry)
             raise NodeUserError(error.user_message) from error
         except (ValueError, TypeError, OSError) as e:
             # Only normalize generic configuration/transport failures raised
@@ -168,24 +173,20 @@ class ChatUnifier:
         uniformly. An absent key is a no-op — every provider gets the
         filter for free without per-provider Python.
         """
-        spec = get_provider(provider)
+        spec = get_provider(split_provider_ref(provider)[0])
+        api_key = self._resolve_credential(provider, api_key)
         entry: Optional[_ClientEntry] = None
         try:
             entry = await self._acquire_client(
-                spec, api_key, sdk_max_retries=2
+                spec, api_key, provider_ref=provider, sdk_max_retries=2
             )
             models = await entry.client.fetch_models(api_key)
+        except LLMError as error:
+            self._log_failure("LLM model-list request failed", error, entry)
+            raise NodeUserError(error.user_message) from error
         except spec.sdk_exception_types as e:
             error = LLMError.from_exception(provider, e)
-            logger.warning(
-                "LLM model-list request failed",
-                provider=error.provider,
-                category=error.category.value,
-                retryable=error.retryable,
-                status_code=error.status_code,
-                provider_code=error.provider_code,
-                request_id=error.request_id,
-            )
+            self._log_failure("LLM model-list request failed", error, entry)
             raise NodeUserError(error.user_message) from error
         except (ValueError, TypeError, OSError) as e:
             if entry is not None:
@@ -224,7 +225,7 @@ class ChatUnifier:
         ``services/llm/factory.py`` — the unifier IS the routing layer,
         so registry membership is the source of truth.
         """
-        return has_provider(provider)
+        return has_provider(split_provider_ref(provider)[0])
 
     # ------------------------------------------------------------------
     # internals
@@ -253,17 +254,19 @@ class ChatUnifier:
         api_key: str,
         *,
         sdk_max_retries: int,
+        provider_ref: Optional[str] = None,
     ) -> LLMProvider:
         """Instantiate the provider implementation.
 
         Pulls the user-configured ``{provider}_proxy`` URL from the
-        encrypted credentials store (matches the legacy ai.py behavior)
-        and merges it with the provider's static ``client_kwargs`` (used
-        by OpenAI-compatible providers to pin their ``base_url``).
+        encrypted credentials store and merges it with the provider's
+        static ``client_kwargs`` (used by OpenAI-compatible providers to
+        pin their ``base_url``).
         """
         entry = await self._get_or_create_entry(
             spec,
             api_key,
+            provider_ref=provider_ref,
             sdk_max_retries=sdk_max_retries,
             acquire=False,
         )
@@ -275,12 +278,14 @@ class ChatUnifier:
         api_key: str,
         *,
         sdk_max_retries: int,
+        provider_ref: Optional[str] = None,
     ) -> _ClientEntry:
         """Return an entry leased until ``_release_client`` is called."""
 
         return await self._get_or_create_entry(
             spec,
             api_key,
+            provider_ref=provider_ref,
             sdk_max_retries=sdk_max_retries,
             acquire=True,
         )
@@ -292,8 +297,20 @@ class ChatUnifier:
         *,
         sdk_max_retries: int,
         acquire: bool,
+        provider_ref: Optional[str] = None,
     ) -> _ClientEntry:
-        proxy_url = await self._auth.get_api_key(f"{spec.name}_proxy")
+        # The base-URL row is keyed by the full reference, so each named
+        # endpoint reads its own URL while sharing one registration.
+        ref = provider_ref or spec.name
+        proxy_url = await self._auth.get_api_key(base_url_key(ref))
+        if spec.name == ENDPOINT_PROVIDER and not proxy_url:
+            # A named endpoint exists only as its credential rows. Without
+            # the URL row the SDK would default to api.openai.com.
+            slug = split_provider_ref(ref)[1] or ref
+            raise NodeUserError(
+                f"The OpenAI-compatible endpoint '{slug}' is not configured. "
+                "Add it under Credentials."
+            )
         factory_kwargs = {
             "api_key": api_key,
             "proxy_url": proxy_url,
@@ -392,7 +409,44 @@ class ChatUnifier:
         """Read ``providers.<name>.incompatible_models`` from llm_defaults.json."""
         raw = (
             self._defaults.get("providers", {})
-            .get(provider, {})
+            .get(split_provider_ref(provider)[0], {})
             .get("incompatible_models")
         )
         return set(raw or ())
+
+    @staticmethod
+    def _resolve_credential(provider: str, api_key: Optional[str]) -> str:
+        """The key to send, or a user-facing error before any client exists.
+
+        An empty key must never reach an SDK: the OpenAI SDK would read
+        ``OPENAI_API_KEY`` and send it to the configured base URL
+        (RFC-0003 D7). Keyless local servers get their declared placeholder.
+        """
+        try:
+            return resolve_credential(provider, api_key)
+        except ValueError:
+            raise NodeUserError(
+                f"No API key is configured for {provider!r}. Add one under Credentials."
+            ) from None
+
+    @staticmethod
+    def _log_failure(event: str, error: LLMError, entry: Optional[_ClientEntry]) -> None:
+        """One WARN line per provider failure, naming where the call went.
+
+        ``url`` is redacted (no userinfo, query or fragment) and
+        ``url_source`` says which setting produced it, so a routing mistake
+        is distinguishable from a model failure (RFC-0003 D10). The key is
+        never logged.
+        """
+        client = entry.client if entry is not None else None
+        logger.warning(
+            event,
+            provider=error.provider,
+            category=error.category.value,
+            retryable=error.retryable,
+            status_code=error.status_code,
+            provider_code=error.provider_code,
+            request_id=error.request_id,
+            url=redact_url(getattr(client, "endpoint_url", None)),
+            url_source=getattr(client, "url_source", None),
+        )

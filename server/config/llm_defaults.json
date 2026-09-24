@@ -176,6 +176,7 @@
       "default_model": "anthropic/claude-sonnet-5",
       "popular_models": ["anthropic/claude-sonnet-5", "anthropic/claude-opus-5", "openai/gpt-5.6-terra", "openai/gpt-5.6-sol", "openai/gpt-6-astra", "google/gemini-3.8-flash", "google/gemini-3.5-flash", "deepseek/deepseek-v4.1-flash", "moonshotai/kimi-k3", "x-ai/grok-4.20"],
       "detection_patterns": ["openrouter"],
+      "open_world_models": true,
       "base_url": "https://openrouter.ai/api/v1",
       "models_endpoint": "https://openrouter.ai/api/v1/models",
       "api_key_param": "api_key",
@@ -195,6 +196,8 @@
       "popular_models": [],
       "_popular_note": "Empty per the 1M-context policy — no Groq-served model reaches 1M (all top out at 131072). Models remain reachable via live fetch_models.",
       "detection_patterns": ["groq"],
+      "open_world_models": true,
+      "_open_world_note": "Groq serves owner-qualified ids (openai/gpt-oss-120b) that contain no 'groq', so a pattern check would swap a valid selection for default_model.",
       "base_url": "https://api.groq.com/openai/v1",
       "models_endpoint": "https://api.groq.com/openai/v1/models",
       "api_key_param": "api_key",
@@ -400,6 +403,11 @@
       "display_name": "Ollama",
       "_description": "Local Ollama server (OpenAI-compatible /v1). No `default_model` because the dropdown should reflect the user's actually-pulled models — fetch_models hits the user's saved {provider}_proxy URL and returns whatever Ollama reports; when the server is offline we want an empty list (a 'start your server' cue), not a placeholder name the user almost certainly doesn't have.",
       "detection_patterns": ["ollama"],
+      "open_world_models": true,
+      "auth": {
+        "placeholder_key": "ollama",
+        "_note": "Ollama's OpenAI-compatibility docs (docs.ollama.com/openai): api_key='ollama', 'required but ignored'. Read by services/llm/config.py::resolve_credential."
+      },
       "base_url": "http://localhost:11434/v1",
       "models_endpoint": "http://localhost:11434/v1/models",
       "api_key_param": "api_key",
@@ -413,12 +421,32 @@
       "display_name": "LM Studio",
       "_description": "Local LM Studio server (pure OpenAI-compatible). Same no-default-model rule as ollama — the dropdown reflects what the user has loaded in LM Studio, not a fake placeholder.",
       "detection_patterns": ["lmstudio", "lm_studio", "lm-studio"],
+      "open_world_models": true,
+      "auth": {
+        "placeholder_key": "lm-studio",
+        "_note": "LM Studio's OpenAI-compatibility docs use api_key='lm-studio'; the server needs no key unless API tokens are enabled. Read by services/llm/config.py::resolve_credential."
+      },
       "base_url": "http://localhost:1234/v1",
       "models_endpoint": "http://localhost:1234/v1/models",
       "api_key_param": "api_key",
       "max_tokens_param": "max_tokens",
       "max_output_tokens": {"_default": 4096},
       "context_length": {"_default": 32768},
+      "temperature_range": [0.0, 2.0]
+    },
+
+    "openai_compatible": {
+      "display_name": "OpenAI-compatible",
+      "_description": "User-named OpenAI-compatible endpoints: llama.cpp, vLLM, a LiteLLM proxy, a second Ollama host, and so on. No base_url and no default_model: each endpoint is its own provider reference, openai_compatible:<slug>, whose resolved base URL and model list are stored on its credential rows when it is saved (RFC-0003 D13). This block supplies the fallbacks every endpoint shares.",
+      "detection_patterns": [],
+      "open_world_models": true,
+      "auth": {
+        "placeholder_key": "sk-no-key-required",
+        "_note": "Sent when an endpoint has no key: the value llama.cpp's server README uses in its OpenAI client example. Servers without auth ignore it, and the OpenAI SDK refuses an empty key."
+      },
+      "max_output_tokens": {"_default": 2048},
+      "context_length": {"_default": 8192},
+      "_limits_note": "Deliberately conservative. An overestimate overflows the server (or, on Ollama, silently truncates the prompt); an underestimate only compacts early. Saving an endpoint replaces these per model when the server reports its real context (llama.cpp /props, vLLM max_model_len) or the LiteLLM table knows the model id.",
       "temperature_range": [0.0, 2.0]
     }
   }

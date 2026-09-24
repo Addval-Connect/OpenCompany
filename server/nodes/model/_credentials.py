@@ -8,13 +8,12 @@ The native SDK client pulls the key directly from
 :mod:`services.auth`; this class is the Credentials-modal + discovery
 manifest, not the runtime client.
 
-Local servers (Ollama, LM Studio) follow the same shape as the cloud
-credentials but their api_key is optional — many users run them on
-localhost with no auth. The existing ``{provider}_proxy`` mechanism
-in :func:`services.ai.AIService.create_model` already handles the
-"override base_url + use placeholder api_key" path; the credential
-class only needs to return a placeholder when nothing is stored so
-the central "API key is required" check in ``execute_chat`` passes.
+Servers the user runs (Ollama, LM Studio) store their Base URL under
+``{provider}_proxy`` and need no key unless the server enforces one;
+without one, the placeholder the vendor documents is sent
+(``auth.placeholder_key`` in llm_defaults.json, resolved by
+:func:`services.llm.config.resolve_credential`). Both save through one
+path, ``_local_validator.save_llm_server`` (RFC-0003 §6).
 """
 
 from __future__ import annotations
@@ -161,32 +160,26 @@ class _LocalLLM(_LLMApiKey):
     """Base for local-server credentials (Ollama, LM Studio).
 
     Same shape as :class:`_LLMApiKey`, but ``resolve()`` returns the
-    documented Ollama placeholder when no key is stored instead of
-    raising. The user's custom server address rides on the existing
-    ``{id}_proxy`` credential — :func:`services.ai.AIService.create_model`
-    already reads it and OpenAIProvider already overrides ``base_url``
-    + forces ``api_key="ollama"``. Nothing else to wire.
+    vendor's documented placeholder when no key is stored instead of
+    raising. The server address rides on the ``{id}_proxy`` row, which
+    the unifier reads before building the client.
     """
 
     @classmethod
     async def resolve(cls, *, user_id: str = "owner") -> Dict[str, Any]:
+        from services.llm.config import resolve_credential
         from services.plugin.deps import get_auth_service
 
         api_key = await get_auth_service().get_api_key(cls.id)
-        return {"api_key": api_key or "ollama"}
+        return {"api_key": resolve_credential(cls.id, api_key)}
 
     @classmethod
     async def validate(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Probe the user's local server via the official SDK.
+        """Root the URL, list the loaded models, and save both rows.
 
-        Overrides the base ``Credential.validate`` because local-LLM
-        side-effect ordering genuinely differs from the cloud case:
-        the user's URL is persisted under ``{cls.id}_proxy`` BEFORE
-        the probe runs, the placeholder ``api_key="ollama"`` is
-        stored under ``cls.id`` only on success, and per-model context
-        is registered in the model registry. Delegates to the
-        SDK-typed probe in ``_local_validator.py`` which already owns
-        that full flow.
+        Overrides the base ``Credential.validate`` because the value is a
+        Base URL, not a key, and two rows are written (``{id}_proxy`` and
+        ``{id}``). See ``_local_validator.save_llm_server``.
         """
         from ._local_validator import validate_local_llm
 
