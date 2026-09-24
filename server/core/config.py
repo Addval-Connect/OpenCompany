@@ -459,6 +459,11 @@ class Settings(BaseSettings):
     compaction_enabled: bool = Field(default=True, env="COMPACTION_ENABLED")
     compaction_ratio: float = Field(default=0.8, env="COMPACTION_RATIO", ge=0.05, le=0.99)
 
+    # Largest result, in characters, one external tool call may add to an
+    # agent's conversation; longer results are cut with a note. 0 disables
+    # the cap. Per-user UserSettings row overrides at runtime.
+    tool_result_max_chars: int = Field(default=100_000, env="TOOL_RESULT_MAX_CHARS", ge=0)
+
     # Agent loop hard step cap. Per-user UserSettings row overrides
     # at runtime; per-agent-node ``parameters.max_iterations`` is the
     # innermost override.

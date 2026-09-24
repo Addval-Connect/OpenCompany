@@ -557,3 +557,34 @@ bun add -g @zeenie-ai/opencompany
 **Root cause**: bun's own installer refuses to run without `unzip`, and `install.sh` hands off to it without checking. The script also calls `sudo` unconditionally for apt, which does not exist in containers that run as root.
 
 **Workaround**: `apt-get install -y unzip` (or the distro equivalent) before the one-liner. **Fix, when shipped**: install `unzip` via the detected package manager before calling bun's installer, and run package-manager commands directly when already root.
+
+## 28. Every chat message fails with `ConversationTooLarge` after an agent made a few large tool calls
+
+**Symptom**: A deployed chat workflow whose AI Agent has a Context node answers a few turns, and each `agent.execute_llm_step` logs a Temporal `PayloadSizeWarning: [TMPRL1103] ... Size: 528134 bytes, Limit: 524288 bytes` as the input grows (1.4 MB by the sixth tool call). The next chat message fails in `agent.prepare_payload`, and so does every message after it:
+
+```
+ApplicationError: ConversationTooLarge: Stored conversation for agent '1:aiAgent:1' is 1429978 bytes (limit 1000000). Clear the conversation from the Context panel or lower the compaction threshold, then run again.
+```
+
+Seen 2026-09-05 with a `tikhubAction` tool whose results were about 400,000 characters each.
+
+**Root cause**: four gaps lined up.
+- Nothing bounded a tool result before it entered the transcript. Both agent loops appended the serialized result whole, and every later turn re-sent it.
+- Compaction never fired. `AgentWorkflow` compared the running SUM of every step's token usage with 80% of the model's window (838,860 tokens for a 1,048,576-token Gemini model), while the limits actually being hit were in bytes: Temporal's payload sizes and the 1 MB seed cap.
+- The LLM step saves `[...sent, assistant]` after each turn with no size check, so the 1.4 MB transcript was stored.
+- The seed guard in `agent.prepare_payload` is a hard, non-retryable failure by design, because an agent that silently runs without its memory is worse. So one oversized row broke every later firing.
+
+**Fix**:
+- Each external tool result is cut to `TOOL_RESULT_MAX_CHARS` characters (default 100,000; per user under Settings > Tool Result Limit; `0` disables) before it enters the model's conversation, with a note telling the model to call the tool again with narrower parameters. Delegated agents' answers, skill loads and Task Manager results are never cut, and the tool's own result is untouched (`services/tool_output.py`, used by both loops).
+- `AgentWorkflow` runs whose prepare-payload result records `context_pressure_version` 1 keep the transcript under a byte budget of three quarters of Temporal's payload warning (`services/temporal/agent_context_pressure.py`):
+  - past the budget, results from earlier turns become a short placeholder, oldest first and external tools first;
+  - the compaction gate measures the next request instead of a running sum;
+  - a summary covers only the earlier turns and keeps the latest one verbatim;
+  - a latest turn that alone overflows is cut to fit.
+
+  Runs recorded before the key existed replay the original rules unchanged.
+- `ConversationTooLarge` stays a hard failure. Its message now points at the Context panel and the Tool Result Limit, and a save over half the cap logs a WARNING.
+
+Locked by `server/tests/services/test_tool_output.py`, `server/tests/temporal/test_agent_context_pressure.py`, `server/tests/temporal/test_agent_workflow_pressure.py` and `server/tests/temporal/test_prepare_payload_pressure.py`. Design record: [ARCHIVE/AGENT_COMPACTION_FIX_PLAN.md](./ARCHIVE/AGENT_COMPACTION_FIX_PLAN.md).
+
+**Recovery for a row saved before the fix**: clear the conversation once from the Context panel (or Reset the deployment). New transcripts stay well under the cap.

@@ -190,10 +190,12 @@ Resolved per-execution, and the two runtimes differ. **Temporal** (`prepare_agen
 4. **JSON** `llm_defaults.json:agent.recursion_limit` — in-process only, reached when `Settings` cannot instantiate; the Temporal path uses a hardcoded 200 instead.
 
 The iteration limit is the termination backstop. Compaction is a post-turn
-context-pressure control for agents with connected memory; it summarizes active
-history so a loop can continue within the model's context window, but it does
-not decide when the loop terminates. See
-[memory_compaction.md](memory_compaction.md).
+context-pressure control (on the Temporal path for every agent, in-process for
+agents with connected memory); it summarizes active history so a loop can
+continue within the model's context window, but it does not decide when the
+loop terminates. Tool results are bounded separately, per call, by the Tool
+Result Limit. See [memory_compaction.md](memory_compaction.md) and
+[agent_context_flow.md → Transcript size](agent_context_flow.md).
 
 ### Hot rebind after canvas mutation
 

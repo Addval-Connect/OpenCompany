@@ -383,7 +383,10 @@ AgentWorkflow.run(context):
            _serialise_tool_result unwraps F4.A's {success, result, ...}
            envelope so the LLM sees only the handler's return value
            (matches the in-process tool-call serialisation in
-           services/agent_runtime.py:run_native_agent_loop).
+           services/agent_runtime.py:run_native_agent_loop), then an
+           external tool's text is cut to payload["tool_result_max_chars"]
+           (services/tool_output.py; delegations, skill loads and Task
+           Manager are never cut).
     4. for each tool result with an ``operations`` field
        (canvas-mutating tools — today only ``agentBuilder``):
          if payload["auto_rebind_tools"] is True:
@@ -400,10 +403,19 @@ AgentWorkflow.run(context):
          append_to_memory_markdown(content, "human", prompt) +
          (content, "ai", response); trim window; broadcast
          node_parameters_updated CloudEvents (source_hint="agent").
-    6. if token_total >= compaction_threshold:
-         execute_activity("agent.compact_context")
-         null-guarded against worker-bootstrap race; replaces messages
-         with summary only when result.success is True.
+    6. transcript pressure, rules picked by the recorded
+       payload["context_pressure_version"] (agent_context_pressure.py):
+         version 1: clear earlier turns' tool results past
+           payload["transcript_budget_bytes"]; if the next request reaches
+           compaction_threshold, or the earlier turns alone keep the
+           transcript over budget, execute_activity("agent.compact_context")
+           on the earlier turns only and keep the latest turn verbatim;
+           then cut the latest turn's external results to fit.
+         no version (histories recorded before it): if the running sum of
+           every step's tokens >= compaction_threshold, summarize the
+           whole transcript.
+         A summarizer failure after the activity's retries ends the run
+         with error_type="CompactionError".
   execute_activity("agent.store_output")
        wraps workflow_service.store_node_output for output_main /
        output_top / output_0 — same writes NodeExecutor.execute does
@@ -438,11 +450,11 @@ addition. Seven are the core loop activities:
 
 | Activity | Purpose |
 |---|---|
-| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / auto_rebind_tools), and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit` + `UserSettings.auto_rebind_tools_after_canvas_change`. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
+| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / tool_result_max_chars / transcript_budget_bytes / context_pressure_version / auto_rebind_tools), and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit`, `auto_rebind_tools_after_canvas_change`, `tool_result_max_chars`, `max_concurrent_subagents` and `max_delegation_depth`. Recording the three transcript-pressure keys here is what lets a history recorded before them replay the original rules. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
 | `agent.execute_llm_step` | One LLM turn. The native branch decodes Message Wire V2, rebuilds `ToolDef` values, calls `run_native_llm_step(ChatUnifier, ...)` with SDK retries disabled, heartbeats while awaiting the provider, and returns the exact assistant message + tool calls + normalized usage. Guards against un-invokable payloads: post-filter system-only message lists raise `ApplicationError(type="EmptyAgentPrompt", non_retryable=True)`. |
 | `agent.refresh_tools` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
 | `agent.persist_turn` | Appends the latest human/assistant exchange to memory markdown, trims the window, broadcasts `node.parameters.updated`. |
-| `agent.compact_context` | Context-pressure compaction when cumulative active-context tokens hit the threshold (the shared client-side summarizer). Best-effort: continues with un-compacted history on failure; it is not an agent termination control. |
+| `agent.compact_context` | The shared client-side summarizer, run under transcript pressure (step 6 above). Not best-effort: after the activity's retries a failure ends the run with `CompactionError`, because past that point the transcript could only grow until the provider rejected it. |
 | `agent.store_output` | Writes `output_main` / `output_top` / `output_0` so downstream nodes resolve `{{aiAgent.response}}` via `ParameterResolver`. |
 | `agent.broadcast_progress` | Emits `WorkflowEvent.agent_progress` (CloudEvents v1.0) + optional raw-dict `update_node_status` for canvas-glow color. Single helper drives every phase emit. |
 
@@ -479,9 +491,12 @@ in the per-type activity payload so ToolNodes validate against their
 `ToolInput` via `execute_as_tool` (see `tests/nodes/test_tool_call_dispatch.py`).
 
 The F4.B compaction threshold is prepared from the model context length and
-the ratio configuration. It currently does not read
-`SessionTokenState.custom_threshold` or `compaction_enabled`; those stored
-per-session controls are therefore not authoritative for this path.
+the ratio configuration, and is absent when the global `COMPACTION_ENABLED`
+is off. It does not read `SessionTokenState.custom_threshold` or the
+per-session `compaction_enabled`; those stored per-session controls are
+therefore not authoritative for this path. The transcript's byte budget and
+the tool-result cap apply whether or not compaction is on (see
+[agent_context_flow.md → Transcript size](./agent_context_flow.md)).
 
 **Broadcasts inside the loop** wrap `WorkflowEvent` (CloudEvents v1.0) per RFC §6.4: `agent_progress` events (`com.opencompany.agent.progress`) and `node_parameters_updated` events (`com.opencompany.node.parameters.updated`) flow through the `StatusBroadcaster.broadcast_agent_progress` and `StatusBroadcaster.broadcast_node_parameters_updated` wrappers respectively. The latter is reused by the legacy `routers/websocket.py:handle_save_node_parameters` (user-source) and `services/cli_agent/service.py:_persist_memory` (cli-source) — all three emission sites share the same envelope, distinguished by `source_hint` (`"user"` / `"cli"` / `"agent"`).
 

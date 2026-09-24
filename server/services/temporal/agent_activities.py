@@ -51,10 +51,14 @@ from temporalio.exceptions import ApplicationError
 logger = logging.getLogger(__name__)
 
 # Byte ceiling for the stored conversation returned by ``prepare_agent_payload``
-# as a fresh-run seed. Conversations are compaction-bounded in tokens but not
-# in bytes, and Temporal's payload error limit is 2 MiB for the whole activity
-# result — over the cap the run degrades to its opening prompt with a warning
-# instead of dying. Mirrors ``_CAN_TRANSCRIPT_MAX_BYTES`` on the rollover path.
+# as a fresh-run seed; the whole activity result must stay under Temporal's
+# 2 MiB payload error limit. Over the cap the load raises the non-retryable
+# ``ConversationTooLarge`` so the user clears the conversation from the
+# Context panel, rather than the agent silently running without its memory.
+# New transcripts stay well below it: each external tool result is capped and
+# ``AgentWorkflow`` clears old results past ``transcript_budget_bytes`` (see
+# ``agent_context_pressure``). Same value as ``_CAN_TRANSCRIPT_MAX_BYTES`` on
+# the rollover path.
 _SEED_TRANSCRIPT_MAX_BYTES = 1_000_000
 
 # Activity result shapes — keep these in sync with AgentWorkflow's
@@ -384,12 +388,24 @@ async def _save_conversation(
         from core.container import container
         from services.agent_context import save_conversation
 
+        messages = [*sent, assistant_wire]
+        saved_bytes = len(json.dumps(messages, default=str).encode("utf-8"))
+        if saved_bytes > _SEED_TRANSCRIPT_MAX_BYTES // 2:
+            # The next firing refuses to load a row over the cap
+            # (ConversationTooLarge), so say so while there is still room.
+            activity.logger.warning(
+                f"Saved conversation for agent {key.get('agent_node_id')!r} "
+                f"(workflow {key.get('workflow_id')!r}, generation "
+                f"{key.get('generation')}) is {saved_bytes} bytes, over half "
+                f"the {_SEED_TRANSCRIPT_MAX_BYTES}-byte limit a later run can "
+                "load"
+            )
         await save_conversation(
             container.database(),
             workflow_id=str(key.get("workflow_id") or ""),
             generation=int(key.get("generation") or 0),
             agent_node_id=str(key.get("agent_node_id") or ""),
-            messages=[*sent, assistant_wire],
+            messages=messages,
         )
     except Exception:
         # Persistence must never fail the run. The provider has already
@@ -1041,8 +1057,9 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
                     f"Stored conversation for agent {node_id!r} is "
                     f"{seed_bytes} bytes (limit "
                     f"{_SEED_TRANSCRIPT_MAX_BYTES}). Clear the conversation "
-                    "from the Context panel or lower the compaction "
-                    "threshold, then run again.",
+                    "from the Context panel, then run again. Settings > "
+                    "Tool Result Limit caps how much one tool call can add "
+                    "to it.",
                     type="ConversationTooLarge",
                     non_retryable=True,
                 )
@@ -1154,6 +1171,11 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
                 compaction_threshold = int(cfg.get("context_token_threshold") or 0) or None
     except Exception:  # noqa: BLE001 — defensive, optional feature
         compaction_threshold = None
+        activity.logger.warning(
+            f"Compaction threshold unavailable for agent {node_id!r}; this "
+            "run will not summarize its conversation",
+            exc_info=True,
+        )
 
     # ---- Optional auto-prompt fallback from input_data -----------------
     # When `prompt` is empty AND a chatTrigger / whatsappReceive / etc.
@@ -1175,18 +1197,25 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
     #     same value.
     #   - agent_recursion_limit: applied to the agent loop's hard step
     #     cap. Per-user override beats env Settings.
+    #   - tool_result_max_chars: the most one external tool result may add
+    #     to the transcript. Per-user override beats env Settings.
     auto_rebind_tools = True
     settings_recursion_limit: Optional[int] = None
     from core.config import Settings as _DelegationSettings
+    from services.tool_output import resolve_tool_output_limit
 
     delegation_settings = _DelegationSettings()
     max_concurrent_subagents = int(delegation_settings.max_concurrent_subagents)
     max_delegation_depth = int(delegation_settings.max_delegation_depth)
+    tool_result_max_chars = resolve_tool_output_limit(None, delegation_settings)
     try:
         user_settings = await database.get_user_settings()
         if user_settings is not None:
             auto_rebind_tools = bool(
                 user_settings.get("auto_rebind_tools_after_canvas_change", True)
+            )
+            tool_result_max_chars = resolve_tool_output_limit(
+                user_settings, delegation_settings
             )
             raw_limit = user_settings.get("agent_recursion_limit")
             if isinstance(raw_limit, int) and raw_limit > 0:
@@ -1214,6 +1243,11 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001 — last-resort fallback
             effective_recursion_limit = 200
 
+    from services.temporal.agent_context_pressure import (
+        CONTEXT_PRESSURE_VERSION,
+        transcript_budget_bytes,
+    )
+
     return {
         "node_id": node_id,
         "node_type": node_type,
@@ -1235,6 +1269,12 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
         "max_iterations": effective_recursion_limit,
         "thinking_config": thinking_config_dict,
         "compaction_threshold": compaction_threshold,
+        # Transcript-pressure controls. Recording them in this result pins
+        # the run's behavior on replay: a history recorded before these keys
+        # existed replays through AgentWorkflow's original paths.
+        "tool_result_max_chars": tool_result_max_chars,
+        "transcript_budget_bytes": transcript_budget_bytes(),
+        "context_pressure_version": CONTEXT_PRESSURE_VERSION,
         "auto_rebind_tools": auto_rebind_tools,
         "max_concurrent_subagents": max_concurrent_subagents,
         "max_delegation_depth": max_delegation_depth,

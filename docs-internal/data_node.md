@@ -41,8 +41,10 @@ suffixes `-1`, `-2`, …) imports a mount file into the workspace and mints a
 real `FileRef` — the bridge to previews, drags, and vision.
 
 **Read tiers** (`_readers.py`, all bounded; `bound_result` caps the
-serialized envelope at ~200 KB because tool results have no downstream
-truncation): text (line window, encoding fallback + `encoding_guessed`),
+serialized envelope at ~200 KB, which also keeps the node's own output small;
+the agent loops then cut what reaches the model to the Tool Result Limit,
+100,000 characters by default, see `services/tool_output.py`): text (line
+window, encoding fallback + `encoding_guessed`),
 csv (Sniffer, 500 rows / 100 cols / 2k-char cells), json (≤5 MiB, depth 8,
 `pruned_paths`), pdf (pypdf via the `docs` extra, 20 pages/req), html
 (bs4), xlsx (openpyxl `read_only`, 500 rows), image (Pillow **metadata

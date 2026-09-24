@@ -30,6 +30,7 @@ import {
   defaultSettings,
   fromServerRow,
   toServerRow,
+  TOOL_RESULT_MAX_CHARS_RANGE,
   type WorkflowSettings,
 } from './settingsPanel/schema';
 
@@ -57,6 +58,9 @@ const TONE_CLASSES: Record<SectionTone, string> = {
   workflow: 'bg-node-workflow-soft text-node-workflow',
   tool:     'bg-node-tool-soft text-node-tool',
 };
+
+/** The Tool Result Limit slider shows and edits characters in thousands. */
+const toThousands = (chars: number): number => Math.round(chars / 1000);
 
 interface SectionProps {
   title: string;
@@ -350,6 +354,44 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               </div>
               <div className="mt-1 text-xs leading-snug text-fg-muted">
                 Lower = compact sooner (saves tokens, loses detail). Higher = compact later (preserves context, uses more tokens).
+              </div>
+            </div>
+
+            <div className="my-1 border-b border-border-default" />
+
+            <div className="py-2">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-fg-default">Tool Result Limit</div>
+                  <div className="mt-0.5 text-xs text-fg-muted">
+                    Most characters one tool call can add to an agent's conversation
+                  </div>
+                </div>
+                <span className="min-w-[42px] text-right text-sm font-semibold text-node-model">
+                  {toThousands(settings.toolResultMaxChars)}K
+                </span>
+              </div>
+              <Slider
+                min={toThousands(TOOL_RESULT_MAX_CHARS_RANGE.min)}
+                max={toThousands(TOOL_RESULT_MAX_CHARS_RANGE.max)}
+                step={toThousands(TOOL_RESULT_MAX_CHARS_RANGE.step)}
+                value={[toThousands(settings.toolResultMaxChars)]}
+                onValueChange={(value) =>
+                  handleChange(
+                    'toolResultMaxChars',
+                    value[0] === undefined ? defaultSettings.toolResultMaxChars : value[0] * 1000,
+                  )
+                }
+                disabled={isSaving}
+                className="my-3"
+              />
+              <div className="flex justify-between text-[10px] text-fg-muted">
+                <span>{toThousands(TOOL_RESULT_MAX_CHARS_RANGE.min)}K</span>
+                <span>{toThousands(defaultSettings.toolResultMaxChars)}K</span>
+                <span>{toThousands(TOOL_RESULT_MAX_CHARS_RANGE.max)}K</span>
+              </div>
+              <div className="mt-1 text-xs leading-snug text-fg-muted">
+                Longer results are cut before the agent reads them, with a note asking it to narrow the request. Answers from delegated agents, skills and Task Manager are never cut.
               </div>
             </div>
 

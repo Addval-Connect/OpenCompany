@@ -687,3 +687,98 @@ async def test_long_term_retrieval_preserves_execution_context_on_save(
     assert append_turns.await_args.kwargs["mutation_id"].startswith(
         "ai-memory:" if method_name == "execute_agent" else "chat-memory:"
     )
+
+
+def _typed_tool(name: str, node_type: str) -> AgentToolSpec:
+    spec = _tool(name)
+    spec.execution["node_type"] = node_type
+    return spec
+
+
+async def _one_tool_call(tool: AgentToolSpec, result: Any, **loop_kwargs):
+    """Run one tool call through the loop and return the tool message."""
+    call = ToolCall(id="call-1", name=tool.name, args={"value": 1})
+    unifier = _FakeUnifier(
+        [
+            LLMResponse(
+                tool_calls=[call],
+                assistant_message=Message(role="assistant", tool_calls=[call]),
+            ),
+            LLMResponse(content="done"),
+        ]
+    )
+
+    async def execute(_name, _args):
+        return result
+
+    loop = await run_native_agent_loop(
+        unifier,
+        provider="openai",
+        api_key="test",
+        model="gpt-test",
+        temperature=0,
+        max_tokens=100,
+        initial_messages=[Message(role="user", content="go")],
+        tools=[tool],
+        tool_executor=execute,
+        **loop_kwargs,
+    )
+    (tool_message,) = [m for m in loop["messages"] if m.role == "tool"]
+    return tool_message
+
+
+@pytest.mark.asyncio
+async def test_native_loop_cuts_an_external_tool_result():
+    message = await _one_tool_call(
+        _typed_tool("scrape", "tikhubAction"),
+        {"data": "x" * 5_000},
+        tool_output_limit=1_000,
+    )
+
+    assert "showing the first 1,000 of 5,012 characters" in message.content
+    assert len(message.content) < 1_200
+    assert message.blocks[0].text == message.content
+
+
+@pytest.mark.asyncio
+async def test_native_loop_keeps_llm_media_when_the_text_is_cut():
+    ref = {
+        "kind": "image",
+        "path": "images/chart.png",
+        "workflow_id": "wf-media",
+        "filename": "chart.png",
+        "mime_type": "image/png",
+        "size_bytes": 1234,
+    }
+    message = await _one_tool_call(
+        _typed_tool("scrape", "tikhubAction"),
+        {"data": "x" * 5_000, "llm_media": [{"ref": ref}]},
+        tool_output_limit=1_000,
+    )
+
+    assert "Tool result truncated" in message.content
+    images = [block for block in message.blocks if block.type == "image"]
+    assert images and images[0].source["ref"]["path"] == "images/chart.png"
+
+
+@pytest.mark.asyncio
+async def test_native_loop_never_cuts_a_skill_load():
+    message = await _one_tool_call(
+        _typed_tool("Skill", "_builtin_skill"),
+        {"instructions": "i" * 5_000},
+        tool_output_limit=1_000,
+    )
+
+    assert "Tool result truncated" not in message.content
+    assert "i" * 5_000 in message.content
+
+
+@pytest.mark.asyncio
+async def test_native_loop_without_a_limit_keeps_results_whole():
+    message = await _one_tool_call(
+        _typed_tool("scrape", "tikhubAction"),
+        {"data": "x" * 5_000},
+    )
+
+    assert "Tool result truncated" not in message.content
+    assert "x" * 5_000 in message.content
