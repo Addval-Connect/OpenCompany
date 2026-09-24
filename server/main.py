@@ -381,6 +381,20 @@ async def lifespan(app: FastAPI):
         except (asyncio.CancelledError, Exception):
             pass
 
+    # Stop tenant namespace workers first (pools then managers), then the
+    # default-namespace workers.
+    for tenant_pool in getattr(app.state, "temporal_tenant_pools", None) or []:
+        try:
+            await tenant_pool.stop()
+        except Exception as exc:
+            logger.warning(f"Tenant worker pool stop raised: {exc}")
+
+    for tenant_manager in getattr(app.state, "temporal_tenant_worker_managers", None) or []:
+        try:
+            await tenant_manager.stop()
+        except Exception as exc:
+            logger.warning(f"Tenant worker manager stop raised: {exc}")
+
     # Stop the per-queue worker pool first (activity-only workers), then
     # the manager worker that also hosts workflows.
     pool = getattr(app.state, "temporal_pool", None)
@@ -402,6 +416,13 @@ async def lifespan(app: FastAPI):
 
     # Disconnect Temporal client.
     if settings.temporal_enabled:
+        # Tenant namespace clients first (registry), then the default client.
+        try:
+            from services.temporal.client_registry import disconnect_all as _disconnect_tenants
+
+            await _disconnect_tenants()
+        except Exception:
+            pass
         try:
             temporal_client_wrapper = container.temporal_client()
             if temporal_client_wrapper is not None:

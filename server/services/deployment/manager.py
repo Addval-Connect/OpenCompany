@@ -170,6 +170,7 @@ class DeploymentManager:
         graph_version: int = 0,
         generation: int = 0,
         user_id: str = "owner",
+        temporal_namespace: str = "default",
     ) -> Dict[str, Any]:
         """Deploy workflow in event-driven mode.
 
@@ -235,6 +236,7 @@ class DeploymentManager:
             graph_version=max(0, int(graph_version or 0)),
             generation=max(0, int(generation or 0)),
             settings=self._settings.copy(),
+            temporal_namespace=str(temporal_namespace or "default"),
         )
 
         logger.info("Deployment starting", deployment_id=deployment_id, workflow_id=workflow_id, nodes=len(nodes))
@@ -724,7 +726,16 @@ class DeploymentManager:
         node_id = node["id"]
         node_type = node.get("type", "")
 
-        wrapper = container.temporal_client()
+        state = self._deployments.get(workflow_id)
+        if state is None:
+            raise RuntimeError(f"No deployment state for workflow {workflow_id}")
+
+        # Use the tenant namespace stored on the deployment state so canary
+        # listeners and trigger workflows start in the correct Temporal namespace.
+        from services.deployment.handlers import _client_for_namespace
+
+        ns = getattr(state, "temporal_namespace", None) or "default"
+        wrapper = _client_for_namespace(ns)
         if wrapper is None or wrapper.client is None:
             logger.warning(
                 "Canary listener requested but Temporal not connected; " "falling back to legacy collector/processor path",
@@ -733,10 +744,6 @@ class DeploymentManager:
                 node_type=node_type,
             )
             return None
-
-        state = self._deployments.get(workflow_id)
-        if state is None:
-            raise RuntimeError(f"No deployment state for workflow {workflow_id}")
 
         from services.deployment.canary_registry import cloudevent_type_for
 

@@ -13,7 +13,7 @@ the deployment manager skips ``setup_event_trigger`` and the legacy
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from services.events.envelope import WorkflowEvent
 
@@ -38,13 +38,22 @@ def email_message_received(email_data: Mapping[str, Any]) -> WorkflowEvent:
     )
 
 
-async def dispatch_email_received(email_data: Mapping[str, Any]) -> None:
-    """Dispatch an incoming email via the canary CloudEvents path."""
+async def dispatch_email_received(
+    email_data: Mapping[str, Any],
+    *,
+    namespace: Optional[str] = None,
+) -> None:
+    """Dispatch an incoming email via the canary CloudEvents path.
+
+    ``namespace`` is the Temporal namespace resolved from the credential
+    owner of the email account that received this message.
+    """
     from services.events.dispatch import emit
 
     await emit(
         email_message_received(dict(email_data)),
         wire_routing_key=_WIRE_ROUTING_KEY,
+        namespace=namespace,
     )
 
 

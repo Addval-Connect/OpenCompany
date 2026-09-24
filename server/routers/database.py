@@ -1,6 +1,6 @@
 """Database operations routes (replaces frontend storage)."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from typing import Any, Dict
 
@@ -16,6 +16,22 @@ from services.workflow_storage.handlers import (
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/database", tags=["database"])
+
+
+def _request_owner(request: Request) -> str:
+    """Caller identity from the authenticated HTTP request state.
+
+    AuthMiddleware sets ``request.state.user_id`` for every non-public route.
+    Falls back to OWNER_PRINCIPAL_ID (= auth disabled, or unauthenticated
+    internal call) — matches the same pattern as the WS handler helpers.
+    """
+    from constants import OWNER_PRINCIPAL_ID
+
+    state = getattr(request, "state", None)
+    uid = getattr(state, "user_id", None)
+    if uid is not None and str(uid).strip():
+        return str(uid).strip()
+    return OWNER_PRINCIPAL_ID
 
 
 class NodeParameterRequest(BaseModel):
@@ -68,7 +84,7 @@ async def delete_node_parameters(node_id: str, database: Database = Depends(lamb
 
 
 @router.post("/workflows")
-async def save_workflow(request: WorkflowSaveRequest):
+async def save_workflow(body: WorkflowSaveRequest, request: Request):
     """Save workflow — REST passthrough to the WS handler.
 
     Single source of truth lives in
@@ -77,9 +93,14 @@ async def save_workflow(request: WorkflowSaveRequest):
     and the CloudEvents ``workflow.renamed`` broadcast.
     """
     try:
+        # Pass a minimal state-carrying shim so _trusted_owner_id reads the
+        # authenticated user rather than falling back to "owner".
+        from types import SimpleNamespace
+
+        ws_shim = SimpleNamespace(state=SimpleNamespace(user_id=_request_owner(request)))
         return await handle_save_workflow(
-            {"workflow_id": request.workflow_id, "name": request.name, "data": request.data},
-            websocket=None,  # type: ignore[arg-type]  # unused by the handler
+            {"workflow_id": body.workflow_id, "name": body.name, "data": body.data},
+            websocket=ws_shim,  # type: ignore[arg-type]
         )
     except Exception as e:
         logger.error("Failed to save workflow", error=str(e), exc_info=True)
@@ -87,25 +108,34 @@ async def save_workflow(request: WorkflowSaveRequest):
 
 
 @router.get("/workflows")
-async def get_all_workflows(database: Database = Depends(lambda: container.database())):
-    """Get all workflows."""
+async def get_all_workflows(request: Request, database: Database = Depends(lambda: container.database())):
+    """Get all workflows visible to the authenticated user."""
     try:
-        # Auto-load example workflows on first fetch
-        user_id = "default"
+        owner = _request_owner(request)
+        # Auto-load example workflows on first fetch (per user).
+        user_id = owner
         settings = await database.get_user_settings(user_id)
 
         if not settings or not settings.get("examples_loaded", False):
-            # First time - import examples
+            # First time for this user — import examples and assign them.
             count = await import_examples_for_user(database)
             if count > 0:
                 logger.info(f"Auto-loaded {count} example workflows")
+                # Re-assign freshly imported examples to this user so they
+                # don't land in the shared "owner" bucket.
+                from sqlalchemy import text
+                async with database.engine.begin() as conn:
+                    await conn.execute(
+                        text("UPDATE workflows SET owner_user_id = :uid WHERE owner_user_id = 'owner'"),
+                        {"uid": owner},
+                    )
 
             # Mark as loaded using existing save_user_settings
             current = settings or {}
             current["examples_loaded"] = True
             await database.save_user_settings(current, user_id)
 
-        workflows = await database.get_all_workflows()
+        workflows = await database.get_all_workflows(owner_user_id=owner)
         return {
             "success": True,
             "workflows": [
@@ -126,12 +156,15 @@ async def get_all_workflows(database: Database = Depends(lambda: container.datab
 
 
 @router.get("/workflows/{workflow_id}")
-async def get_workflow(workflow_id: str, database: Database = Depends(lambda: container.database())):
-    """Get the server-normalized workflow graph by ID."""
+async def get_workflow(workflow_id: str, request: Request, database: Database = Depends(lambda: container.database())):
+    """Get the server-normalized workflow graph by ID — owner-scoped."""
     try:
+        from types import SimpleNamespace
+
+        ws_shim = SimpleNamespace(state=SimpleNamespace(user_id=_request_owner(request)))
         result = await handle_get_workflow(
             {"workflow_id": workflow_id},
-            websocket=None,  # type: ignore[arg-type]  # unused by handler
+            websocket=ws_shim,  # type: ignore[arg-type]
         )
         workflow = result.get("workflow")
         if workflow:

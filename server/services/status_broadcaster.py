@@ -6,7 +6,7 @@ Supports all node types, variable updates, and workflow state changes.
 
 import asyncio
 import orjson
-from typing import Set, Dict, Any, Optional, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from fastapi import WebSocket
 from opentelemetry import trace
 
@@ -59,11 +59,60 @@ def _elide_for_cache(output: Any) -> Any:
 tracer = trace.get_tracer(__name__)
 
 
+async def _resolve_connection_namespace(websocket: Any) -> str:
+    """Resolve the Temporal namespace for an incoming WS connection.
+
+    Returns the default namespace when:
+    - ``MULTI_TENANT_NAMESPACES=false`` (the flag-off fast path)
+    - The principal has no namespace mapping (no row / row not ready)
+    - Any resolution error (fail-open so the connection is never refused)
+
+    Calling convention: invoked from :meth:`StatusBroadcaster.connect`
+    BEFORE the websocket is added to ``_connections``.
+    """
+    try:
+        from core.container import container
+        from services.tenancy import resolve_tenant_namespace
+
+        settings = container.settings()
+        default_ns: str = getattr(settings, "temporal_namespace", "default")
+
+        if not getattr(settings, "multi_tenant_namespaces", False):
+            return default_ns
+
+        user_id = str(
+            getattr(getattr(websocket, "state", None), "user_id", None) or ""
+        )
+        return await resolve_tenant_namespace(
+            user_id or None,
+            database=container.database(),
+            settings=settings,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-open; connection must succeed
+        logger.debug(
+            "Namespace resolution failed for WS connection; using default",
+            error=str(exc),
+        )
+        try:
+            from core.container import container
+
+            return getattr(container.settings(), "temporal_namespace", "default")
+        except Exception:
+            return "default"
+
+
 class StatusBroadcaster:
     """Manages WebSocket connections and broadcasts status updates."""
 
     def __init__(self):
         self._connections: Set[WebSocket] = set()
+        # Maps each connection to its resolved Temporal namespace (tenant_id).
+        # Populated in connect() from the WS principal via
+        # resolve_tenant_namespace.  Used by broadcast(tenant_id=X) to filter
+        # the fan-out to only the connections that belong to namespace X.
+        # When MULTI_TENANT_NAMESPACES=false, every connection maps to the
+        # same default namespace and the filter is effectively a no-op.
+        self._connection_tenants: Dict[WebSocket, str] = {}
         self._lock = asyncio.Lock()
 
         # Per-workflow active-run counter. Counts every concurrent
@@ -122,8 +171,17 @@ class StatusBroadcaster:
         invocation of :meth:`_refresh_all_services` from ``main.py``.
         """
         await websocket.accept()
+
+        # Resolve the tenant namespace for this connection.  Used by
+        # broadcast(tenant_id=X) to restrict per-tenant events.
+        # Fail-open: if resolution errors (db unavailable at startup race),
+        # we fall back to the default namespace rather than refusing the
+        # connection — the connection must succeed for the client to function.
+        tenant_namespace = await _resolve_connection_namespace(websocket)
+
         async with self._lock:
             self._connections.add(websocket)
+            self._connection_tenants[websocket] = tenant_namespace
         logger.info(f"[StatusBroadcaster] Client connected. Total: {len(self._connections)}")
 
         try:
@@ -178,6 +236,7 @@ class StatusBroadcaster:
         """Remove a WebSocket connection."""
         async with self._lock:
             self._connections.discard(websocket)
+            self._connection_tenants.pop(websocket, None)
         logger.info(f"[StatusBroadcaster] Client disconnected. Total: {len(self._connections)}")
 
     async def _refresh_all_services(self):
@@ -210,8 +269,19 @@ class StatusBroadcaster:
                 for exc in eg.exceptions:
                     logger.warning("[StatusBroadcaster] Service refresh task failed: %s", exc)
 
-    async def broadcast(self, message: Dict[str, Any]):
-        """Broadcast a message to all connected clients using TaskGroup.
+    async def broadcast(self, message: Dict[str, Any], *, tenant_id: Optional[str] = None):
+        """Broadcast a message to connected clients.
+
+        When ``tenant_id`` is ``None`` (default), the message is delivered to
+        ALL connections — today's global fan-out behaviour, used for events
+        that are genuinely cross-tenant (node status, credential catalogue
+        updates, agent-progress badges, etc.).
+
+        When ``tenant_id`` is a Temporal namespace string, the message is
+        delivered only to connections whose resolved namespace matches.
+        Per-tenant events (a chat message arriving on Tenant A's chatTrigger,
+        a Telegram message to Tenant A's bot) must pass ``tenant_id`` so Tenant
+        B's open browser tab never sees Tenant A's data.
 
         Uses asyncio.TaskGroup (Python 3.11+) for structured concurrency:
         - All tasks complete or cancel together
@@ -220,9 +290,16 @@ class StatusBroadcaster:
         if not self._connections:
             return
 
-        # Get connections list while holding lock
+        # Get connections list while holding lock; apply tenant filter here so
+        # we hold the lock for as short a time as possible.
         async with self._lock:
-            connections_list = list(self._connections)
+            if tenant_id is None:
+                connections_list = list(self._connections)
+            else:
+                connections_list = [
+                    c for c in self._connections
+                    if self._connection_tenants.get(c) == tenant_id
+                ]
 
         if not connections_list:
             return

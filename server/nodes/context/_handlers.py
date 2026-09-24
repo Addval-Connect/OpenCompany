@@ -42,6 +42,8 @@ def _require_external_socket(websocket: WebSocket) -> None:
 
 
 def _authenticated_owner(websocket: WebSocket) -> str:
+    from constants import OWNER_PRINCIPAL_ID
+
     state = getattr(websocket, "state", None)
     value = getattr(state, "user_id", None) if state is not None else None
     if isinstance(value, (str, int)) and str(value).strip():
@@ -50,7 +52,7 @@ def _authenticated_owner(websocket: WebSocket) -> str:
     value = scope.get("user_id") if isinstance(scope, dict) else None
     if isinstance(value, (str, int)) and str(value).strip():
         return str(value)
-    return "owner"
+    return OWNER_PRINCIPAL_ID
 
 
 async def _authorize_context_node(
@@ -62,13 +64,15 @@ async def _authorize_context_node(
     _require_external_socket(websocket)
     if not workflow_id or not context_node_id:
         raise NodeUserError("workflow_id and context_node_id are required")
-    workflow = await _database().get_workflow(workflow_id)
+    caller = _authenticated_owner(websocket)
+    # Ownership is checked at the DB level: get_workflow returns None when the
+    # workflow exists but belongs to a different principal.  The "not found"
+    # response is deliberately identical to the access-denied case — telling a
+    # caller "this workflow exists but is yours" leaks information.
+    workflow = await _database().get_workflow(workflow_id, owner_user_id=caller)
     if workflow is None:
         raise NodeUserError("Workflow not found")
     graph = workflow.data if isinstance(workflow.data, dict) else {}
-    stored_owner = str(graph.get("owner_id") or "")
-    if stored_owner and stored_owner != _authenticated_owner(websocket):
-        raise NodeUserError("Workflow access denied")
     owned = any(
         isinstance(node, dict)
         and str(node.get("id") or "") == context_node_id

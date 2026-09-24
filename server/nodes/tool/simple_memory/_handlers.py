@@ -28,6 +28,8 @@ from ._events import dispatch_memory_updated
 
 def _authenticated_owner(websocket: WebSocket) -> str:
     """Read server-authenticated identity without consulting request data."""
+    from constants import OWNER_PRINCIPAL_ID
+
     state = getattr(websocket, "state", None)
     for attribute in ("user_id", "principal_id", "subject"):
         value = getattr(state, attribute, None) if state is not None else None
@@ -39,9 +41,7 @@ def _authenticated_owner(websocket: WebSocket) -> str:
             value = scope.get(key)
             if isinstance(value, (str, int)) and str(value).strip():
                 return str(value)
-    # The current deployment is single-owner when no auth principal is
-    # attached; this mirrors NodeContext.user_id's trusted default.
-    return "owner"
+    return OWNER_PRINCIPAL_ID
 
 
 def _require_external_socket(websocket: WebSocket) -> None:
@@ -71,18 +71,11 @@ async def _resolve_store_and_scope(
         raise NodeUserError("memory_node_id required")
 
     database = get_database()
-    saved = await database.get_workflow(workflow_id)
+    owner_id = _authenticated_owner(websocket)
+    saved = await database.get_workflow(workflow_id, owner_user_id=owner_id)
     if saved is None:
         raise NodeUserError("Workflow not found")
     graph = saved.data if hasattr(saved, "data") else saved.get("data", saved)
-    owner_id = _authenticated_owner(websocket)
-    stored_owner = (
-        str(graph.get("owner_id") or "")
-        if isinstance(graph, dict)
-        else ""
-    )
-    if stored_owner and stored_owner != owner_id:
-        raise NodeUserError("Workflow access denied")
     nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
     matches = [
         node

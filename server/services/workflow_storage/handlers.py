@@ -9,7 +9,7 @@ auto-save chain IS the rename path — no separate rename endpoint.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
@@ -455,6 +455,9 @@ async def handle_save_workflow(data: Dict[str, Any], websocket: WebSocket) -> Di
         # ``save_workflow`` writes the column unconditionally.
         "description": getattr(existing, "description", None),
         "data": normalized_data,
+        # Stored only for new workflows (save_workflow is a no-op on
+        # update for owner_user_id so the column never changes on rename).
+        "owner_user_id": _trusted_owner_id(websocket, existing),
     }
     if _supports_context_archive_outbox(database):
         save_kwargs["context_id_aliases"] = normalization.aliases
@@ -543,11 +546,16 @@ async def handle_import_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
 
 
 async def handle_get_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
-    """Get workflow by ID."""
+    """Get workflow by ID — only if it belongs to the authenticated user."""
+    from constants import OWNER_PRINCIPAL_ID
+
     database = container.database()
     workflow_id = str(data["workflow_id"])
+    caller = str(
+        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
+    )
     recovered_archives, pending_archives = await _drain_context_archive_outbox(database, workflow_id)
-    workflow = await database.get_workflow(workflow_id)
+    workflow = await database.get_workflow(workflow_id, owner_user_id=caller)
     if workflow:
         workflow_data = workflow.data or {}
         from services.workflow_context_migration import (
@@ -643,9 +651,14 @@ async def handle_get_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dic
 
 
 async def handle_get_all_workflows(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
-    """Get all workflows."""
+    """Get all workflows visible to the authenticated user."""
+    from constants import OWNER_PRINCIPAL_ID
+
     database = container.database()
-    workflows = await database.get_all_workflows()
+    caller = str(
+        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
+    )
+    workflows = await database.get_all_workflows(owner_user_id=caller)
     return {
         "success": True,
         "workflows": [
@@ -688,6 +701,7 @@ async def _archive_workflow_contexts(database: Any, workflow_id: str) -> int:
 async def delete_workflow_with_context_archival(
     database: Any,
     workflow_id: str,
+    owner_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Delete a workflow through the durable Context lifecycle boundary."""
 
@@ -695,7 +709,7 @@ async def delete_workflow_with_context_archival(
         # Production Database commits graph deletion and archive identities in
         # one transaction. A failed delete therefore cannot fence a Context
         # that is still referenced by the workflow.
-        success = await database.delete_workflow(workflow_id)
+        success = await database.delete_workflow(workflow_id, owner_user_id=owner_user_id)
         completed, pending = await _drain_context_archive_outbox(
             database,
             workflow_id,
@@ -707,7 +721,7 @@ async def delete_workflow_with_context_archival(
             database,
             workflow_id,
         )
-        success = await database.delete_workflow(workflow_id)
+        success = await database.delete_workflow(workflow_id, owner_user_id=owner_user_id)
         pending = 0
     return {
         "success": success,
@@ -719,11 +733,17 @@ async def delete_workflow_with_context_archival(
 
 async def handle_delete_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
     """Archive durable Context threads, then delete their workflow graph."""
+    from constants import OWNER_PRINCIPAL_ID
+
     database = container.database()
     workflow_id = str(data["workflow_id"])
+    caller = str(
+        getattr(getattr(websocket, "state", None), "user_id", None) or OWNER_PRINCIPAL_ID
+    )
     return await delete_workflow_with_context_archival(
         database,
         workflow_id,
+        owner_user_id=caller,
     )
 
 

@@ -142,7 +142,11 @@ async def broadcast_telegram_status(
     )
 
 
-async def dispatch_telegram_message_received(event_data: Mapping[str, Any]) -> None:
+async def dispatch_telegram_message_received(
+    event_data: Mapping[str, Any],
+    *,
+    namespace: Optional[str] = None,
+) -> None:
     """Dispatch an incoming Telegram message via the canary CloudEvents path.
 
     Single delivery: :func:`services.events.dispatch.emit` Signals running
@@ -150,12 +154,18 @@ async def dispatch_telegram_message_received(event_data: Mapping[str, Any]) -> N
     broadcasts the envelope to FE on the ``telegram_message_received``
     wire key. telegramReceive is canary-registered so no legacy
     ``event_waiter`` waiter is ever registered for it.
+
+    ``namespace`` is the Temporal namespace resolved from the credential owner
+    of the bot that received this message.  Defaults to the server default
+    (pre-Fase-6 single-tenant behaviour); Fase 6 wires in the real namespace
+    from the credential customer id stored on TelegramService.
     """
     from services.events.dispatch import emit
 
     await emit(
         telegram_message_received(dict(event_data)),
         wire_routing_key=_MESSAGE_LEGACY_EVENT_TYPE,
+        namespace=namespace,
     )
 
 

@@ -59,6 +59,7 @@ async def emit(
     event: WorkflowEvent,
     *,
     wire_routing_key: Optional[str] = None,
+    namespace: Optional[str] = None,
 ) -> WorkflowEvent:
     """Route ``event`` to running consumer workflows + in-process WS clients.
 
@@ -70,6 +71,14 @@ async def emit(
             field on the WS frame). Defaults to the generic
             ``cloudevent`` channel; plugin emitters override per their
             existing wire key (e.g. ``"telegram_message_received"``).
+        namespace: Temporal namespace to query for running consumers.
+            Defaults to ``Settings().temporal_namespace`` (the server
+            default).  Workflow-less producers (telegram, email,
+            webhook) pass the namespace resolved from the credential
+            owner via :func:`services.tenancy.resolve_tenant_namespace`
+            so that an incoming Telegram message on Tenant A's bot
+            only signals Tenant A's TriggerListenerWorkflows, not every
+            deployed workflow across all namespaces.
 
     Returns:
         The envelope unchanged — callers may chain.
@@ -89,16 +98,20 @@ async def emit(
     # broadcast happen even if the Temporal Visibility query fails (and
     # vice versa).
     await asyncio.gather(
-        _signal_running_consumers(event),
-        _broadcast_in_process(event, wire_routing_key or _DEFAULT_WIRE_ROUTING_KEY),
+        _signal_running_consumers(event, namespace=namespace),
+        _broadcast_in_process(event, wire_routing_key or _DEFAULT_WIRE_ROUTING_KEY, namespace=namespace),
         return_exceptions=False,
     )
     return event
 
 
-async def _signal_running_consumers(event: WorkflowEvent) -> None:
+async def _signal_running_consumers(event: WorkflowEvent, *, namespace: Optional[str] = None) -> None:
     """Find running workflows tagged with ``EventType=event.type`` and
     signal each with ``on_event``.
+
+    When ``namespace`` is provided and differs from the server default, the
+    per-namespace client registry is consulted so the Visibility query hits
+    the correct Temporal namespace for the credential owner (tenant isolation).
 
     Fail-soft: if the Temporal client is unavailable or the Visibility
     query errors, log a warning and continue. The in-process broadcast
@@ -107,7 +120,16 @@ async def _signal_running_consumers(event: WorkflowEvent) -> None:
     try:
         from core.container import container
 
-        wrapper = container.temporal_client()
+        settings = container.settings()
+        default_ns = getattr(settings, "temporal_namespace", "default")
+        use_namespace = namespace or default_ns
+
+        if use_namespace != default_ns and getattr(settings, "multi_tenant_namespaces", False):
+            from services.temporal.client_registry import get_or_fallback
+
+            wrapper = get_or_fallback(use_namespace)
+        else:
+            wrapper = container.temporal_client()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"emit: container.temporal_client unavailable: {exc}")
         return
@@ -247,13 +269,23 @@ async def _signal_one(client, workflow_id: str, event: WorkflowEvent) -> None:
     await handle.signal(_SIGNAL_NAME, event.model_dump(mode="json"))
 
 
-async def _broadcast_in_process(event: WorkflowEvent, wire_routing_key: str) -> None:
+async def _broadcast_in_process(
+    event: WorkflowEvent,
+    wire_routing_key: str,
+    *,
+    namespace: Optional[str] = None,
+) -> None:
     """Direct in-process WS fan-out via the status broadcaster.
 
     Same asyncio event loop as the FastAPI handlers — see ``main.py:
     211-292`` (TemporalWorkerManager starts as ``asyncio.create_task``).
     Activity → broadcaster is a direct method call against in-memory
     ``Set[WebSocket]``; no IPC.
+
+    ``namespace`` is forwarded as ``tenant_id`` to :meth:`broadcast`.
+    When ``None`` (default) the broadcast is global.  When set (e.g. a
+    Telegram message that arrived on Tenant A's bot), only Tenant A's
+    connected browsers receive the WS frame — Tenant B never sees it.
     """
     try:
         from services.status_broadcaster import get_status_broadcaster
@@ -268,7 +300,8 @@ async def _broadcast_in_process(event: WorkflowEvent, wire_routing_key: str) -> 
             {
                 "type": wire_routing_key,
                 "data": event.model_dump(mode="json"),
-            }
+            },
+            tenant_id=namespace,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"emit: WS broadcast failed (wire_key={wire_routing_key!r}): {exc}")

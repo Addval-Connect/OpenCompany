@@ -16,6 +16,12 @@ class DeploymentState:
     edges: List[Dict]
     session_id: str
     user_id: str = "owner"
+    # Temporal namespace this deployment executes in.  Defaults to "default"
+    # (= Settings.temporal_namespace) so single-tenant behaviour is unchanged.
+    # Set by handle_start_workflow / handle_deploy_workflow from
+    # resolve_tenant_namespace so canary listeners and MachinaWorkflows
+    # start in the correct namespace.
+    temporal_namespace: str = "default"
     # Context V2 cutover metadata. Both must be present for
     # MachinaWorkflow to select AgentWorkflowV2; legacy/uncontrolled
     # deployments leave them at zero and retain AgentWorkflow V1.

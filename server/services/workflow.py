@@ -576,6 +576,7 @@ class WorkflowService:
         graph_version: int = 0,
         generation: int = 0,
         user_id: str = "owner",
+        temporal_namespace: str = "default",
     ) -> Dict[str, Any]:
         """Deploy workflow in event-driven mode.
 
@@ -598,6 +599,7 @@ class WorkflowService:
                 status_callback,
                 workflow_id,
                 user_id=user_id,
+                temporal_namespace=temporal_namespace,
             )
         return await manager.deploy(
             nodes,
@@ -608,6 +610,7 @@ class WorkflowService:
             graph_version,
             generation,
             user_id=user_id,
+            temporal_namespace=temporal_namespace,
         )
 
     async def cancel_deployment(self, workflow_id: Optional[str] = None) -> Dict[str, Any]:

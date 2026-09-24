@@ -116,6 +116,9 @@ async def run_temporal_lifecycle(
         await asyncio.sleep(_CONNECT_RETRY_SECONDS)
 
     await _boot_reconcile(log)
+    await _bootstrap_tenant_clients(settings, log)
+    if getattr(settings, "multi_tenant_namespaces", False) and getattr(settings, "temporal_tenant_worker_pool", False):
+        await _start_tenant_workers(settings, log, app_state)
     if owned:
         await _watch_dev_server(wrapper, settings)
 
@@ -157,6 +160,102 @@ async def _startup_sweep(
         logger.warning(f"Startup terminate-running sweep failed: {exc}")
 
 
+def _check_multi_tenant_worker_topology(settings: Settings) -> None:
+    """Raise loudly when the multi-tenant and worker-pool flags are incompatible.
+
+    MachinaWorkflow reads ``settings.temporal_worker_pool_enabled`` INSIDE
+    the workflow body and records the queue choice in Temporal history.  A
+    tenant namespace that has only the default-namespace pool worker would
+    schedule plugin activities on queues nobody polls — workflows hang
+    forever with no error.  Rather than let that happen silently, we refuse
+    to start when the flags are in a dangerous combination.
+
+    Safe combinations:
+    - MULTI_TENANT_NAMESPACES=false (default): no constraint — single namespace.
+    - MULTI_TENANT_NAMESPACES=true + TEMPORAL_WORKER_POOL_ENABLED=false: OK
+      (no pool, so the manager worker on machina-tasks covers all activity
+      types; the manager polls all queues when the pool is off).
+    - MULTI_TENANT_NAMESPACES=true + TEMPORAL_WORKER_POOL_ENABLED=true
+      + TEMPORAL_TENANT_WORKER_POOL=true: OK — a pool is started per namespace.
+
+    Dangerous:
+    - MULTI_TENANT_NAMESPACES=true + TEMPORAL_WORKER_POOL_ENABLED=true
+      + TEMPORAL_TENANT_WORKER_POOL=false (= the trap).
+    """
+    if not getattr(settings, "multi_tenant_namespaces", False):
+        return
+    if not settings.temporal_worker_pool_enabled:
+        return
+    if getattr(settings, "temporal_tenant_worker_pool", False):
+        return
+    raise RuntimeError(
+        "Incompatible Temporal worker topology for multi-tenant mode.\n\n"
+        "MULTI_TENANT_NAMESPACES=true requires one worker pool per tenant "
+        "namespace because MachinaWorkflow records queue choices in Temporal "
+        "history.  A tenant namespace with no pool worker silently hangs "
+        "every workflow.\n\n"
+        "Fix: set TEMPORAL_TENANT_WORKER_POOL=true in .env.  This starts "
+        "one TemporalWorkerManager + TemporalWorkerPool per ready tenant "
+        "namespace using the per-namespace client registry.\n\n"
+        "Alternative (single-worker mode): set TEMPORAL_WORKER_POOL_ENABLED=false "
+        "to route all activity types through the manager worker on machina-tasks. "
+        "This disables per-queue concurrency tuning but avoids the topology trap."
+    )
+
+
+async def _start_tenant_workers(
+    settings: Settings,
+    log: Callable[[str], None],
+    app_state: Any,
+) -> None:
+    """Start one TemporalWorkerManager (+ optional pool) per ready tenant namespace.
+
+    Called only when ``MULTI_TENANT_NAMESPACES=true`` and
+    ``TEMPORAL_TENANT_WORKER_POOL=true``.  Uses the client registry
+    populated by ``_bootstrap_tenant_clients``.  Per-namespace failures
+    are logged but do not abort the other namespaces.
+    """
+    from services.temporal.client_registry import get_client_for_namespace, registered_namespaces
+    from services.temporal.worker import TemporalWorkerManager
+
+    default_ns = settings.temporal_namespace
+    tenant_managers: list = getattr(app_state, "temporal_tenant_worker_managers", None) or []
+    tenant_pools: list = getattr(app_state, "temporal_tenant_pools", None) or []
+
+    for namespace in registered_namespaces():
+        if namespace == default_ns:
+            continue
+        wrapper = get_client_for_namespace(namespace)
+        if wrapper is None or wrapper.client is None:
+            log(f"[Temporal] Skipping worker for {namespace!r}: client not ready")
+            continue
+        try:
+            manager = TemporalWorkerManager(
+                client=wrapper.client,
+                task_queue=settings.temporal_task_queue,
+            )
+            await manager.start()
+            tenant_managers.append(manager)
+            log(f"[Temporal] Worker started for tenant namespace {namespace!r}")
+
+            if settings.temporal_worker_pool_enabled:
+                from services.temporal.worker import TemporalWorkerPool
+
+                pool = TemporalWorkerPool(client=wrapper.client)
+                await pool.start()
+                tenant_pools.append(pool)
+                log(f"[Temporal] Worker pool started for tenant namespace {namespace!r} ({len(pool.queues)} queues)")
+        except Exception as exc:  # noqa: BLE001 — per-namespace isolation
+            logger.warning(
+                "Failed to start workers for tenant namespace",
+                namespace=namespace,
+                error=str(exc),
+            )
+
+    app_state.temporal_tenant_worker_managers = tenant_managers
+    app_state.temporal_tenant_pools = tenant_pools
+
+
 async def _start_execution_engine(
     client: Any,
     app_state: Any,
@@ -164,6 +263,11 @@ async def _start_execution_engine(
     log: Callable[[str], None],
 ) -> None:
     """Wire the executor and start the worker manager (+ optional pool)."""
+    # Validate the worker topology before starting anything.  Raises
+    # RuntimeError if MULTI_TENANT_NAMESPACES=true and the flag combination
+    # would silently hang tenant workflows.
+    _check_multi_tenant_worker_topology(settings)
+
     from core.container import container
     from services.temporal import TemporalExecutor
     from services.temporal.worker import TemporalWorkerManager
@@ -192,6 +296,62 @@ async def _start_execution_engine(
         await pool.start()
         app_state.temporal_pool = pool
         log(f"[Temporal] Worker pool started ({len(pool.queues)} queues)")
+
+
+async def _bootstrap_tenant_clients(settings: Settings, log: Callable[[str], None]) -> None:
+    """Connect a Temporal client for every ready tenant namespace.
+
+    No-op when ``MULTI_TENANT_NAMESPACES=false``.  When true, reads the
+    ``tenant_namespaces`` DB table and calls
+    :func:`services.temporal.client_registry.register` for each row with
+    ``status=ready`` whose namespace differs from the default.  Failures
+    per namespace are logged but do not block the remaining ones — a
+    partially-started multi-tenant deployment is better than no deployment.
+
+    Registered clients share the module-level Runtime in the registry so
+    no extra SDK-level threads are spawned.
+    """
+    if not getattr(settings, "multi_tenant_namespaces", False):
+        return
+
+    from core.container import container
+    from services.temporal.client_registry import register
+    from services.tenancy import STATUS_READY
+
+    database = container.database()
+    default_ns = settings.temporal_namespace
+    try:
+        rows = await database.list_tenant_namespaces()
+    except Exception as exc:  # noqa: BLE001 — non-fatal; single-namespace fallback still works
+        logger.warning("Failed to list tenant namespaces for Temporal bootstrap", error=str(exc))
+        return
+
+    ready_rows = [r for r in rows if r.get("status") == STATUS_READY and r.get("namespace") != default_ns]
+    if not ready_rows:
+        return
+
+    logger.info(
+        "Bootstrapping tenant namespace Temporal clients",
+        count=len(ready_rows),
+        namespaces=[r["namespace"] for r in ready_rows],
+    )
+    log(f"[Temporal] Bootstrapping {len(ready_rows)} tenant namespace client(s)")
+    for row in ready_rows:
+        ns = row["namespace"]
+        try:
+            wrapper = await register(
+                ns,
+                server_address=settings.temporal_server_address,
+                settings=settings,
+            )
+            if wrapper is None:
+                log(f"[Temporal] Tenant namespace {ns!r} client failed to connect (will retry on access)")
+                logger.warning("Tenant namespace client failed to connect", namespace=ns)
+            else:
+                log(f"[Temporal] Tenant namespace {ns!r} client ready")
+                logger.info("Tenant namespace client ready", namespace=ns)
+        except Exception as exc:  # noqa: BLE001 — per-namespace isolation
+            logger.warning("Tenant namespace Temporal bootstrap failed", namespace=ns, error=str(exc))
 
 
 async def _boot_reconcile(log: Callable[[str], None]) -> None:
