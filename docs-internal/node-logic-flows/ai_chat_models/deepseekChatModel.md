@@ -11,7 +11,7 @@
 
 ## Purpose
 
-DeepSeek V4 models (`deepseek-v4-flash`, `deepseek-v4-pro`); `deepseek-chat` / `deepseek-reasoner` remain as legacy aliases (deprecate 2026-07-24). Uses the OpenAI-compatible DeepSeek endpoint via the `services/llm/providers` layer (native path). The `ChatModelBase.chat` operation calls `AIService.execute_chat`. The plugin docstring describes `deepseek-chat`/`deepseek-reasoner` (V3) but the registry description in `__init__.py` predates the V4 rename - the card's V4 listing reflects current `llm_defaults.json`.
+DeepSeek V4.1 models (`deepseek-flash`, `deepseek-v4.1-flash`, `deepseek-v4-pro`); `deepseek-v4-flash` is a retired alias still served by V4.1-Flash, and `deepseek-chat` / `deepseek-reasoner` were discontinued in July 2026. Uses the OpenAI-compatible DeepSeek endpoint via the `services/llm/providers` layer (native path). The `ChatModelBase.chat` operation calls `AIService.execute_chat`. The plugin docstring describes `deepseek-chat`/`deepseek-reasoner` (V3) but the registry description in `__init__.py` predates the V4 rename - the card's V4 listing reflects current `llm_defaults.json`.
 
 ## Inputs (handles)
 
@@ -25,7 +25,7 @@ DeepSeek V4 models (`deepseek-v4-flash`, `deepseek-v4-pro`); `deepseek-chat` / `
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | yes | - | User message |
 | `system_prompt` | string | `""` | no | - | System prompt |
-| `model` | string | `""` (injected) | no | - | `deepseek-v4-flash` / `deepseek-v4-pro`; `deepseek-chat` / `deepseek-reasoner` legacy aliases (reasoner = always-on CoT) |
+| `model` | string | `""` (injected) | no | - | `deepseek-flash` / `deepseek-v4.1-flash` / `deepseek-v4-pro`; `deepseek-v4-flash` retired alias (served by V4.1-Flash) |
 | `temperature` | number\|null | `null` | no | - | 0-2 |
 | `max_tokens` | number\|null | `null` (8-64K) | no | - | 1-200000 |
 | `top_p` | number\|null | `1.0` | no | - | |

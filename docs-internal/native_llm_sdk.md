@@ -100,13 +100,13 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 | **Anthropic** | Claude Sonnet 4.6 | 1M | 128K | budget | 0-1 |
 | **Anthropic** | Claude Haiku 4.5 | 200K | 64K | budget | 0-1 |
 | **Google** | Gemini 3.8-flash (default), 3.7/3.6/3.5-flash, 3.5-flash-lite, 3.1-pro-preview/flash-lite, 3-flash-preview, 2.5-pro/flash/flash-lite | 1M | 64K | budget (`thinking_level` on 3.x when set explicitly) | 0-2 |
-| **xAI** | Grok 4.20/4.20-multi-agent, 4.5, 4.3, 3 | 131K-2M | 131K | model/provider dependent | 0-2 |
-| **DeepSeek** | deepseek-v4-flash (default), deepseek-v4.1-flash, deepseek-v4-pro (deepseek-chat/reasoner legacy) | 1M | 64K | thinking modes | 0-2 |
-| **Kimi** | kimi-k3 (default), kimi-k2.6, kimi-k2.5, kimi-k2.7-code | 1M (K3); 256K (K2) | 131K (K3); 32K/96K (K2) | K2 provider default explicitly disabled unless requested | K2 fixed 0.6; K3 0-1 |
-| **Mistral** | mistral-large/medium/small-latest, codestral-latest | 256K | 131K | none | 0-1.5 |
-| **Groq** | GPT-OSS-120b/20b, Qwen3-32b, legacy Llama 3.x tiers | 131K | 32K-131K | effort (GPT-OSS), format (Qwen3) | 0-2 |
-| **OpenRouter** | 200+ models from multiple providers | varies | varies | varies | 0-2 |
-| **Cerebras** | GPT-OSS-120b (default; only production model), zai-glm-4.7 + gemma-4-31b (preview) | 131K | 40K | budget (`zai-glm-4.7` only — `thinking_models`) | 0-1.5 |
+| **xAI** | Grok 4.20/4.20-multi-agent, 4.6, 4.5, 4.3, 3 | 131K-1M | 131K | model/provider dependent | 0-2 |
+| **DeepSeek** | deepseek-flash (default; V4.1-Flash), deepseek-v4.1-flash, deepseek-v4-pro (deepseek-v4-flash is a retired alias served by V4.1-Flash; chat/reasoner discontinued) | 1M | 384K | thinking modes | 0-2 |
+| **Kimi** | kimi-k3 (default), kimi-k2.6, kimi-k2.7-code (+ `-highspeed`) | 1M (K3); 256K (K2) | 131K (K3); 32K/96K (K2) | K2 provider default explicitly disabled unless requested | K2 fixed 0.6; K3 0-1 |
+| **Mistral** | mistral-large/medium/small-latest (Large 3 / Medium 3.5 / Small 4), codestral-latest | 256K | 32K-131K | none | 0-1.5 |
+| **Groq** | GPT-OSS-120b/20b, Llama 3.x tiers, qwen3.8-27b + minimax-m2.7 (preview) | 131K-196K | 16K-131K | effort (GPT-OSS), format (Qwen3) | 0-2 |
+| **OpenRouter** | 400+ models from multiple providers | varies | varies | varies | 0-2 |
+| **Cerebras** | GPT-OSS-120b (default), qwen-3.8-27b — the only two public-endpoint models | 131K | 40K | none (`thinking_models` empty since zai-glm-4.7 left the public endpoints) | 0-1.5 |
 | **Ollama** | Whatever the user has pulled (qwen2.5, llama3.x, phi-3, deepseek-r1, ...) | per-loaded-model (typed via `ps()`) | ctx ÷ 4 (capped 4096) | none (per-model) | 0-2 |
 | **LM Studio** | Whatever the user has loaded in the LM Studio UI | per-loaded-model (typed via `LlmInstanceInfo.context_length`) | ctx ÷ 4 (capped 4096) | none (per-model) | 0-2 |
 
@@ -231,7 +231,7 @@ Adding a new OpenAI-compatible provider requires a config entry:
 
 ```json
 "deepseek": {
-  "default_model": "deepseek-v4-flash",
+  "default_model": "deepseek-flash",
   "detection_patterns": ["deepseek"],
   "models_endpoint": "https://api.deepseek.com/models",
   "base_url": "https://api.deepseek.com",
@@ -297,8 +297,8 @@ Each provider's `chat()` method reads only the fields it supports. The extracted
 | **Gemini** | gemini-3.x, gemini-2.5-pro/flash | `thinkingBudget` (token count); `thinkingLevel` on 3.x when set explicitly | budget | Uses `thinking_budget` API parameter (`thinking_level` only when the user set it — Vertex rejects an unsolicited level on 2.5-era models) |
 | **OpenAI** | `o3`, `o4-mini` (reasoning-only; both on the API-shutdown path per `_models_note`, `o1`/`o3`/`o4` prefixes still detected) | `reasoningEffort` (low/medium/high) | effort | Reasoning-only models. Temperature omitted. |
 | **OpenAI** | GPT-5.6 sol/terra/luna (+ `-pro`), GPT-5.5, GPT-5.4 (`thinking_models: ["gpt-5"]`) | `reasoningEffort` (low/medium/high/xhigh) | effort | Hybrid reasoning: can operate with or without thinking. |
-| **Groq** | qwen3-32b (`thinking_models: ["qwen3"]`) | `reasoningFormat` ('parsed' or 'hidden') | format | 'parsed' returns reasoning, 'hidden' returns only final answer. GPT-OSS models on Groq use `reasoning_effort` instead (`openai.py:671-675`). |
-| **Cerebras** | zai-glm-4.7 (`thinking_models`) | `thinkingBudget` | budget | Sent as `extra_body.thinking_budget` (`openai.py:111-114`). The qwen-3-235b variants are shut down upstream. |
+| **Groq** | qwen/qwen3.8-27b (`thinking_models: ["qwen3"]`, prefix match) | `reasoningFormat` ('parsed' or 'hidden') | format | 'parsed' returns reasoning, 'hidden' returns only final answer. GPT-OSS models on Groq use `reasoning_effort` instead (`openai.py:671-675`). |
+| **Cerebras** | none — `thinking_models` is empty since zai-glm-4.7 left the public endpoints (2026-09) | `thinkingBudget` | budget | Would be sent as `extra_body.thinking_budget` (`openai.py:111-114`) if a thinking model were curated again. The qwen-3-235b variants are shut down upstream. |
 
 The thinking/reasoning fields (`thinkingEnabled`, `thinkingBudget`, `reasoningEffort`, `reasoningFormat`) live in the backend NodeSpec for each chat model (`server/nodes/model/<provider>_chat_model/`) and are declared once on the shared `ChatModelParams` model in `server/nodes/model/_base.py:24`. The frontend renders them automatically via the universal parameter panel.
 
@@ -340,8 +340,8 @@ The `thinking` field is exposed to downstream nodes via the backend output schem
 - **OpenAI o-series**: Reasoning summaries are only available to organizations that have completed verification at platform.openai.com. Without verification, `thinking` is `null`.
 - **Claude (budget models)**: `max_tokens` must be greater than `thinkingBudget`; the provider raises `max_tokens` to `budget + 1024` when it is not. Temperature is automatically set to 1 when thinking is enabled.
 - **Claude (adaptive models)**: `thinkingBudget` is ignored — the model picks its own depth. No sampling parameters are sent; a user-set temperature is silently dropped for these models rather than rejected.
-- **Groq**: Only Qwen3-32b supports format-based reasoning (QwQ removed from Groq). Format `hidden` suppresses reasoning output. GPT-OSS models take `reasoning_effort`.
-- **Cerebras**: Only `zai-glm-4.7` (preview) is a thinking model, via `thinking_budget`.
+- **Groq**: Only the Qwen3 family (`qwen/qwen3.8-27b` today; qwen3-32b was retired) supports format-based reasoning. Format `hidden` suppresses reasoning output. GPT-OSS models take `reasoning_effort`.
+- **Cerebras**: No curated thinking model since `zai-glm-4.7` left the public endpoints; `thinking_budget` support stays in the provider for when one returns.
 
 See [memory_compaction.md](memory_compaction.md) for how thinking token counts are tracked separately from output tokens.
 

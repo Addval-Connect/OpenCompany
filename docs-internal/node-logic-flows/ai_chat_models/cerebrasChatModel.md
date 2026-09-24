@@ -87,7 +87,7 @@ flowchart TD
 - **Native OpenAI-compatible path**: `ChatUnifier` resolves the `cerebras`
   spec registered in `providers/_compat.py` (reuses `OpenAIProvider` with the
   Cerebras `base_url`) for both chat and agent requests.
-- **Reasoning**: the curated reasoning-capable model is `zai-glm-4.7`; other current Cerebras models ignore the shared thinking controls.
+- **Reasoning**: no curated reasoning-capable model since `zai-glm-4.7` left Cerebras' public endpoints (2026-09); the two current models (`gpt-oss-120b`, `qwen-3.8-27b`) ignore the shared thinking controls.
 - **Temperature range**: narrower (0-1.5 clamp) than OpenAI/Groq. `_resolve_temperature` applies the clamp.
 
 ## Side Effects

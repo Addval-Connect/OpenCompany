@@ -29,7 +29,7 @@ Bare chat and current agent executions share this native provider path.
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | yes | - | User message |
 | `system_prompt` | string | `""` | no | - | System prompt |
-| `model` | string | `""` (injected) | no | - | e.g. `llama-3.1-70b-versatile`, `qwen/qwen3-32b`, `groq/compound-beta` |
+| `model` | string | `""` (injected) | no | - | e.g. `llama-3.1-70b-versatile`, `qwen/qwen3.8-27b`, `groq/compound-beta` |
 | `temperature` | number\|null | `null` | no | - | 0-2 |
 | `max_tokens` | number\|null | `null` (8-131K per model) | no | - | 1-200000 |
 | `top_p` | number\|null | `1.0` | no | - | |
@@ -85,7 +85,7 @@ flowchart TD
   registered in `providers/_compat.py` (reuses `OpenAIProvider` with the
   `base_url` from `llm_defaults.json`) for both chat and agent requests.
 - **Reasoning**: only Qwen3-32b actually honors `reasoningFormat`. Non-Qwen models ignore the flag.
-- **Model ID handling**: only the UI-only `[FREE] ` decoration is stripped. Owner-qualified IDs such as `openai/gpt-oss-120b` and `qwen/qwen3-32b` are preserved because Groq requires them.
+- **Model ID handling**: only the UI-only `[FREE] ` decoration is stripped. Owner-qualified IDs such as `openai/gpt-oss-120b` and `qwen/qwen3.8-27b` are preserved because Groq requires them.
 
 ## Side Effects
 
