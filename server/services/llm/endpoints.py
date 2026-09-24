@@ -48,6 +48,10 @@ SERVER_META_KEY = "_endpoint"
 
 _OPENAI_PREFIX = "/v1"
 
+#: Why a URL with no scheme or host is refused. Also why an endpoint with no
+#: label cannot be named: its name comes from the URL's host.
+FULL_URL_REQUIRED = "Enter the full base URL, including http:// or https:// (for example http://localhost:8080/v1)."
+
 
 def base_url_key(provider_ref: str) -> str:
     """Credential-row key holding the resolved base URL of ``provider_ref``."""
@@ -126,10 +130,7 @@ async def resolve_base_url(candidate: str, *, api_key: str, timeout: float = 10.
 
     base = _normalize_candidate(candidate)
     if base is None:
-        return ResolvedBaseUrl(
-            None,
-            reason="Enter the full base URL, including http:// or https:// (for example http://localhost:8080/v1).",
-        )
+        return ResolvedBaseUrl(None, reason=FULL_URL_REQUIRED)
 
     candidates = [base] if base.endswith(_OPENAI_PREFIX) else [base, base + _OPENAI_PREFIX]
     key_rejected_at: Optional[str] = None
@@ -220,6 +221,7 @@ async def list_endpoints(auth: "AuthService") -> List[SavedEndpoint]:
 
 __all__ = [
     "BASE_URL_SUFFIX",
+    "FULL_URL_REQUIRED",
     "SERVER_META_KEY",
     "ResolvedBaseUrl",
     "SavedEndpoint",

@@ -209,10 +209,22 @@ _SLUG_PATTERN = re.compile(r"^[a-z0-9-]+$")
 
 
 def _endpoint_slug(label: str, base_url: str) -> str:
-    """Slug for a new endpoint: from its label, else from the URL's host."""
+    """Slug for a new endpoint: from its label, else from the URL's host and port.
+
+    Never from the whole network location, which can carry a username and
+    password: the slug is the endpoint's name, stored and shown in plain
+    text. Empty when there is neither a label nor a host to name it by.
+    """
     from slugify import slugify
 
-    source = label or urlsplit(base_url).netloc or base_url
+    source = label
+    if not source:
+        parts = urlsplit(base_url)
+        try:
+            port = parts.port
+        except ValueError:  # malformed port: name it by the host alone
+            port = None
+        source = " ".join(str(part) for part in (parts.hostname, port) if part)
     return slugify(source, max_length=_ENDPOINT_SLUG_MAX, separator="-")
 
 
@@ -246,7 +258,7 @@ class OpenAICompatibleCredential(_LLMApiKey):
     @classmethod
     async def validate(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         from services.llm.config import endpoint_ref, split_provider_ref
-        from services.llm.endpoints import SERVER_META_KEY, base_url_key
+        from services.llm.endpoints import FULL_URL_REQUIRED, SERVER_META_KEY, base_url_key
         from services.plugin.deps import get_auth_service
 
         from ._local_validator import save_llm_server
@@ -273,7 +285,9 @@ class OpenAICompatibleCredential(_LLMApiKey):
             candidate = (data.get("api_key") or "").strip()
             slug = _endpoint_slug(label, candidate)
             if not slug:
-                return _rejected("Give the endpoint a label with at least one letter or digit.")
+                return _rejected(
+                    "Give the endpoint a label with at least one letter or digit." if label else FULL_URL_REQUIRED
+                )
             ref = endpoint_ref(slug)
             if await auth.get_api_key(ref):
                 return _rejected(

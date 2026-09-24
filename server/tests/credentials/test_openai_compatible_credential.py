@@ -58,6 +58,22 @@ class TestAdd:
         ref, url, key = save.await_args.args
         assert (ref, url, key) == ("openai_compatible:localhost-8080", "http://localhost:8080", None)
 
+    async def test_credentials_in_the_url_never_reach_the_name(self, auth, save):
+        await OpenAICompatibleCredential.validate({"api_key": "http://admin:s3cret@gpu-box:8000/v1"})
+
+        ref = save.await_args.args[0]
+        label = save.await_args.kwargs["label"]
+        assert ref == "openai_compatible:gpu-box-8000"
+        assert label == "gpu-box-8000"
+        assert not any(secret in f"{ref} {label}" for secret in ("admin", "s3cret"))
+
+    async def test_an_unlabelled_url_without_a_host_asks_for_the_full_url(self, auth, save):
+        result = await OpenAICompatibleCredential.validate({"api_key": "localhost:8080"})
+
+        assert result["valid"] is False
+        assert "full base URL" in result["message"]
+        save.assert_not_awaited()
+
     async def test_a_slug_fits_the_provider_column_with_its_url_suffix(self, auth, save):
         await OpenAICompatibleCredential.validate({"api_key": "http://h", "openai_compatible_label": "a very long endpoint label indeed"})
 
