@@ -146,7 +146,7 @@ BackendAdapter.adapt("groq", "llama-3.3-70b-versatile", "gsk-...")
 
 ### ChatModelExtractor
 
-Scans `tool_data` (nodes connected to `input-tools`) for `AI_CHAT_MODEL_TYPES` nodes. Extracts their provider/model/api_key and converts via `BackendAdapter` into RLM's `other_backends` format.
+Scans `tool_data` (nodes connected to `input-tools`) for `AI_CHAT_MODEL_TYPES` nodes. Takes each node's provider from `detect_ai_provider` (chat-model nodes carry no `provider` field: the type names it, or the `endpoint` parameter for an OpenAI-compatible node) plus its model and api_key, and converts them via `BackendAdapter` into RLM's `other_backends` format. A provider missing from the mapping above (Ollama, LM Studio, xAI, a named endpoint, ...) is refused with a clear error rather than sent to the OpenAI backend, since RLM never reads a user base URL.
 
 Currently RLM supports one `other_backend` (for depth>=1 calls). If multiple chat model nodes are connected, only the first is used.
 

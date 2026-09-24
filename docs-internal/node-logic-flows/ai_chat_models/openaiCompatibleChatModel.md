@@ -26,7 +26,7 @@ Chat with any OpenAI-compatible server the user has saved as a named endpoint un
 | `endpoint` | string | `""` | yes | - | The saved endpoint, as its reference `openai_compatible:<slug>`. Options from the `openaiCompatibleEndpoints` loader; rendered first |
 | `prompt` | string | `""` | yes | - | User message |
 | `system_prompt` | string | `""` | no | - | System prompt |
-| `model` | string | `""` (first option) | no | - | Options from the `openaiCompatibleModels` loader: the models stored when the endpoint was saved or refreshed. Reloads when `endpoint` changes. Open-world: the name is not pattern-checked |
+| `model` | string | `""` (first option) | no | - | Options from the `openaiCompatibleModels` loader: the models stored when the endpoint was saved or refreshed. Reloads when `endpoint` changes, and moves to the first model the new endpoint serves when the old one is not among them. Open-world: the name is not pattern-checked |
 | `temperature` | number\|null | `null` | no | - | 0-2 |
 | `max_tokens` | number\|null | `null` | no | - | 1-200000. Unset: the model's registered max output (a quarter of its context, 512-4096, when only the context is known), else 2048 |
 | `top_p` | number\|null | `1.0` | no | - | |
@@ -77,7 +77,7 @@ flowchart TD
 
 ## Decision Logic
 
-- **Provider routing**: `detect_ai_provider` recognises this node type before the `lmstudio` / `ollama` tokens and returns `parameters["endpoint"]`. With no endpoint chosen it returns the bare `openai_compatible`, which holds no key, so the run stops before any request is sent.
+- **Provider routing**: `detect_ai_provider` recognises this node type before the `lmstudio` / `ollama` tokens and returns `parameters["endpoint"]`. With no endpoint chosen it returns the bare `openai_compatible`, which holds no key, so the run stops before any request is sent, asking the user to choose an endpoint.
 - **Base URL**: the URL resolved when the endpoint was saved (`services/llm/endpoints.py::resolve_base_url`); nothing is probed at call time. A call whose `{ref}_proxy` row is missing is refused instead of going to the SDK's default, api.openai.com.
 - **Key**: the stored key, or the declared placeholder `sk-no-key-required` (`auth.placeholder_key` in `llm_defaults.json`); never `None`, so the SDK never falls back to `OPENAI_API_KEY`.
 - **Open-world model name**: `openai_compatible` declares `open_world_models: true`, so `is_model_valid_for_provider` accepts any model id.
@@ -102,7 +102,7 @@ flowchart TD
 
 - **The model list is a snapshot**: it is read when the endpoint is saved or refreshed. A model the server loads later appears only after Refresh in the Credentials panel.
 - **Sizing**: the kind is detected once at save time. An endpoint detected as Ollama or LM Studio is sized by their SDK probes, llama.cpp by `n_ctx` from `/props`; any other server by vLLM's `max_model_len` on the model list, then LiteLLM's model table by model id. Failing all of these the `openai_compatible` defaults apply (8192 context, 2048 output).
-- **Removed endpoint**: a node that still names it has no key row, so the run fails before any request is sent. Pick another endpoint, or add it again.
+- **Removed endpoint**: a node that still names it has no key row, so the run fails before any request is sent, with "The OpenAI-compatible endpoint '<slug>' is not configured", and the workflow validator flags the node (MISSING_CREDENTIAL checks the endpoint it names). Pick another endpoint, or add it again.
 - **Error boundary**: typed OpenAI SDK failures become user-safe `NodeUserError` values in `ChatUnifier`, which `BaseNode.execute()` turns into the standard failure envelope.
 
 ## Related

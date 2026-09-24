@@ -93,7 +93,9 @@ flowchart TD
 ## External Dependencies
 
 - **Credentials**: `auth_service.get_api_key(<provider>)` for big LM, and
-  optionally the small-LM provider wired as a connected chat-model node.
+  optionally the small-LM provider wired as a connected chat-model node. That
+  node's provider comes from its type (or its `endpoint`), and one RLM cannot
+  route (Ollama, LM Studio, a named endpoint) is refused like the agent's own.
 - **Services**: `RLMService`, `StatusBroadcaster`, `PricingService`.
 - **Python packages**: the `rlm` package plus the native OpenCompany LLM
   configuration and tool-bridge helpers.

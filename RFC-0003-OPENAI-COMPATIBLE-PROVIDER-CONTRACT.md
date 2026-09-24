@@ -220,11 +220,12 @@ is the module's justification for existing.
 ### 6.2 Kind (D14)
 
 For a named endpoint only, detected against the host (the resolved base with a
-trailing `/v1` stripped), 3 s per route, each route accepted **by body shape**:
+trailing `/v1` stripped). The three routes are asked at once with a 3 s timeout,
+and each is accepted **by body shape**:
 
 | Route | Accepted when the body | Kind |
 |---|---|---|
-| `GET /props` | has a `default_generation_settings` object | `llamacpp` (asked first: llama.cpp also mimics some Ollama routes) |
+| `GET /props` | has a `default_generation_settings` object | `llamacpp` (wins when several answer: llama.cpp also mimics some Ollama routes) |
 | `GET /api/v1/models` | has a `models` list | `lmstudio` (LM Studio's current native REST API; v0 is legacy) |
 | `GET /api/version` | has a `version` string | `ollama` |
 | otherwise | | `generic` |
@@ -250,7 +251,18 @@ Only after rooting and describing succeed: write `{ref}_proxy` (the resolved
 URL), then `{ref}` (key or placeholder, model ids, per-model params, and a
 reserved `_endpoint` entry holding the label, the **redacted** URL and the
 kind — that JSON column is not encrypted), then register the models, then
-broadcast. Otherwise nothing (D5).
+broadcast. Otherwise nothing (D5). A write the credential store rejects fails
+the save too, and a rejected `{ref}` write puts the `{ref}_proxy` row back as it
+was.
+
+### 6.5 Time budget
+
+A save runs inside one WebSocket request, so every step after rooting is
+bounded: the native routes 3 s (asked at once), the Ollama and LM Studio SDK
+probes 10 s, and an on-demand LiteLLM fetch 8 s in total, not retried for 10
+minutes after a failure. The worst case is about 33 s; the client waits 60 s
+(`CREDENTIAL_PROBE_REQUEST_TIMEOUT`) for `validate_api_key`, so a slow save is
+not cut off and then completed behind the user's back.
 
 ## 7. Credential resolution
 
@@ -283,8 +295,9 @@ are issued without a resolved key.
 `split_provider_ref(ref) -> (name, slug)` is the only parser. The slug comes
 from the label via `python-slugify` (`[a-z0-9-]`, at most 24 characters, so
 `openai_compatible:<slug>_proxy` fits the 50-character provider column), or
-from the URL's host and port when no label is given. An existing label is
-rejected, not auto-suffixed.
+from the URL's host and port when no label is given (never the whole network
+location, which can carry a username and password; a URL with no host and no
+label is refused). An existing label is rejected, not auto-suffixed.
 
 The reference is keyed like any provider, which is why endpoints do not use the
 Discord `session_id` scoping: every LLM key lookup in the tree is keyed by
@@ -322,6 +335,17 @@ URL row by the full reference, and refuses an `openai_compatible` reference
 with no URL row ("not configured") rather than let the SDK default to
 api.openai.com. The client cache already keys on the URL and the key
 fingerprint, so two endpoints never share a client unless they share both.
+
+A removed or never-chosen endpoint usually shows up earlier, as a missing key:
+saving always stores one, so its absence means the rows are gone. Wherever it
+is found first, the user gets the same words from
+`endpoints.py::unconfigured_endpoint_message` ("The OpenAI-compatible endpoint
+'<slug>' is not configured", or "Choose an OpenAI-compatible endpoint" for the
+bare id): the in-process agents and chat model raise it as a `NodeUserError`,
+the Temporal activities as a non-retryable `MissingAgentProviderCredential`.
+The workflow validator's MISSING_CREDENTIAL asks `Credential.is_configured`
+with the node's parameters, so an endpoint node is checked against the
+endpoint it names, not the bare id, which never holds a row.
 
 ### 8.4 Alignment (D17)
 
@@ -383,7 +407,10 @@ that would have made the original bug self-diagnosing.
 
 Every failure logs `url` (redacted by `redact_url`: no userinfo, query or
 fragment) and `url_source` (`proxy`, `llm_defaults` or `sdk_default`, recorded
-by `OpenAIProvider` when it is built). The key is never logged. Per the repo's
+by `OpenAIProvider` when it is built), under the provider reference the call
+was made with. The unifier logs before deciding whether to translate the
+error, so agent steps, which take it untranslated to keep its structure, log it
+too. The key is never logged. Per the repo's
 `NodeUserError` contract, a routing or credential failure is user-correctable:
 one WARN line, no traceback.
 
@@ -451,8 +478,8 @@ key on the LM Studio row with LM Studio's own placeholder.
 | AG17 | `openai_compatible` is registered once, `OpenAIProvider`, no `base_url` | `tests/llm/test_provider_self_registration.py` |
 | AG18 | Refresh keeps local models; caches under DATA_DIR only; LiteLLM trimming and matching | `tests/services/test_model_registry_caches.py` |
 | AG19 | Every agent `provider` field is loader-driven and offers every registered provider except the bare endpoint id | `tests/llm/test_plugin_shape.py` |
-| AG20 | RLM refuses a provider it cannot route; the node, loaders and `ProviderRef` validation | `tests/nodes/test_openai_compatible_node.py` |
-| FE | The endpoint list renders rows and hands the clicked row back | `client/.../panels/__tests__/EndpointList.test.tsx` |
+| AG20 | RLM refuses a provider it cannot route, as its own or a connected chat model's; the node, loaders and `ProviderRef` validation | `tests/nodes/test_openai_compatible_node.py` |
+| FE | The endpoint list renders rows and hands the clicked row back; the panel's add, refresh and remove payloads and the probe budget | `client/.../panels/__tests__/EndpointList.test.tsx`, `ApiKeyPanel.test.tsx` |
 
 AG5 (three verdict states rendered) is retired with D4.
 
@@ -490,7 +517,11 @@ Servers the user runs:
 **RLM** builds its own clients from `services/rlm/constants.py` for six
 providers and never reads a user base URL, so it cannot use a local server or
 a named endpoint. It now refuses such a provider with a clear message instead
-of sending the request to api.openai.com; routing it properly is separate work.
+of sending the request to api.openai.com, both as the agent's own provider and
+as a chat model connected to it (whose provider comes from
+`detect_ai_provider`: chat-model nodes carry no `provider` field, and reading
+one sent every connected chat model to the OpenAI backend). Routing it properly
+is separate work.
 
 ## 16. References
 

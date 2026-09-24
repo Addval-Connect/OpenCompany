@@ -74,7 +74,7 @@ user-named endpoints, each its own provider reference `openai_compatible:<slug>`
 | `deepseek` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible at `api.deepseek.com` (root-mounted, no `/v1`) |
 | `kimi` | `providers/_compat.py` + base_url | `openai` | Moonshot AI, OpenAI-compatible |
 | `mistral` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible |
-| `ollama` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `ollama` (probe) | Local server. Saving roots the URL through the OpenAI surface, then `ollama.AsyncClient.ps()` gives the typed `context_length` of each loaded model. Runtime uses `OpenAIProvider` with `base_url={resolved URL}` so traffic stays on `localhost`. |
+| `ollama` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `ollama` (probe) | Local server. Saving roots the URL through the OpenAI surface, then `ollama.AsyncClient.ps()` gives the typed `context_length` of each loaded model. Runtime passes the resolved URL to `OpenAIProvider` as `proxy_url` (it wins over the `llm_defaults.json` `base_url`), so traffic stays on `localhost`. |
 | `lmstudio` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `lmstudio` (probe) | Local server. Same save path; `lmstudio.AsyncClient.llm.list_loaded()` gives the typed `LlmInstanceInfo.context_length`. Same OpenAI-compat runtime path as Ollama. |
 | `openai_compatible` | `providers/_compat.py` (no `base_url`) + one `{ref}_proxy` URL per endpoint | `openai` | Named endpoints: llama.cpp, vLLM, a LiteLLM proxy, a second Ollama host. Added in the Credentials Modal; see "Named OpenAI-compatible endpoints". |
 | `groq` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible |
@@ -135,7 +135,9 @@ Ollama and LM Studio expose an OpenAI-compatible `/v1` HTTP API, so they ride th
    - **LM Studio**: `lmstudio.AsyncClient.llm.list_loaded()` returns `AsyncModelHandle` per loaded model; `handle.get_info()` is a typed `LlmInstanceInfo` (`context_length`, `max_context_length`, `vision`, `trained_for_tool_use`, `architecture`, `params_string`, `format`).
 3. **Persist only on success**: `{provider}_proxy` gets the resolved URL, then `{provider}` gets the vendor's documented placeholder key (`auth.placeholder_key` in `llm_defaults.json`, resolved by `services/llm/config.py::resolve_credential`), the model list and `model_params`. The params are also registered with `model_registry.register_local_model()`, which keeps them apart from the OpenRouter snapshot and persists them under DATA_DIR (`local_models.json`), so the sync `get_context_length()` / `get_max_output_tokens()` lookups honour the **real n_ctx the server is currently serving**, an OpenRouter refresh cannot wipe them, and user model names never land in the tracked `config/model_registry.json`.
 
-A failed save writes nothing and broadcasts nothing: a typo in a re-Fetch leaves a working configuration in force. **Both servers must have a model loaded** for the probe to return entries; "no models loaded" is a failed save.
+A failed save writes nothing and broadcasts nothing: a typo in a re-Fetch leaves a working configuration in force. That includes a write the credential store rejects: a rejected key row puts the URL row back as it was. **Both servers must have a model loaded** for the probe to return entries; "no models loaded" is a failed save.
+
+Every step after rooting is bounded so a save fits its WebSocket request: native routes 3 s (asked at once), the SDK probes 10 s, an on-demand LiteLLM fetch 8 s (not retried for 10 minutes after a failure). The client waits 60 s for `validate_api_key` (`CREDENTIAL_PROBE_REQUEST_TIMEOUT` in `WebSocketContext.tsx`), above the worst case of about 33 s.
 
 **Runtime path** — `ChatUnifier` reads `{provider}_proxy` and passes it to the
 registered provider factory. `OpenAIProvider` uses it as `base_url` and sends
@@ -155,7 +157,8 @@ Modal under **OpenAI-compatible** with a Base URL (with or without `/v1`), an
 optional label and an optional key. No code. RFC-0003 D13–D17 is the contract.
 
 - **Identity.** Each endpoint is the provider reference
-  `openai_compatible:<slug>` (slug from the label, else from the host and port).
+  `openai_compatible:<slug>` (slug from the label, else from the host and port,
+  never from userinfo in the URL).
   It is stored exactly like Ollama: `{ref}` holds the key (or the placeholder
   `sk-no-key-required`), the model list and per-model params; `{ref}_proxy`
   holds the resolved URL. The reference travels as the ordinary `provider`
@@ -163,8 +166,9 @@ optional label and an optional key. No code. RFC-0003 D13–D17 is the contract.
   everything read from `llm_defaults.json` or `pricing.json` resolves it to the
   shared `openai_compatible` block through `split_provider_ref`.
 - **Saving** runs the same path as Ollama, plus a one-time kind detection from
-  native routes by body shape (`/props` → llama.cpp, `/api/v1/models` → LM
-  Studio, `/api/version` → Ollama, else generic). Context and price come from the
+  native routes by body shape, asked at once (`/props` → llama.cpp, which wins
+  when several answer; `/api/v1/models` → LM Studio; `/api/version` → Ollama;
+  else generic). Context and price come from the
   server first (Ollama / LM Studio SDK probes, llama.cpp `/props` `n_ctx`, vLLM
   `max_model_len`), then — for generic servers only — LiteLLM's
   `model_prices_and_context_window.json` (fetched by `ModelRegistryService` on
@@ -174,12 +178,19 @@ optional label and an optional key. No code. RFC-0003 D13–D17 is the contract.
   registered providers. The `openaiCompatibleChatModel` node picks one in its
   `endpoint` field — deliberately not `provider`, which would trigger the
   parameter panel's stored-key effect — and its `model` dropdown lists that
-  endpoint's models. The global default-model picker lists each endpoint too.
+  endpoint's models; changing the endpoint moves the model to one the new
+  endpoint serves. The global default-model picker lists each endpoint too.
 - **Removing** goes through `delete_api_key` with the reference, which also
   clears the URL row and the registered models. A workflow still pointing at a
-  removed endpoint fails with "not configured", never a call to OpenAI.
+  removed endpoint fails with "The OpenAI-compatible endpoint '<slug>' is not
+  configured" (`endpoints.py::unconfigured_endpoint_message`, on every path),
+  never a call to OpenAI, and the workflow validator flags the node, because
+  `Credential.is_configured` checks the endpoint the node names.
+- **Failures** log the redacted URL and `url_source` under the endpoint's
+  reference, on agent steps as well as direct chat.
 - **RLM** builds its own clients and cannot use an endpoint (or a local
-  server); it refuses one with a clear message.
+  server); it refuses one with a clear message, whether it is the agent's
+  provider or a chat model connected to it.
 
 ## Provider Protocol
 

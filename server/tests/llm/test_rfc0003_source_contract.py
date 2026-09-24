@@ -24,7 +24,7 @@ V1_ALLOWED_FILES = {ENDPOINTS_PY}
 V1_ALLOWED_FUNCTIONS = {(LOCAL_VALIDATOR_PY, "_strip_v1_path")}
 
 # Keys in llm_defaults.json that nothing reads. Listed so a NEW dead key
-# fails AG9; tracked for removal in RFC-0003 §12.
+# fails AG9; tracked for removal in RFC-0003 §14.
 KNOWN_DEAD_JSON_KEYS = {"api_key_param", "max_tokens_param"}
 
 
