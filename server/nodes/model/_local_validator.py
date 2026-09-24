@@ -95,6 +95,20 @@ def _failure(provider_ref: str, message: str) -> Dict[str, Any]:
     }
 
 
+def _store_failed(display: str) -> str:
+    return f"Could not save {display}: the credential store did not accept the write. See the server log."
+
+
+async def _restore_url_row(auth_service: Any, url_key: str, previous: Optional[str]) -> None:
+    """Undo the URL-row write of a save whose key-row write failed (D5)."""
+    if previous:
+        restored = await auth_service.store_api_key(provider=url_key, api_key=previous, models=[])
+    else:
+        restored = await auth_service.remove_api_key(url_key)
+    if not restored:
+        logger.error("LLM server save could not restore its URL row", provider=url_key)
+
+
 def _strip_v1_path(base_url: str) -> str:
     """Return ``base_url`` with a trailing ``/v1`` segment stripped.
 
@@ -368,15 +382,21 @@ async def save_llm_server(
     }
 
     auth_service = get_auth_service()
+    url_key = base_url_key(provider_ref)
+    previous_url = await auth_service.get_api_key(url_key)
     # The URL row first: a key row with no URL row is exactly what the
-    # runtime reports as "not configured".
-    await auth_service.store_api_key(provider=base_url_key(provider_ref), api_key=base_url, models=[])
-    await auth_service.store_api_key(
+    # runtime reports as "not configured". store_api_key reports a failed
+    # write by returning False; a save it rejected is not a save.
+    if not await auth_service.store_api_key(provider=url_key, api_key=base_url, models=[]):
+        return _failure(provider_ref, _store_failed(display))
+    if not await auth_service.store_api_key(
         provider=provider_ref,
         api_key=api_key,
         models=models,
         model_params={**model_params, SERVER_META_KEY: server_meta},
-    )
+    ):
+        await _restore_url_row(auth_service, url_key, previous_url)
+        return _failure(provider_ref, _store_failed(display))
 
     # Keep the sync ``get_context_length`` / ``get_max_output_tokens``
     # lookups on the real per-model values without a DB read per call.

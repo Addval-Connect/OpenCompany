@@ -30,8 +30,13 @@ class FakeAuth:
     def __init__(self) -> None:
         self.rows: Dict[str, Dict[str, Any]] = {}
         self.stored: List[str] = []
+        # Providers whose write the store rejects, as AuthService does on a
+        # database error: it logs and returns False.
+        self.rejects: set = set()
 
     async def store_api_key(self, provider, api_key, models, session_id="default", model_params=None):
+        if provider in self.rejects:
+            return False
         self.stored.append(provider)
         self.rows[provider] = {"key": api_key, "models": list(models), "model_params": model_params or {}}
         return True
@@ -39,6 +44,10 @@ class FakeAuth:
     async def get_api_key(self, provider, session_id="default") -> Optional[str]:
         row = self.rows.get(provider)
         return row["key"] if row else None
+
+    async def remove_api_key(self, provider, session_id="default") -> bool:
+        self.rows.pop(provider, None)
+        return True
 
 
 @pytest.fixture
@@ -135,6 +144,39 @@ class TestFailedSaveChangesNothing:
         assert result["valid"] is False
         assert "no models are loaded" in result["message"]
         assert auth.stored == []
+        broadcaster.update_api_key_status.assert_not_awaited()
+
+    @staticmethod
+    def _llamacpp_at(base: str) -> None:
+        respx.get(f"{base}/models").mock(return_value=httpx.Response(200, json=_models("model.gguf")))
+        respx.get(f"{base}/props").mock(
+            return_value=httpx.Response(200, json={"default_generation_settings": {"n_ctx": 8192}})
+        )
+
+    @respx.mock
+    async def test_a_rejected_key_row_puts_the_old_url_back(self, auth, broadcaster, registry):
+        auth.rows[f"{REF}_proxy"] = {"key": "http://old:8080", "models": [], "model_params": {}}
+        auth.rejects.add(REF)
+        self._llamacpp_at("http://host:8080")
+
+        result = await lv.save_llm_server(REF, "http://host:8080", None, display="llama", label="llama")
+
+        assert result["valid"] is False
+        assert "did not accept the write" in result["message"]
+        assert auth.rows[f"{REF}_proxy"]["key"] == "http://old:8080"
+        assert REF not in auth.rows
+        assert registry.get_model_info("model.gguf", REF) is None
+        broadcaster.update_api_key_status.assert_not_awaited()
+
+    @respx.mock
+    async def test_a_rejected_first_save_leaves_no_url_row(self, auth, broadcaster, registry):
+        auth.rejects.add(REF)
+        self._llamacpp_at("http://host:8080")
+
+        result = await lv.save_llm_server(REF, "http://host:8080", None, display="llama", label="llama")
+
+        assert result["valid"] is False
+        assert auth.rows == {}
         broadcaster.update_api_key_status.assert_not_awaited()
 
 
