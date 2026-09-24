@@ -15,7 +15,8 @@ Talking to each vendor SDK directly avoids three problems a translation layer ke
 3. **Endpoint control**: OpenAI-compatible endpoint URLs are declared in
    `server/config/llm_defaults.json` and registered through `_compat.py`.
    Adding one requires the JSON entry plus one `_COMPAT_PROVIDERS` entry, not a
-   provider-specific adapter class.
+   provider-specific adapter class. A server the user runs needs no code at
+   all: it is a named endpoint (see "Named OpenAI-compatible endpoints").
 
 The native layer also gives a single normalized response shape (`LLMResponse`) across providers, which simplifies downstream code for token tracking, cost calculation, and thinking extraction.
 
@@ -25,7 +26,10 @@ The native layer also gives a single normalized response shape (`LLMResponse`) a
 server/services/llm/
 |-- __init__.py           Public API exports
 |-- protocol.py           Message, ToolDef, ToolCall, Usage, LLMResponse, LLMProvider (Protocol)
-|-- config.py             ProviderConfig, PROVIDER_CONFIGS (built from llm_defaults.json)
+|-- config.py             ProviderConfig, PROVIDER_CONFIGS (built from llm_defaults.json);
+|                         provider references (split_provider_ref) and resolve_credential
+|-- endpoints.py          Save-time only: resolve_base_url (roots a user URL by asking the
+|                         server), redact_url, list_endpoints (RFC-0003)
 |-- registry.py           ProviderSpec + register_provider() — the live provider entry point;
 |                         sdk_exception_refs are lazy "module:Class" strings resolved at except time.
 |                         THIN SHIM since the speech work: the mechanism lives in
@@ -45,7 +49,8 @@ server/services/llm/
     |-- gemini.py         GeminiProvider (google-genai SDK)
     |-- openrouter.py     OpenRouterProvider (extends OpenAIProvider with headers)
     `-- _compat.py        Registers the 9 OpenAI-compatible providers (xai, deepseek, kimi,
-                          mistral, groq, cerebras, ollama, lmstudio, sarvam) via base_url specs
+                          mistral, groq, cerebras, ollama, lmstudio, sarvam) via base_url specs,
+                          plus openai_compatible (no base_url) for every named endpoint
 ```
 
 Each provider module calls `register_provider(ProviderSpec(...))` at module
@@ -55,7 +60,9 @@ providers share `_compat.py` and its explicit `_COMPAT_PROVIDERS` tuple.
 
 ## Supported Providers
 
-The native layer currently supports **13 providers**, grouped by implementation:
+The native layer currently registers **14 providers**, grouped by implementation.
+The last, `openai_compatible`, is not one server: it serves any number of
+user-named endpoints, each its own provider reference `openai_compatible:<slug>`.
 
 | Provider | Implementation | SDK | Notes |
 |---|---|---|---|
@@ -67,8 +74,9 @@ The native layer currently supports **13 providers**, grouped by implementation:
 | `deepseek` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible at `api.deepseek.com` (root-mounted, no `/v1`) |
 | `kimi` | `providers/_compat.py` + base_url | `openai` | Moonshot AI, OpenAI-compatible |
 | `mistral` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible |
-| `ollama` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `ollama` (probe) | Local server. Validator probes via `ollama.AsyncClient.ps()` for typed `context_length` per loaded model. Runtime uses `OpenAIProvider` with `base_url={user URL}` so traffic stays on `localhost`. |
-| `lmstudio` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `lmstudio` (probe) | Local server. Validator probes via `lmstudio.AsyncClient.llm.list_loaded()` for typed `LlmInstanceInfo.context_length`. Same OpenAI-compat runtime path as Ollama. |
+| `ollama` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `ollama` (probe) | Local server. Saving roots the URL through the OpenAI surface, then `ollama.AsyncClient.ps()` gives the typed `context_length` of each loaded model. Runtime uses `OpenAIProvider` with `base_url={resolved URL}` so traffic stays on `localhost`. |
+| `lmstudio` | `providers/_compat.py` + `{provider}_proxy` URL | `openai` (chat) + `lmstudio` (probe) | Local server. Same save path; `lmstudio.AsyncClient.llm.list_loaded()` gives the typed `LlmInstanceInfo.context_length`. Same OpenAI-compat runtime path as Ollama. |
+| `openai_compatible` | `providers/_compat.py` (no `base_url`) + one `{ref}_proxy` URL per endpoint | `openai` | Named endpoints: llama.cpp, vLLM, a LiteLLM proxy, a second Ollama host. Added in the Credentials Modal; see "Named OpenAI-compatible endpoints". |
 | `groq` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible |
 | `cerebras` | `providers/_compat.py` + base_url | `openai` | OpenAI-compatible |
 | `sarvam` | `providers/_compat.py` + base_url | `openai` | Indic-first (`sarvam-105b` 128K, `sarvam-30b` 64K) at `api.sarvam.ai/v1`. Ships **no model-list route**, so it sets `supports_model_listing: false` — see below. Reasoning is on by default and returns in `reasoning_content`, which `OpenAIProvider._normalize` already reads. |
@@ -77,13 +85,15 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 
 ### Native chat path vs agent dropdown — two different counts
 
-- **Native chat path (`execute_chat` / `fetch_models`) supports 13 providers, all native** — Anthropic and Gemini via their own SDKs; OpenAI and OpenRouter via the openai SDK; and 9 more through the shared OpenAI-compatible client with a per-provider `base_url` (xai, deepseek, kimi, mistral, groq, cerebras, ollama, lmstudio, sarvam — registered in `providers/_compat.py`). `execute_chat` delegates every provider to `ChatUnifier.chat`; there is no per-provider branch. `xai` lives here.
-- **The agent dropdown exposes the same 13 providers** for `aiAgent`,
-  `chatAgent` (Zeenie), and all specialized agents, including `xai`.
-  `test_plugin_shape.py` asserts exact set equality between the registry and
-  the `provider` Literal in all three agent Params classes, so registering a
-  provider without updating `nodes/agent/ai_agent`, `nodes/agent/chat_agent`
-  and `nodes/agent/_specialized` fails CI immediately.
+- **Native chat path (`execute_chat` / `fetch_models`) supports every registered provider, all native** — Anthropic and Gemini via their own SDKs; OpenAI and OpenRouter via the openai SDK; and the rest through the shared OpenAI-compatible client (xai, deepseek, kimi, mistral, groq, cerebras, ollama, lmstudio, sarvam with a per-provider `base_url`, and every named endpoint with its own resolved URL — all registered in `providers/_compat.py`). `execute_chat` delegates every provider to `ChatUnifier.chat`; there is no per-provider branch. `xai` lives here.
+- **The agent dropdown offers every registered provider, then each saved
+  endpoint**, for `aiAgent`, `chatAgent` (Zeenie) and all specialized agents.
+  The `provider` field is one loader-driven `ProviderRef`
+  (`nodes/agent/_provider.py`, options from the `aiProviders` loader in
+  `nodes/model/_option_loaders.py`, ordered as `llm_defaults.json` lists the
+  providers), so registering a provider needs no agent edit.
+  `test_plugin_shape.py` asserts the loader offers exactly the registry minus
+  the bare `openai_compatible` id.
 - Groq, Cerebras, xAI, and the other compatible endpoints use the same native
   OpenAI SDK adapter for both standalone chat and agent tool calls.
 
@@ -109,6 +119,7 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 | **Cerebras** | GPT-OSS-120b (default), qwen-3.8-27b — the only two public-endpoint models | 131K | 40K | none (`thinking_models` empty since zai-glm-4.7 left the public endpoints) | 0-1.5 |
 | **Ollama** | Whatever the user has pulled (qwen2.5, llama3.x, phi-3, deepseek-r1, ...) | per-loaded-model (typed via `ps()`) | ctx ÷ 4 (capped 4096) | none (per-model) | 0-2 |
 | **LM Studio** | Whatever the user has loaded in the LM Studio UI | per-loaded-model (typed via `LlmInstanceInfo.context_length`) | ctx ÷ 4 (capped 4096) | none (per-model) | 0-2 |
+| **Named endpoints** | Whatever each server lists at `/models` | llama.cpp `/props` `n_ctx`; vLLM `max_model_len`; else the LiteLLM table; else 8192 | LiteLLM figure, else ctx ÷ 4 (capped 4096), else 2048 | none (per-model) | 0-2 |
 
 `_resolve_max_tokens()` in `server/services/ai.py` (a thin wrapper over `services/llm/config.py::resolve_max_tokens`) clamps user-requested `max_tokens` to the model's actual limit.
 
@@ -116,27 +127,59 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 
 Ollama and LM Studio expose an OpenAI-compatible `/v1` HTTP API, so they ride the same `OpenAIProvider` runtime path used by every other OpenAI-compat backend (DeepSeek, Kimi, Mistral). The differences are the **base URL** (the user enters their server's address, e.g. `http://localhost:11434/v1`) and the **per-model parameters** (which depend on what the user has loaded in the local server's UI, not a JSON default).
 
-**Probe layer** ([`server/nodes/model/_local_validator.py`](../server/nodes/model/_local_validator.py)) — when the user clicks "Fetch" in the Credentials Modal:
+**Save path** ([`server/nodes/model/_local_validator.py`](../server/nodes/model/_local_validator.py), RFC-0003 §6) — when the user clicks "Fetch" in the Credentials Modal:
 
-1. The user's URL is persisted under the existing `{provider}_proxy` credential — same key the OpenAI-style auth-delegation pattern already uses to override `base_url` at runtime.
-2. The validator probes via the **official SDK** (`ollama>=0.6.0`, `lmstudio>=1.5.0`) — never raw httpx, never Modelfile-parameters parsing:
+1. **Root the URL** through the OpenAI surface the runtime uses: `services/llm/endpoints.py::resolve_base_url` sends the SDK's own `models.list()` to the entered URL, then to it plus `/v1`, and adopts the first answer whose body is an OpenAI list. A status code alone proves nothing — LM Studio answers HTTP 200 to routes it does not serve — so a URL entered without `/v1` is resolved rather than saved broken. This replaces the old order (persist, then probe the *native* API), which let a `/v1`-less LM Studio URL read Connected and fail every run.
+2. **Describe the loaded models** via the **official SDK** (`ollama>=0.6.0`, `lmstudio>=1.5.0`) — never raw httpx, never Modelfile-parameters parsing:
    - **Ollama**: `ollama.AsyncClient.ps()` returns `ProcessResponse.Model` per loaded model with typed `context_length` + typed `ModelDetails` (`family`, `parameter_size`, `quantization_level`, `format`).
    - **LM Studio**: `lmstudio.AsyncClient.llm.list_loaded()` returns `AsyncModelHandle` per loaded model; `handle.get_info()` is a typed `LlmInstanceInfo` (`context_length`, `max_context_length`, `vision`, `trained_for_tool_use`, `architecture`, `params_string`, `format`).
-3. The probed params are persisted in two places:
-   - `EncryptedAPIKey.models["model_params"]` — the same JSON column as the model list, sibling key. Survives DB-backed restart of the validator state.
-   - `model_registry.register_local_model()` — populates a `ModelInfo` entry under `<provider>/<model_id>` and writes through to `model_registry.json`. The sync `get_context_length()` / `get_max_output_tokens()` lookups find this entry first, so chat / agent execution honour the **real n_ctx the server is currently serving** instead of a JSON guess. Capability flags (`tools`, `vision`) flow through `ModelInfo.supported_parameters`.
+3. **Persist only on success**: `{provider}_proxy` gets the resolved URL, then `{provider}` gets the vendor's documented placeholder key (`auth.placeholder_key` in `llm_defaults.json`, resolved by `services/llm/config.py::resolve_credential`), the model list and `model_params`. The params are also registered with `model_registry.register_local_model()`, which keeps them apart from the OpenRouter snapshot and persists them under DATA_DIR (`local_models.json`), so the sync `get_context_length()` / `get_max_output_tokens()` lookups honour the **real n_ctx the server is currently serving**, an OpenRouter refresh cannot wipe them, and user model names never land in the tracked `config/model_registry.json`.
 
-**Both servers must have a model loaded** for the probe to return entries. The validator's "no models loaded" message is symmetric across providers.
+A failed save writes nothing and broadcasts nothing: a typo in a re-Fetch leaves a working configuration in force. **Both servers must have a model loaded** for the probe to return entries; "no models loaded" is a failed save.
 
-**Runtime path** — `ChatUnifier` resolves `{provider}_proxy` and passes it to
-the registered provider factory. `OpenAIProvider` overrides `base_url` with the
-user's URL and uses the documented placeholder key for unauthenticated local
-servers. The OpenAI SDK then sends to the configured local endpoint — traffic
-never reaches api.openai.com.
+**Runtime path** — `ChatUnifier` reads `{provider}_proxy` and passes it to the
+registered provider factory. `OpenAIProvider` uses it as `base_url` and sends
+the stored key as stored (no provider rewrites a key any more). The OpenAI SDK
+then sends to the configured local endpoint — traffic never reaches
+api.openai.com.
 
-**Provider detection** ([`server/constants.py:detect_ai_provider`](../server/constants.py)) MUST list `ollama` / `lmstudio` substrings, and the agent dropdown's `provider` Literal in [`ai_agent/__init__.py`](../server/nodes/agent/ai_agent/__init__.py) / [`chat_agent/__init__.py`](../server/nodes/agent/chat_agent/__init__.py) / [`_specialized.py`](../server/nodes/agent/_specialized.py) MUST include `"ollama"` / `"lmstudio"` — otherwise the chat-model node silently falls through to `'openai'` and the runtime calls the OpenAI cloud with the local-server placeholder key.
+**Provider detection** ([`server/constants.py:detect_ai_provider`](../server/constants.py)) MUST list `ollama` / `lmstudio` substrings, or a chat-model node falls through to `'openai'`. Agents need no edit: their `provider` field is loader-driven.
 
-**Open-world skip in `is_model_valid_for_provider`** — local model names like `qwen/qwen3.6-27b` don't contain provider substrings, so the cloud-style pattern check would always reject them. The function returns `True` for `openrouter` / `ollama` / `lmstudio` without consulting `detection_patterns`. The upstream server still rejects genuinely missing models with a clear 404.
+**Open-world providers** — local model names like `qwen/qwen3.6-27b` don't contain provider substrings, so the cloud-style pattern check would always reject them. A provider block declares `"open_world_models": true` (openrouter, groq, ollama, lmstudio, openai_compatible) and `is_model_valid_for_provider` accepts any id for it. The upstream server still rejects genuinely missing models with a clear 404.
+
+## Named OpenAI-compatible endpoints
+
+Any server that speaks the OpenAI API — llama.cpp, vLLM, a LiteLLM proxy,
+SGLang, LocalAI, another Ollama or LM Studio host — is added in the Credentials
+Modal under **OpenAI-compatible** with a Base URL (with or without `/v1`), an
+optional label and an optional key. No code. RFC-0003 D13–D17 is the contract.
+
+- **Identity.** Each endpoint is the provider reference
+  `openai_compatible:<slug>` (slug from the label, else from the host and port).
+  It is stored exactly like Ollama: `{ref}` holds the key (or the placeholder
+  `sk-no-key-required`), the model list and per-model params; `{ref}_proxy`
+  holds the resolved URL. The reference travels as the ordinary `provider`
+  string, so key injection, Temporal payloads and the unifier need nothing new;
+  everything read from `llm_defaults.json` or `pricing.json` resolves it to the
+  shared `openai_compatible` block through `split_provider_ref`.
+- **Saving** runs the same path as Ollama, plus a one-time kind detection from
+  native routes by body shape (`/props` → llama.cpp, `/api/v1/models` → LM
+  Studio, `/api/version` → Ollama, else generic). Context and price come from the
+  server first (Ollama / LM Studio SDK probes, llama.cpp `/props` `n_ctx`, vLLM
+  `max_model_len`), then — for generic servers only — LiteLLM's
+  `model_prices_and_context_window.json` (fetched by `ModelRegistryService` on
+  the OpenRouter refresh gate, trimmed, cached under DATA_DIR, matched only when
+  unambiguous), then the block's conservative defaults (8192 / 2048).
+- **Selecting.** Every agent's provider dropdown lists each endpoint after the
+  registered providers. The `openaiCompatibleChatModel` node picks one in its
+  `endpoint` field — deliberately not `provider`, which would trigger the
+  parameter panel's stored-key effect — and its `model` dropdown lists that
+  endpoint's models. The global default-model picker lists each endpoint too.
+- **Removing** goes through `delete_api_key` with the reference, which also
+  clears the URL row and the registered models. A workflow still pointing at a
+  removed endpoint fails with "not configured", never a call to OpenAI.
+- **RLM** builds its own clients and cannot use an endpoint (or a local
+  server); it refuses one with a clear message.
 
 ## Provider Protocol
 
@@ -250,7 +293,13 @@ At client creation, a stored `{provider}_proxy` URL takes precedence over that
 configured compat URL. Plain OpenAI uses the SDK default endpoint unless
 `openai_proxy` is set. OpenRouter uses its adapter's built-in endpoint unless
 `openrouter_proxy` is set. Ollama and LM Studio rely on their stored proxy URL
-at runtime so requests go to the selected local server.
+at runtime so requests go to the selected local server; `openai_compatible`
+has no configured URL at all, and the unifier refuses an endpoint whose URL row
+is missing rather than let the SDK default to api.openai.com.
+
+The `base_url` values in the dedicated `anthropic` and `gemini` blocks are REST
+documentation, not SDK arguments (the Anthropic SDK appends `/v1` itself), so
+nothing passes them to those SDKs.
 
 ## Unified Native Execution Path
 
@@ -378,8 +427,11 @@ AI providers support optional proxy-based authentication — requests route thro
 **How it works:**
 1. User configures a proxy URL in the Credentials Modal (e.g., `http://localhost:11434`).
 2. Requests route through the proxy instead of directly to the provider API.
-3. Proxy handles authentication (token set to `"ollama"` automatically).
-4. No API key storage needed in OpenCompany — auth delegated to proxy.
+3. The stored key is sent as stored. A keyless server gets the placeholder its
+   vendor documents (`auth.placeholder_key`); no provider rewrites a key, and an
+   empty key never reaches an SDK (it would read `OPENAI_API_KEY` and send it to
+   the proxy — RFC-0003 D7).
+4. Auth can be delegated to the proxy; OpenCompany then stores no real key.
 
 **Configuration:** proxy URLs are stored in the credentials DB under the `{provider}_proxy` pattern (e.g., `anthropic_proxy`, `openai_proxy`). Falls back to direct API key if no proxy configured. This is the SAME mechanism the native Ollama / LM Studio path uses (see "Local LLM Providers" above) — the validator persists the user's server URL under `{provider}_proxy`, and at runtime it carries into `OpenAIProvider`'s `base_url`.
 
@@ -460,7 +512,9 @@ the plugin folder or add a `visuals.json` entry (`"openrouterChatModel":
 
 3. **Credentials + agent exposure:**
    - Add a `Credential` subclass in `server/nodes/model/_credentials.py` — surfaces in the Credentials Modal automatically.
-   - To expose the provider in the **agent dropdown**, add its name to the `provider` Literal in `nodes/agent/ai_agent/__init__.py`, `nodes/agent/chat_agent/__init__.py`, AND `nodes/agent/_specialized.py`, and add the substring to `detect_ai_provider` in `server/constants.py` — otherwise an agent using it silently falls back to `'openai'`.
+   - The **agent dropdown** picks it up with no edit: the `aiProviders` loader lists every registered provider. Add its substring to `detect_ai_provider` in `server/constants.py` for its chat-model node — otherwise that node silently falls back to `'openai'`.
+
+A **server the user runs** is not a new provider: add it as a named endpoint in the Credentials Modal (see "Named OpenAI-compatible endpoints").
 
 ### Key implementation files
 

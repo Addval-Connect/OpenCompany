@@ -38,8 +38,9 @@ own plugin folder; there is no `functools.partial` wiring anymore.
 ## Parameters
 
 `ChatAgentParams` mirrors [`aiAgent`](./aiAgent.md)'s `AIAgentParams`
-(`provider` Literal, `model`, `prompt`, `system_message`, `temperature` /
-`max_tokens` in the `options` group). Differences:
+(`provider` as the loader-driven `ProviderRef`, `model`, `prompt`,
+`system_message`, `temperature` / `max_tokens` in the `options` group).
+Differences:
 
 - `prompt` default `""` (empty) — Zeenie relies on the auto-prompt fallback
   when wired to a chat trigger (placeholder: "Optional: leave empty to use
