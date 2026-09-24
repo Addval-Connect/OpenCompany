@@ -166,19 +166,13 @@ async def validate_workflow(
         valid_contexts_by_agent.setdefault(target_id, []).append(source_id)
         agents_by_context.setdefault(source_id, []).append(target_id)
 
+    # A Context is optional: the user adds and deletes it on the canvas, so an
+    # agent without one is valid. Only ambiguous wiring is rejected.
     for node_id in sorted(node_by_id):
         if not requires_context(node_id):
             continue
         context_ids = list(dict.fromkeys(valid_contexts_by_agent.get(node_id, [])))
-        if not context_ids:
-            errors.append(
-                {
-                    "code": "MISSING_CONTEXT",
-                    "node_id": node_id,
-                    "message": "This agent requires exactly one Context node",
-                }
-            )
-        elif len(context_ids) > 1:
+        if len(context_ids) > 1:
             errors.append(
                 {
                     "code": "MULTIPLE_CONTEXTS",

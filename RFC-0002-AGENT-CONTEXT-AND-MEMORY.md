@@ -33,8 +33,11 @@ the journal, provider bindings, tenant scope, mutation rules, compaction
 algorithm, or durable Memory items. Those responsibilities live in backend
 services and are reached through the plugin and tool registries.
 
-Each agent that declares the `requiresContext` capability has exactly one
-system-managed Context companion. A Context owns multiple isolated threads:
+An agent that declares the `requiresContext` capability accepts at most one
+Context node, which the user adds and deletes on the canvas. (Superseded,
+September 2026: this originally gave every such agent exactly one
+system-managed Context companion that the backend created and restored; see
+§11.) A Context owns multiple isolated threads:
 
 1. an explicit chat/session ID selects a persistent session thread;
 2. otherwise a delegated task ID selects a task thread;
@@ -70,7 +73,8 @@ The backend NodeSpec is the source of truth.
 
 ### 3.1 Context node
 
-The `context` plugin is a passive, system-managed configuration node:
+The `context` plugin is a passive, optional configuration node that the user
+adds and deletes on the canvas:
 
 ```text
 context.output-context -> agent.input-context
@@ -79,9 +83,10 @@ context.output-context -> agent.input-context
 It declares no parameters; the connection is the whole configuration
 (`AgentContextParams` is empty).
 
-Its NodeSpec advertises `isContextPanel` and `systemManaged`. The frontend
-renders the panel and calls backend handlers; it does not create journals,
-choose thread IDs, calculate pressure, compact messages, or mutate epochs.
+Its NodeSpec advertises `isContextPanel` and `systemManaged`; the latter only
+keeps the node out of the component palette. The frontend renders the panel
+and calls backend handlers; it does not create journals, choose thread IDs,
+calculate pressure, compact messages, or mutate epochs.
 
 ### 3.2 Memory node
 
@@ -303,13 +308,24 @@ frontend replaces its draft rather than reproducing migration rules.
 
 Backend lifecycle rules:
 
-- create/copy/hot-spawn/Agent-Builder add a fresh Context companion;
-- copying never copies a journal;
-- deleting an agent archives its Context;
-- deleting a required system edge is rejected or repaired;
-- a Context cannot attach to two agents;
-- capability discovery uses `requiresContext`, never renderer kind or a
-  hardcoded agent type list.
+**Superseded (September 2026).** The original rules made the Context a
+system-managed companion. Normalization created one for every agent that
+declared `requiresContext`, repaired its edge and deleted it along with its
+agent, and save put back one the user had deleted, so the node could not be
+deleted at all. The Context is now optional and user-owned:
+
+- normalization never creates, reconnects or deletes a Context outside the
+  legacy rewrite above, and save never restores one;
+- the validator does not require a Context. It still rejects a Context edge
+  into a node without `requiresContext`, two Contexts on one agent, and one
+  Context on two agents;
+- Agent Builder's `add_subagent` still wires a fresh Context to the teammate
+  it spawns; creating or copying an agent on the canvas adds none;
+- deleting an agent leaves its Context node in place. Removing a Context
+  node from a saved graph enqueues the archive that clears the workflow's
+  stored conversations;
+- capability discovery still uses `requiresContext`, never renderer kind or
+  a hardcoded agent type list.
 
 ## 12. Reset
 

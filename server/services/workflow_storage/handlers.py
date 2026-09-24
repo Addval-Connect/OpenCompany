@@ -23,7 +23,6 @@ logger = get_logger(__name__)
 _CONTEXT_TOPOLOGY_ERROR_CODES = frozenset(
     {
         "INVALID_CONTEXT_EDGE",
-        "MISSING_CONTEXT",
         "MULTIPLE_CONTEXTS",
         "SHARED_CONTEXT",
     }
@@ -69,200 +68,6 @@ def _trusted_owner_id(websocket: WebSocket, existing: Any) -> str:
         if stored is not None and str(stored).strip():
             return str(stored).strip()
     return "owner"
-
-
-def _reconcile_context_submission(
-    workflow_data: Dict[str, Any],
-    existing: Any,
-) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]], list[str]]:
-    """Restore backend-owned Context companions before normalization.
-
-    Client graph data may preserve ownership metadata for round-tripping, but
-    it is never authoritative. Existing companions survive while their owner
-    agent remains, and client-created/replacement Context nodes are discarded
-    so normalization creates fresh backend companions where needed.
-    """
-
-    submitted_nodes = [
-        dict(node)
-        for node in workflow_data.get("nodes") or []
-        if isinstance(node, dict)
-    ]
-    submitted_edges = [
-        dict(edge)
-        for edge in workflow_data.get("edges") or []
-        if isinstance(edge, dict)
-    ]
-    existing_graph = getattr(existing, "data", None)
-    if not isinstance(existing_graph, dict):
-        existing_graph = {}
-    stored_nodes = {
-        str(node.get("id")): dict(node)
-        for node in existing_graph.get("nodes") or []
-        if isinstance(node, dict) and node.get("id")
-    }
-    stored_contexts = {
-        node_id: node
-        for node_id, node in stored_nodes.items()
-        if node.get("type") == "context"
-    }
-    submitted_context_targets: Dict[str, set[str]] = {}
-    for edge in submitted_edges:
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        source_handle = edge.get("sourceHandle") or edge.get(
-            "source_handle"
-        )
-        target_handle = edge.get("targetHandle") or edge.get(
-            "target_handle"
-        )
-        if (
-            source
-            and target
-            and source_handle == "output-context"
-            and target_handle == "input-context"
-        ):
-            submitted_context_targets.setdefault(source, set()).add(
-                target
-            )
-
-    edge_owners: Dict[str, set[str]] = {}
-    for edge in existing_graph.get("edges") or []:
-        if not isinstance(edge, dict):
-            continue
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        source_handle = edge.get("sourceHandle") or edge.get(
-            "source_handle"
-        )
-        target_handle = edge.get("targetHandle") or edge.get(
-            "target_handle"
-        )
-        if (
-            source in stored_contexts
-            and source_handle == "output-context"
-            and target_handle == "input-context"
-            and target
-        ):
-            edge_owners.setdefault(source, set()).add(target)
-
-    protected_owners: Dict[str, str] = {}
-    for context_id, node in stored_contexts.items():
-        data = dict(node.get("data") or {})
-        declared = str(data.get("agentNodeId") or "")
-        if (
-            data.get("systemManaged") is True
-            and declared in stored_nodes
-        ):
-            protected_owners[context_id] = declared
-            continue
-        inferred = sorted(edge_owners.get(context_id, set()))
-        if len(inferred) == 1:
-            protected_owners[context_id] = inferred[0]
-
-    submitted_owner_ids = {
-        str(node.get("id"))
-        for node in submitted_nodes
-        if node.get("id")
-        and node.get("type") != "context"
-        and str(node.get("id")) not in stored_contexts
-    }
-    retained_context_ids = {
-        context_id
-        for context_id, owner_id in protected_owners.items()
-        if owner_id in submitted_owner_ids
-    }
-    warnings: list[str] = []
-    reconciled_nodes: list[Dict[str, Any]] = []
-    seen_context_ids: set[str] = set()
-    rejected_context_ids: set[str] = set()
-    for node in submitted_nodes:
-        node_id = str(node.get("id") or "")
-        is_context_submission = (
-            node.get("type") == "context"
-            or node_id in stored_contexts
-        )
-        if not is_context_submission:
-            reconciled_nodes.append(node)
-            continue
-        if node_id not in stored_contexts and not stored_contexts:
-            # A new/legacy graph has no protected companion to replace.
-            # Ignore client ownership claims and derive ownership only from
-            # an unambiguous submitted topology. Ambiguous topology is left
-            # intact so the shared validator rejects it.
-            submitted_data = dict(node.get("data") or {})
-            submitted_data.pop("systemManaged", None)
-            submitted_data.pop("agentNodeId", None)
-            targets = sorted(
-                submitted_context_targets.get(node_id, set())
-            )
-            if len(targets) == 1:
-                submitted_data["systemManaged"] = True
-                submitted_data["agentNodeId"] = targets[0]
-            reconciled_nodes.append(
-                {
-                    **node,
-                    "type": "context",
-                    "data": submitted_data,
-                }
-            )
-            continue
-        if node_id not in retained_context_ids:
-            if node_id:
-                rejected_context_ids.add(node_id)
-            warnings.append(
-                f"Ignored untrusted Context companion {node_id!r}"
-            )
-            continue
-
-        stored = stored_contexts[node_id]
-        owner_id = protected_owners[node_id]
-        submitted_data = dict(node.get("data") or {})
-        stored_data = dict(stored.get("data") or {})
-        item = {
-            **stored,
-            **node,
-            "id": node_id,
-            "type": "context",
-            "data": {
-                **stored_data,
-                **{
-                    key: submitted_data[key]
-                    for key in ("label", "disabled")
-                    if key in submitted_data
-                },
-                "systemManaged": True,
-                "agentNodeId": owner_id,
-            },
-        }
-        reconciled_nodes.append(item)
-        seen_context_ids.add(node_id)
-
-    for context_id in sorted(retained_context_ids - seen_context_ids):
-        stored = stored_contexts[context_id]
-        owner_id = protected_owners[context_id]
-        reconciled_nodes.append(
-            {
-                **stored,
-                "type": "context",
-                "data": {
-                    **dict(stored.get("data") or {}),
-                    "systemManaged": True,
-                    "agentNodeId": owner_id,
-                },
-            }
-        )
-        warnings.append(
-            f"Restored protected Context companion {context_id!r}"
-        )
-
-    reconciled_edges = [
-        edge
-        for edge in submitted_edges
-        if str(edge.get("source") or "") not in rejected_context_ids
-        and str(edge.get("target") or "") not in rejected_context_ids
-    ]
-    return reconciled_nodes, reconciled_edges, warnings
 
 
 def _supports_context_archive_outbox(database: Any) -> bool:
@@ -403,12 +208,10 @@ async def handle_save_workflow(data: Dict[str, Any], websocket: WebSocket) -> Di
     )
     from services.workflow_migrations import normalize_workflow_graph
 
-    source_nodes, source_edges, ownership_warnings = (
-        _reconcile_context_submission(
-            workflow_data,
-            existing,
-        )
-    )
+    # The submitted graph is authoritative for Context nodes: one the user
+    # deleted stays deleted, and one the user added is kept.
+    source_nodes = [node for node in workflow_data.get("nodes") or [] if isinstance(node, dict)]
+    source_edges = [edge for edge in workflow_data.get("edges") or [] if isinstance(edge, dict)]
     source_params = await load_node_parameters(database, source_nodes)
     normalization = normalize_workflow_graph(
         workflow_id,
@@ -416,10 +219,7 @@ async def handle_save_workflow(data: Dict[str, Any], websocket: WebSocket) -> Di
         source_edges,
         source_params,
     )
-    migration_warnings = [
-        *ownership_warnings,
-        *normalization.warnings,
-    ]
+    migration_warnings = list(normalization.warnings)
     context_errors = await _context_topology_errors(
         normalization.nodes,
         normalization.edges,

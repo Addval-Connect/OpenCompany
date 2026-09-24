@@ -175,6 +175,13 @@ registered save listener; payload is identity + count only — the panel
 refetches through the authorized handler). The node declares **no
 parameters**; the connection is the whole configuration.
 
+The node is optional and user-owned. `normalize_workflow_graph` never
+creates, reconnects or deletes one; rewriting a legacy
+`simpleMemory -> input-memory` edge is the one exception. Save never restores
+a deleted Context, and `workflow_validator` accepts an agent without one: it
+checks only the Context edges that exist (`INVALID_CONTEXT_EDGE`,
+`MULTIPLE_CONTEXTS`, `SHARED_CONTEXT`). Deleting the node is the opt-out.
+
 The panel ([`ContextPanel.tsx`](../client/src/components/parameterPanel/ContextPanel.tsx))
 renders role-tinted message cards with per-message `ts` timestamps, routes
 JSON-shaped payloads (tool calls, tool results) through the themed JSON
@@ -192,9 +199,11 @@ the newest STORED generation, so surviving rows would keep rendering the
 pre-Reset conversation as the live context and Reset would look like a
 no-op. A plain Stop → Start (new generation without Reset) leaves prior
 rows in the store as inert history — deliberately **not browsable from
-the panel**, which shows only the agent's current context — until the
-workflow is deleted (the archive-outbox drain in
-`services/workflow_storage/handlers.py`) or Reset runs.
+the panel**, which shows only the agent's current context — until Reset
+runs or the archive-outbox drain in `services/workflow_storage/handlers.py`
+clears them. The drain runs when the workflow is deleted AND when a save
+removes a Context node, and it clears every stored conversation of the
+workflow, not only the removed Context's agent.
 
 ## Invariants (do not break)
 

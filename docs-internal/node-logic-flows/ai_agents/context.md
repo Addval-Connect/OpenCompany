@@ -40,10 +40,19 @@ Class facts: `component_kind = "model"`, `group = ("memory",)` (so
 `@Operation("policy")` ignores its inputs and returns `AgentContextOutput`
 (`{configured: true}`, `extra="forbid"`); conversations stay in the store.
 `ui_hints`: `isContextPanel`, `systemManaged`, `hideInputSection`,
-`hideOutputSection`, `hideRunButton` — all `True`.
+`hideOutputSection`, `hideRunButton` — all `True`. `systemManaged` only
+keeps the node out of the component palette; it does not protect it.
 
 ## Behavior
 
+- **Lifecycle**: an ordinary canvas node the user deletes like any other.
+  `normalize_workflow_graph` never creates, reconnects or deletes one; the
+  single exception is rewriting a legacy `simpleMemory -> input-memory`
+  edge, which adds a Context for an agent that has none. Save never restores
+  a deleted Context, and `workflow_validator` does not require one (no
+  `MISSING_CONTEXT`). It still rejects `INVALID_CONTEXT_EDGE`,
+  `MULTIPLE_CONTEXTS` and `SHARED_CONTEXT`. Agent Builder's `add_subagent`
+  wires a Context to the teammate it spawns.
 - **Descriptor** ([`_descriptor.py`](../../../server/nodes/context/_descriptor.py)):
   registered via `register_agent_context_builder`; emits `kind: "context"` +
   workflow/generation identity. Returns `None` for `generation <= 0`
@@ -75,8 +84,17 @@ Class facts: `component_kind = "model"`, `group = ("memory",)` (so
 
 ## Edge cases & known limits
 
+- Deleting the node opts its agent out of persistence. The save's archive
+  outbox (`Database.save_workflow` enqueues it for every Context id that
+  leaves the graph) then clears ALL of the workflow's stored conversations,
+  not just that agent's.
+- Deleting an agent leaves its Context node on the canvas, unconnected;
+  nothing cascades.
+- The palette does not offer the node (`systemManaged`), so a deleted
+  Context cannot be re-added from there.
 - Two agents on one Context node keep separate conversations (the key is
-  per agent node); the panel offers a selector.
+  per agent node); the panel offers a selector. The validator nevertheless
+  rejects that wiring as `SHARED_CONTEXT` at save, Run and Start.
 - A plain Stop → Start starts a fresh conversation (new generation) and
   leaves prior rows as inert, non-browsable history until Reset or
   workflow delete.

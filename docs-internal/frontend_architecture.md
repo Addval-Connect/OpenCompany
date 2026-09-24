@@ -508,8 +508,8 @@ Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts]
 | `isMemoryToolPanel` | `MiddleSection` | Render the durable Memory item browser (search, edit, forget, clear). Declared by `simpleMemory`, and selected *before* `isMemoryPanel` |
 | `isContextPanel` | `MiddleSection` | Render the Context inspector (journal, active replay, fork/export/clear). Read-only: it observes the agent's journal and must never alter execution |
 | `isDataPanel` | `MiddleSection` | Render the Data node's mounts + read-only file browser (`DataPanel`). Declared by `dataSource`. |
-| `requiresContext` | backend graph normalization | Declared in `STD_AGENT_HINTS`. Not a rendering flag — `normalize_workflow_graph` pairs every plugin carrying it with a Context companion, and `workflow_validator` enforces the topology |
-| `systemManaged` | canvas | Marks the auto-created Context companion. The backend owns its lifecycle; the user does not add or delete it directly |
+| `requiresContext` | backend graph validation | Declared in `STD_AGENT_HINTS`. Not a rendering flag — `workflow_validator` accepts a Context edge only into a node carrying it. The Context itself is optional: nothing pairs one with the agent, and an agent without one is valid |
+| `systemManaged` | `ComponentPalette` | Declared by the Context node; keeps it out of the component palette. It does not protect the node — the user can delete it, and neither normalization nor save re-creates or restores it |
 | `isMonitorPanel` | `MiddleSection`, `ParameterPanel` | Render the team-monitor panel |
 | `isTodoEditor` | `MiddleSection` | Render the editable Current Todos manager (`writeTodos`) instead of the plain params list |
 | `isTaskManagerPanel` | `MiddleSection` | Render the execution-scoped team task control panel |
