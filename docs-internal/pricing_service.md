@@ -67,17 +67,17 @@ Located at `server/config/pricing.json`. User-editable; picked up via `PricingSe
 
 ```json
 {
-  "version": "2026.07",
-  "last_updated": "2026-07-25",
+  "version": "2026.09",
+  "last_updated": "2026-09-15",
 
   "llm": {
     "openai": {
-      "gpt-5": {"input": 1.25, "output": 10.00},
-      "o3": {"input": 2.00, "output": 8.00, "reasoning": 8.00},
-      "_default": {"input": 2.50, "output": 10.00}
+      "gpt-5.6-sol": {"input": 4.00, "output": 20.00, "cache_read": 0.40},
+      "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cache_read": 0.02},
+      "_default": {"input": 2.50, "output": 15.00}
     },
     "anthropic": {
-      "claude-opus-4.6": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
+      "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50},
       "_default": {"input": 3.00, "output": 15.00, "cache_read": 0.30}
     }
   },
@@ -166,23 +166,23 @@ from services.pricing import get_pricing_service
 pricing = get_pricing_service()
 
 # Get pricing for a model (partial matching supported)
-model_pricing = pricing.get_pricing('anthropic', 'claude-3-5-sonnet-20241022')
-# Returns ModelPricing(input_per_mtok=3.00, output_per_mtok=15.00, ...)
+model_pricing = pricing.get_pricing('anthropic', 'claude-sonnet-5')
+# Returns ModelPricing(input_per_mtok=2.00, output_per_mtok=10.00, ...)
 
 # Calculate cost for token usage
 cost = pricing.calculate_cost(
     provider='anthropic',
-    model='claude-3-5-sonnet',
+    model='claude-sonnet-5',
     input_tokens=5000,
     output_tokens=1500,
     cache_read_tokens=200
 )
 # Returns: {
-#   'input_cost': 0.015,
-#   'output_cost': 0.0225,
-#   'cache_cost': 0.00006,
+#   'input_cost': 0.01,
+#   'output_cost': 0.015,
+#   'cache_cost': 0.00004,
 #   'reasoning_cost': 0.0,
-#   'total_cost': 0.03756
+#   'total_cost': 0.02504
 # }
 ```
 

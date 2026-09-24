@@ -49,6 +49,14 @@ the rule: no other module under `server/` may climb above `server/` with
 `parents[N]` or a `.parent` chain, or spell `client/dist`, `.env.template`,
 `package.json` in a path join.
 
+`resolve_static_asset(base_dir, relative)` lives here too, for the one route
+that maps an attacker-controlled path onto the tree: the SPA fallback in
+`main.py`. It joins, `os.path.normpath`s, and returns `None` unless the
+result sits under the real base directory — so `..` traversal, an absolute
+path, and a prefix sibling such as `client/dist2` all fall through to the
+SPA shell instead of serving a file. Keeping it beside `client_dist()` is
+what lets the route itself build no paths at all.
+
 ## 2. Env layering without the CLI
 
 `core.env_defaults.apply_file_defaults_to_environ()` runs at the top of

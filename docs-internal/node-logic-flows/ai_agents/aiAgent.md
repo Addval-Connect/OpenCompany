@@ -134,7 +134,7 @@ flowchart TD
   and potentially `compaction_starting` / `compaction_completed` events.
   `BaseNode.execute()` additionally wraps the body in a `node.aiAgent.execute`
   OpenTelemetry span + `log_context(node_id, node_type, workflow_id)`.
-- **External API calls**: all 12 providers run through `ChatUnifier` and the
+- **External API calls**: all 13 providers run through `ChatUnifier` and the
   native provider layer: Anthropic uses `anthropic`, Gemini uses
   `google-genai`, and OpenAI plus the OpenAI-compatible providers (OpenRouter,
   Groq, Cerebras, xAI, DeepSeek, Kimi, Mistral, Ollama, and LM Studio) use

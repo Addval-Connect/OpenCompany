@@ -2,7 +2,7 @@
 
 Internal reference for OpenCompany's GitHub Actions setup. Workflow inventory, release flow, and the composite setup action.
 
-The repo currently ships **three workflows** plus one composite action. A number of hardening / security workflows described in earlier revisions of this doc (CodeQL, zizmor, rollback, reusable PyPI publish, cross-platform test-install) are **not yet implemented** — see [Planned (not yet implemented)](#planned-not-yet-implemented) at the end.
+The repo currently ships **five workflows** plus one composite action. Code scanning is live but has no workflow file: it runs through GitHub's **default CodeQL setup**, which is why alerts land in the Security tab with nothing in `.github/workflows/` to point at (see [Code scanning](#code-scanning)). The other hardening workflows described in earlier revisions of this doc (zizmor, rollback, reusable PyPI publish, cross-platform test-install) are **not yet implemented** — see [Planned (not yet implemented)](#planned-not-yet-implemented) at the end.
 
 ---
 
@@ -207,6 +207,41 @@ folder — both the folder and the workflow are gone.
 
 ---
 
+## Code scanning
+
+CodeQL runs through GitHub's **default setup** (Python + JS/TS), configured
+in repository settings rather than by a workflow file. There is no
+`codeql.yml` to read, so the only places the configuration is visible are
+the Security tab and the `CodeQL` check on each push.
+
+Triage has two outcomes, and picking the right one matters because the
+wrong one leaves a permanent lie in the code:
+
+- **Fix it** when the call site can be restructured into a shape the query
+  recognises. For `py/path-injection` that shape is normalise-then-prefix-
+  check *before* the path is used: join, `os.path.normpath`, then refuse
+  anything that does not start with the real base directory plus a
+  separator. `core/approot.py::resolve_static_asset` is the worked example
+  (alerts #158-160, September 2026).
+- **Dismiss it** when the flagged sink is the containment helper itself.
+  A guard placed after the `resolve()` cannot clear the taint and an
+  interprocedural `fullmatch` in a helper is not treated as a barrier, so
+  the alert will return on every scan no matter what is written. Dismiss
+  with a comment naming the containment invariant; do not add a decorative
+  check that implies the alert was addressed. `nodes/filesystem/_backend.py
+  ::resolve_within` and `nodes/_visuals.py` are the standing examples.
+
+Two findings are dismissed as by-design rather than fixed:
+
+| Query | Where | Why |
+|---|---|---|
+| `js/code-injection` | `server/nodejs/src/index.ts` `/execute` | That route **is** the JavaScript executor behind the `javascriptExecutor` / `typescriptExecutor` nodes, so evaluating request-supplied code is its purpose. It binds to localhost and is spawned and called only by the same-machine backend; `vm` is documented as not a security boundary. |
+| `py/path-injection` | containment helpers | See above. |
+
+Inline `// codeql[...]` / `# codeql[...]` comments do **not** suppress
+anything under default setup — several sat in the sidecar for months while
+the alerts stayed open. Dismiss in the Security tab instead.
+
 ## Dependency update policy (Dependabot disabled)
 
 Dependabot opens **no pull requests**, neither version bumps nor security
@@ -251,6 +286,5 @@ The following existed in earlier drafts of this doc but are **not present in the
 - **`publish-pypi.yml`** — reusable PyPI publish (OIDC trusted publishing, `uv build --no-sources`, `pypa/gh-action-pypi-publish`). No PyPI distribution is published today.
 - **`test-install.yml`** — cross-platform end-user install smoke (`bun add -g`, git clone, install script) across 3 OS.
 - **`rollback.yml`** — manual registry deprecate (`npm deprecate` has no bun equivalent, so this would be the one place the npm CLI reappears) + optional revert PR.
-- **`codeql.yml`** — Python + JS/TS SAST (`security-extended`).
 - **`check-zizmor.yml`** — workflow-security linter (SARIF to the Security tab).
 - **`.pre-commit-config.yaml`** — ruff / prettier / eslint / actionlint hooks (note: the project rule is to verify with pytest + the root `typecheck` gate + eslint, not ruff). This file is **not currently present in the tree**; the entry describes intent, not a live hook.

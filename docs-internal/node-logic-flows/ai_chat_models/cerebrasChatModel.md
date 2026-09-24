@@ -11,11 +11,12 @@
 
 ## Purpose
 
-Ultra-fast inference on Cerebras' custom AI hardware. The current curated
-models are GPT-OSS-120b plus preview Z.ai GLM 4.7 and Gemma 4 tiers. The
+Ultra-fast inference on Cerebras' custom AI hardware. The public endpoints
+serve exactly two models: `gpt-oss-120b` (default) and `qwen-3.8-27b`; other
+families exist only on Dedicated Endpoints. The
 `ChatModelBase.chat` operation calls
 `AIService.execute_chat`, which routes through `ChatUnifier`. Like Groq,
-Cerebras is one of the eight OpenAI-compatible providers registered in
+Cerebras is one of the nine OpenAI-compatible providers registered in
 `providers/_compat.py`; bare chat and current agent executions share this
 native provider path.
 
@@ -31,12 +32,12 @@ native provider path.
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | yes | - | User message |
 | `system_prompt` | string | `""` | no | - | System prompt |
-| `model` | string | `""` (injected) | no | - | e.g. `llama3.1-8b`, `gpt-oss-120b`, `qwen-3-235b-a22b` |
+| `model` | string | `""` (injected) | no | - | `gpt-oss-120b` (default) or `qwen-3.8-27b` |
 | `temperature` | number\|null | `null` | no | - | Narrower range than OpenAI (0-1.5 rather than 0-2) |
-| `max_tokens` | number\|null | `null` (up to 8K) | no | - | 1-200000 |
+| `max_tokens` | number\|null | `null` (up to 40K) | no | - | 1-200000 |
 | `top_p` | number\|null | `1.0` | no | - | |
-| `thinking_enabled` | boolean | `false` | no | - | Only Qwen-3-235b supports format-based reasoning |
-| `thinking_budget` | number\|null | `2048` | no | `thinking_enabled=[true]` | 1024-16000 (Cerebras Qwen budget) |
+| `thinking_enabled` | boolean | `false` | no | - | Inert: no current Cerebras model is in `thinking_models` |
+| `thinking_budget` | number\|null | `2048` | no | `thinking_enabled=[true]` | 1024-16000; inert while `thinking_models` is empty |
 | `reasoning_format` | enum | `parsed` | no | - | `parsed` / `hidden` - same semantics as Groq Qwen (inherited base field) |
 | `api_key` | string\|null | `null` (injected) | no | - | `auth_service.get_api_key('cerebras', 'default')` |
 

@@ -201,7 +201,7 @@ the sibling file via relative path:
 from ._credentials import GoogleCredential               # shared with 6 siblings
 
 # inside server/nodes/model/openai_chat_model/__init__.py
-from ._credentials import OpenAICredential               # one of 10 cloud LLM creds
+from ._credentials import OpenAICredential               # one of 11 cloud LLM creds
 
 # inside server/nodes/twitter/twitter_send/__init__.py
 from ._credentials import TwitterCredential              # shared with 3 siblings
@@ -372,7 +372,7 @@ The credential-validator dispatch is a sibling concern, handled by the
 existing `services/plugin/credential.py:Credential` base class. Your
 `Credential` subclass overrides `_probe(api_key) -> ProbeResult` (or,
 in rare cases like local-LLM 2-storage, the whole `validate(data)
--> dict` classmethod). Maps, Apify, all 10 cloud LLM providers, and
+-> dict` classmethod). Maps, Apify, all 11 cloud LLM providers, and
 both local-LLM providers (Ollama / LM Studio) all dispatch through the
 same scaffold — no `_SPECIAL_PROVIDER_VALIDATORS` dict in
 `routers/websocket.py`.

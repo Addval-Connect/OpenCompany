@@ -846,8 +846,8 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
   TelegramCredential + ApifyCredential + 12 LLM providers + 3 inline
   search credentials + Stripe / Vercel / GitHub / Cloudflare /
   WhatsApp); 29 plugins declared `credentials = (...)`. Today the live
-  numbers are `len(CREDENTIAL_REGISTRY)` (34) and 53 plugin files with a
-  non-empty `credentials` tuple. Agents stay poly-provider (empty tuple).
+  numbers are `len(CREDENTIAL_REGISTRY)` (35) and 55 node types with a
+  non-empty `credentials` tuple (September 2026). Agents stay poly-provider (empty tuple).
 - Wave 11.E.1 — Modularised credentials into per-domain
   `nodes/<group>/_credentials.py` files. `server/credentials/`
   directory deleted; auto-discovery rides on node-package import.

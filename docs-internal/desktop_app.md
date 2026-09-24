@@ -40,7 +40,7 @@ OpenCompany.app / OpenCompany/ / AppImage
       package.json                package.json, .opencompany/workflows/,
       .opencompany/workflows/     server/uv.lock, server/pyproject.toml
       client/dist/
-      server/  (+ nodejs/dist/index.js — the sidecar's own `bun build --target=bun`, express inlined)
+      server/  (+ nodejs/dist/index.js — the sidecar's own `bun build --target=bun`, dependencies inlined)
     runtime/
       uv/uv[.exe]                 pinned uv (runtimes.json)
       python/                     python-build-standalone install_only_stripped
