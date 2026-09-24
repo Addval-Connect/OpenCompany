@@ -105,12 +105,52 @@ The carried transcript caps at ~1 MB serialized
 2 MiB for the whole continue-as-new argument; over-cap degrades to the
 opening prompt with a warning — never a failure.
 
+## Transcript size: capped results, cleared old results
+
+The transcript is the `agent.execute_llm_step` input on every turn and the
+row the next firing seeds from, so its size is bounded in bytes, not only in
+tokens (the failure this prevents is `errors.md` #28: uncapped tool results
+grew a saved row past the 1 MB seed cap and every later firing failed).
+
+- **Tool results are capped before they enter the transcript.** Each
+  external tool result is cut to `tool_result_max_chars` characters (per-user
+  Settings > Tool Result Limit, else env `TOOL_RESULT_MAX_CHARS`, default
+  100,000) with a note telling the model to call the tool again with narrower
+  parameters (`services/tool_output.py`). Delegated agents' answers, skill
+  loads and Task Manager results are never cut. Both paths apply it: the
+  workflow right after `_serialise_tool_result`, the in-process loop in
+  `run_native_agent_loop`.
+- **Old results are cleared past a byte budget** (Temporal path).
+  `agent.prepare_payload` records `transcript_budget_bytes` (three quarters of
+  `TEMPORAL_PAYLOAD_WARN_BYTES`). After each tool turn over that budget,
+  results from earlier turns become a short placeholder, oldest first and
+  external tools first, down to half the budget. Each keeps its
+  `tool_call_id` and `name`, so every call still has its answer. The saved
+  conversation holds the placeholder too, and the store re-stamps that
+  message's `ts` when it changes. If the latest turn alone still overflows,
+  its external results are cut to one shared length
+  (`services/temporal/agent_context_pressure.py`).
+- **The rules are selected by the recorded payload.** `agent.prepare_payload`
+  also records `context_pressure_version` and `tool_result_max_chars`; a run
+  recorded before those keys existed replays the original rules (no cap,
+  cumulative token gate, whole-transcript summary), because the rules decide
+  which activities are scheduled. Any change to them needs a new version.
+
 ## Compaction: one system prompt, summary as a user message
 
-When the loop's token total crosses the threshold, `agent.compact_context`
-summarizes the live transcript and the workflow swaps `messages` for
-`[original system (verbatim), user("## Compacted conversation summary" +
-summary + current request)]`. Two rules are load-bearing (locked by
+Version 1 summarizes when the next request (the last request's
+`total_tokens`, which every provider fills with the whole prompt including
+cache reads, plus what the turn added) reaches the threshold, or when the
+earlier turns alone keep the transcript over its byte budget. It sends
+`agent.compact_context` only the turns before the latest one and swaps
+`messages` for `[original system (verbatim), user("## Compacted
+conversation summary" + summary + current request), latest turn verbatim]`:
+the latest turn's tool results have not been read yet, so summarizing them
+would lose what the model just asked for. With nothing older than the latest
+turn, it skips (a summary of the opening alone gains nothing). Runs recorded
+before version 1 keep the original rule: summarize everything when the
+running sum of every step's usage crosses the threshold. Two rules are
+load-bearing (locked by
 `TestConversationIdentity::test_compaction_preserves_the_system_prompt_and_summary_survival`):
 
 - **The system prompt is never modified or duplicated.** It is the agent's
@@ -124,26 +164,34 @@ summary + current request)]`. Two rules are load-bearing (locked by
 - **The summary rides a user message**, so the compacted knowledge persists
   through seeding and crosses firings with the conversation it summarizes.
 
-Prior tool calls/results are dropped from the live list at the swap — they
-survive only inside the summary text. Tool messages that appear *after* the
-summary in the panel are **new work the agent did post-compaction**, not
-survivors (their `ts` stamps postdate the summary). Both the trigger
-(`tokens >= threshold`, live message count) and the applied swap (before →
-after counts, summary size) log at INFO, as does the activity (rendered
-chars in, summary chars + summarizer usage out).
+Tool calls/results from the summarized turns are dropped from the live list
+at the swap; they survive only inside the summary text. Tool messages that
+appear *after* the summary in the panel are the kept latest turn or **new
+work the agent did post-compaction**, not survivors of the summarized turns.
+The trigger (projected tokens against the threshold, transcript bytes against
+the budget), the applied swap (before → after counts, summary size, kept
+messages), each clear and each cut log at INFO, as does the activity
+(rendered chars in, summary chars + summarizer usage out). A summarizer
+failure after the activity's retries is terminal for the run
+(`CompactionError`), not best-effort: past that point the transcript could
+only grow until the provider rejected it.
 
 - **Load failures raise.** `agent.prepare_payload` raises
   `ApplicationError("ConversationLoadFailed")` (retryable) when the row
   cannot be read, and `ApplicationError("ConversationTooLarge")`
-  (non-retryable, `_SEED_TRANSCRIPT_MAX_BYTES` = 1 MB — clear it from the
-  Context panel) when it is oversized. Running on silently instead would
-  burn tokens on an amnesiac prompt — the exact failure mode this design
-  replaced.
+  (non-retryable, `_SEED_TRANSCRIPT_MAX_BYTES` = 1 MB; the message sends the
+  user to the Context panel and the Tool Result Limit) when it is oversized.
+  Running on silently instead would burn tokens on an amnesiac prompt — the
+  exact failure mode this design replaced. With the cap and the byte budget
+  above, new transcripts stay far below the limit; a row saved before them
+  needs one clear.
 - **Save failures warn and continue.** The save happens *after* the
   provider was called and billed, so raising there would fail a completed
   turn over a bookkeeping write. `_save_conversation`
   (`agent_activities.py`), the loop's `save_now()` (`agent_runtime.py`),
   and every specialized-provider `record_turn` call site swallow and log.
+  `_save_conversation` also logs a WARNING when a saved row passes half of
+  `_SEED_TRANSCRIPT_MAX_BYTES`, while the next firing can still load it.
 
 ## Both execution paths, one contract
 
@@ -218,6 +266,7 @@ workflow, not only the removed Context's agent.
 | 7 | `input-memory` is retired; the conversation store is the continuity carrier. Do not resurrect markdown seeding. | `normalize_workflow_graph` migrates it away and the validator rejects it; two carriers would drift. |
 | 8 | Specialized bridges record the ORIGINAL prompt, never the augmented one. | Recording the rendered transcript nests the conversation inside itself and grows without bound. |
 | 9 | The store never imports `nodes/`; the plugin registers its broadcaster via `register_conversation_listener`, and a listener failure can never fail a save. | Same layering rule as every plugin registry; a UI notification must not break execution. |
+| 10 | External tool results are capped before they enter the transcript; the latest turn is never cleared or summarized; the pressure rules are chosen by the recorded `context_pressure_version`. | Uncapped results bricked every later firing (`errors.md` #28); an unread turn summarized away loses what the model asked for; a replay must schedule the commands it recorded. |
 
 ## How this broke (August 2026 regression), and why the journal went away
 

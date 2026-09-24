@@ -61,6 +61,7 @@ from services.llm.config import (
     resolve_temperature as native_resolve_temperature,
 )
 from services.agent_runtime import AgentToolSpec, run_native_agent_loop
+from services.tool_output import resolve_tool_output_limit
 
 
 # =============================================================================
@@ -1260,6 +1261,7 @@ class AIService:
             # feature doesn't silently disable itself on a transient DB hiccup.
             auto_rebind_enabled = True
             user_recursion_limit: Optional[int] = None
+            tool_output_limit = resolve_tool_output_limit(None, self.settings)
             try:
                 user_settings = await self.database.get_user_settings()
                 if user_settings is not None:
@@ -1269,6 +1271,9 @@ class AIService:
                     _raw_limit = user_settings.get("agent_recursion_limit")
                     if isinstance(_raw_limit, int) and _raw_limit > 0:
                         user_recursion_limit = _raw_limit
+                    tool_output_limit = resolve_tool_output_limit(
+                        user_settings, self.settings
+                    )
             except Exception as exc:  # noqa: BLE001 — defensive read
                 logger.debug("[Agent] user_settings read failed: %s", exc)
 
@@ -1406,6 +1411,7 @@ class AIService:
                     if context_runtime is not None
                     else None
                 ),
+                tool_output_limit=tool_output_limit,
             )
 
             # Extract the AI response (last message in the accumulated messages)
@@ -1978,6 +1984,7 @@ class AIService:
                 # machinery as ``execute_agent``.
                 auto_rebind_enabled = True
                 user_recursion_limit: Optional[int] = None
+                tool_output_limit = resolve_tool_output_limit(None, self.settings)
                 try:
                     user_settings = await self.database.get_user_settings()
                     if user_settings is not None:
@@ -1987,6 +1994,9 @@ class AIService:
                         _raw_limit = user_settings.get("agent_recursion_limit")
                         if isinstance(_raw_limit, int) and _raw_limit > 0:
                             user_recursion_limit = _raw_limit
+                        tool_output_limit = resolve_tool_output_limit(
+                            user_settings, self.settings
+                        )
                 except Exception as exc:  # noqa: BLE001 — defensive read
                     logger.debug("[ChatAgent] user_settings read failed: %s", exc)
 
@@ -2086,6 +2096,7 @@ class AIService:
                         if context_runtime is not None
                         else None
                     ),
+                    tool_output_limit=tool_output_limit,
                 )
 
                 # Extract response

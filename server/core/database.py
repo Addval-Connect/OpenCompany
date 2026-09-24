@@ -234,6 +234,13 @@ class Database:
                     await conn.execute(text("ALTER TABLE user_settings ADD COLUMN agent_recursion_limit INTEGER DEFAULT 200"))
                     logger.info("Added agent_recursion_limit column to user_settings")
 
+                if "tool_result_max_chars" not in columns:
+                    # The model field's default is the source of truth; existing
+                    # rows need a real value because the client parser rejects null.
+                    default_chars = int(UserSettings.model_fields["tool_result_max_chars"].default)
+                    await conn.execute(text(f"ALTER TABLE user_settings ADD COLUMN tool_result_max_chars INTEGER DEFAULT {default_chars}"))
+                    logger.info("Added tool_result_max_chars column to user_settings")
+
                 if "max_concurrent_subagents" not in columns:
                     await conn.execute(text("ALTER TABLE user_settings ADD COLUMN max_concurrent_subagents INTEGER DEFAULT 3"))
                 if "max_delegation_depth" not in columns:
@@ -2267,6 +2274,7 @@ class Database:
                     "auto_add_skill_for_tools": settings.auto_add_skill_for_tools,
                     "auto_rebind_tools_after_canvas_change": settings.auto_rebind_tools_after_canvas_change,
                     "agent_recursion_limit": settings.agent_recursion_limit,
+                    "tool_result_max_chars": settings.tool_result_max_chars,
                     "max_concurrent_subagents": settings.max_concurrent_subagents,
                     "max_delegation_depth": settings.max_delegation_depth,
                     "active_namespace": settings.active_namespace,
