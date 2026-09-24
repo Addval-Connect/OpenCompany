@@ -393,3 +393,22 @@ export function useStoredProviderCount(): number {
   if (!data?.providers) return 0;
   return data.providers.filter((p) => p.stored).length;
 }
+
+/**
+ * A key that changes whenever what a model picker can offer changes: which
+ * providers have a stored credential, and each saved named endpoint with its
+ * model count. A count of stored providers misses a second endpoint, because
+ * the provider holding it is already stored.
+ */
+export function storedCredentialSignature(providers: ReadonlyArray<ServerProviderConfig> | undefined): string {
+  if (!providers) return '';
+  return providers
+    .filter((p) => p.stored)
+    .map((p) => [p.id, ...(p.endpoints ?? []).map((e) => `${e.ref}:${e.model_count}`)].join(','))
+    .join('|');
+}
+
+export function useStoredCredentialSignature(): string {
+  const { data } = useCatalogueQuery();
+  return storedCredentialSignature(data?.providers);
+}
