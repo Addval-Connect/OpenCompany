@@ -27,6 +27,9 @@ class DeploymentState:
     # name instead of by UUID. Falls back to ``workflow_id`` when the
     # DB row is missing (one-off deploys, tests).
     workflow_slug: str = ""
+    # Temporal namespace for multi-tenant routing. "default" routes to the
+    # shared namespace; a tenant-specific value routes to an isolated one.
+    temporal_namespace: str = "default"
     settings: Dict[str, Any] = field(default_factory=dict)
     deployed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
