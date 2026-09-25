@@ -13,8 +13,8 @@
 
 Kimi models by Moonshot AI. `kimi-k3` is the current default with a
 1,048,576-token context window and a 131,072-token output ceiling;
-`kimi-k2.6`, `kimi-k2.5`, and `kimi-k2.7-code` remain available as 262K
-tiers. The node uses Moonshot's OpenAI-compatible endpoint through the native
+`kimi-k2.6`, `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` remain available
+as 262K tiers (`kimi-k2.5` left Moonshot's pricing page in September 2026). The node uses Moonshot's OpenAI-compatible endpoint through the native
 provider layer and the shared `ChatModelParams`.
 
 ## Inputs (handles)
@@ -29,11 +29,11 @@ provider layer and the shared `ChatModelParams`.
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | yes | - | User message |
 | `system_prompt` | string | `""` | no | - | System prompt |
-| `model` | string | `""` (injected) | no | - | `kimi-k3` default; `kimi-k2.6`, `kimi-k2.5`, and `kimi-k2.7-code` also supported |
-| `temperature` | number\|null | `null` | no | - | K2.5/K2.6/K2.7 Code force 0.6; K3 uses the supplied/default value clamped to 0-1 |
+| `model` | string | `""` (injected) | no | - | `kimi-k3` default; `kimi-k2.6`, `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` also supported |
+| `temperature` | number\|null | `null` | no | - | K2.6 / K2.7 Code (+ `-highspeed`) force 0.6; K3 uses the supplied/default value clamped to 0-1 |
 | `max_tokens` | number\|null | `null` (model ceiling) | no | - | Up to 131,072 for K3; lower model-specific ceilings for K2 tiers |
 | `top_p` | number\|null | `1.0` | no | - | |
-| `thinking_enabled` | boolean | `false` (Params default) | no | - | When false/unset, the native provider explicitly disables K2.5/K2.6/K2.7 thinking defaults |
+| `thinking_enabled` | boolean | `false` (Params default) | no | - | When false/unset, the native provider explicitly disables the K2 tiers' thinking defaults |
 | `api_key` | string\|null | `null` (injected) | no | - | `auth_service.get_api_key('kimi', 'default')` |
 
 (Kimi uses the shared `ChatModelParams` unchanged; field names are snake_case, unknown keys ignored.)

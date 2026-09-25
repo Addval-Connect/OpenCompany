@@ -570,6 +570,52 @@ async def test_ai_service_agent_entrypoints_use_native_unifier(method_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["execute_agent", "execute_chat_agent"])
+async def test_an_unsaved_named_endpoint_is_reported_as_not_configured(method_name):
+    # No key was injected because the endpoint's rows are gone; the agent
+    # must say so, not "API key is required", and send nothing.
+    from services.ai import AIService
+
+    unifier = _FakeUnifier([])
+    database = _Database()
+    service = AIService(
+        auth_service=_Auth(),
+        database=database,
+        cache=None,
+        settings=object(),
+        chat_unifier=unifier,
+    )
+
+    with pytest.raises(NodeUserError, match="endpoint 'gone' is not configured"):
+        await getattr(service, method_name)(
+            node_id="agent-1",
+            parameters={"provider": "openai_compatible:gone", "model": "qwen3", "prompt": "hello"},
+            database=database,
+        )
+
+    assert unifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_chat_model_with_no_endpoint_chosen_asks_for_one():
+    from services.ai import AIService
+
+    unifier = _FakeUnifier([])
+    service = AIService(
+        auth_service=_Auth(),
+        database=_Database(),
+        cache=None,
+        settings=object(),
+        chat_unifier=unifier,
+    )
+
+    with pytest.raises(NodeUserError, match="Choose an OpenAI-compatible endpoint"):
+        await service.execute_chat("chat-1", "openaiCompatibleChatModel", {"prompt": "hi", "model": "qwen3"})
+
+    assert unifier.calls == []
+
+
+@pytest.mark.asyncio
 async def test_chat_agent_connected_tool_uses_agent_tool_spec_schema():
     from services.ai import AIService
 
@@ -687,3 +733,98 @@ async def test_long_term_retrieval_preserves_execution_context_on_save(
     assert append_turns.await_args.kwargs["mutation_id"].startswith(
         "ai-memory:" if method_name == "execute_agent" else "chat-memory:"
     )
+
+
+def _typed_tool(name: str, node_type: str) -> AgentToolSpec:
+    spec = _tool(name)
+    spec.execution["node_type"] = node_type
+    return spec
+
+
+async def _one_tool_call(tool: AgentToolSpec, result: Any, **loop_kwargs):
+    """Run one tool call through the loop and return the tool message."""
+    call = ToolCall(id="call-1", name=tool.name, args={"value": 1})
+    unifier = _FakeUnifier(
+        [
+            LLMResponse(
+                tool_calls=[call],
+                assistant_message=Message(role="assistant", tool_calls=[call]),
+            ),
+            LLMResponse(content="done"),
+        ]
+    )
+
+    async def execute(_name, _args):
+        return result
+
+    loop = await run_native_agent_loop(
+        unifier,
+        provider="openai",
+        api_key="test",
+        model="gpt-test",
+        temperature=0,
+        max_tokens=100,
+        initial_messages=[Message(role="user", content="go")],
+        tools=[tool],
+        tool_executor=execute,
+        **loop_kwargs,
+    )
+    (tool_message,) = [m for m in loop["messages"] if m.role == "tool"]
+    return tool_message
+
+
+@pytest.mark.asyncio
+async def test_native_loop_cuts_an_external_tool_result():
+    message = await _one_tool_call(
+        _typed_tool("scrape", "tikhubAction"),
+        {"data": "x" * 5_000},
+        tool_output_limit=1_000,
+    )
+
+    assert "showing the first 1,000 of 5,012 characters" in message.content
+    assert len(message.content) < 1_200
+    assert message.blocks[0].text == message.content
+
+
+@pytest.mark.asyncio
+async def test_native_loop_keeps_llm_media_when_the_text_is_cut():
+    ref = {
+        "kind": "image",
+        "path": "images/chart.png",
+        "workflow_id": "wf-media",
+        "filename": "chart.png",
+        "mime_type": "image/png",
+        "size_bytes": 1234,
+    }
+    message = await _one_tool_call(
+        _typed_tool("scrape", "tikhubAction"),
+        {"data": "x" * 5_000, "llm_media": [{"ref": ref}]},
+        tool_output_limit=1_000,
+    )
+
+    assert "Tool result truncated" in message.content
+    images = [block for block in message.blocks if block.type == "image"]
+    assert images and images[0].source["ref"]["path"] == "images/chart.png"
+
+
+@pytest.mark.asyncio
+async def test_native_loop_never_cuts_a_skill_load():
+    message = await _one_tool_call(
+        _typed_tool("Skill", "_builtin_skill"),
+        {"instructions": "i" * 5_000},
+        tool_output_limit=1_000,
+    )
+
+    assert "Tool result truncated" not in message.content
+    assert "i" * 5_000 in message.content
+
+
+@pytest.mark.asyncio
+async def test_native_loop_without_a_limit_keeps_results_whole():
+    message = await _one_tool_call(
+        _typed_tool("scrape", "tikhubAction"),
+        {"data": "x" * 5_000},
+    )
+
+    assert "Tool result truncated" not in message.content
+    assert "x" * 5_000 in message.content

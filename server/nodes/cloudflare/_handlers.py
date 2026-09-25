@@ -63,7 +63,7 @@ logger = get_logger(__name__)
 _LOGIN_ARGS = ["auth", "login", "--force"]
 _LOGIN_TIMEOUT_SECONDS = 600
 # The frontend drops WS requests after 30s. A first-ever login pays a
-# cold npm install inside this handler — answer within this budget no
+# cold `bun add` inside this handler — answer within this budget no
 # matter what and let the flow continue in the background.
 _RESPONSE_BUDGET_SECONDS = 22
 # Retained head of the CLI's output, used only for the failure log line.
@@ -113,7 +113,7 @@ async def _start_login_flow() -> Dict[str, Any]:
             logger.warning("[Cloudflare] cf CLI install failed: %s", e)
             return {
                 "success": False,
-                "error": f"cf CLI install failed ({e}). Manual install: npm i -g cf",
+                "error": f"cf CLI install failed ({e}). Manual install: bun add -g cf",
             }
 
         # Fast path: a live session already exists (user logged in via a

@@ -20,9 +20,10 @@ Per RFC plugin_authoring_rfc.md §6.4:
 Wire format (Wave 12 D4 — legacy ``whatsapp_status`` raw frame retired):
   - Status: typed CloudEvents envelope on ``plugin_connection_status``
     (FE routes by ``envelope.source``).
-  - Message / newsletter / history: still dual-emit on their legacy
-    wire keys until the matching FE handlers migrate to envelope-aware
-    readers (follow-up D4 round).
+  - Message / newsletter / history: one-way legacy WS frames on their
+    ``whatsapp_*`` wire keys (no envelope twin). The FE handlers still
+    route on those keys; migrating them to envelope-aware readers is a
+    follow-up D4 round.
 """
 
 from __future__ import annotations

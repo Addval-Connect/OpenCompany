@@ -49,20 +49,6 @@ def _source_handle(edge: Mapping[str, Any]) -> Optional[str]:
     return str(value) if value else None
 
 
-def _requires_context(node_type: str) -> bool:
-    """Read the declared plugin capability without type-name heuristics."""
-    from services.node_registry import get_node_class
-
-    node_cls = get_node_class(node_type)
-    if node_cls is None:
-        return False
-    if bool(getattr(node_cls, "requires_context", False)):
-        return True
-    # Transitional support for plugins which shipped the capability as a
-    # NodeSpec hint before gaining the BaseNode ClassVar.
-    return bool((getattr(node_cls, "ui_hints", {}) or {}).get("requiresContext"))
-
-
 def _context_node_for(agent: Mapping[str, Any], node_id: str) -> Dict[str, Any]:
     position = dict(agent.get("position") or {})
     x = position.get("x")
@@ -76,11 +62,7 @@ def _context_node_for(agent: Mapping[str, Any], node_id: str) -> Dict[str, Any]:
         "id": node_id,
         "type": "context",
         "position": context_position,
-        "data": {
-            "label": "Context",
-            "systemManaged": True,
-            "agentNodeId": str(agent.get("id") or ""),
-        },
+        "data": {"label": "Context"},
     }
 
 
@@ -177,17 +159,23 @@ def normalize_workflow_graph(
     *,
     canonicalize_ids: bool = True,
 ) -> WorkflowGraphNormalization:
-    """Normalize a graph to Context V2.
+    """Normalize a graph to the Context topology.
 
     The transform is idempotent and preserves unknown edges for validation.
     It performs the following ordered stages:
 
     1. canonicalize legacy handle field names;
     2. migrate the retired Android toolkit;
-    3. convert every legacy Memory continuity edge into a Context edge plus
-       an ordinary Memory tool edge;
-    4. pair every plugin declaring ``requires_context`` with a fresh Context;
-    5. assign canonical node IDs and return aliases/import receipts.
+    3. convert every legacy Memory continuity edge into an ordinary Memory
+       tool edge plus a Context edge, adding a Context node for an agent
+       that has none;
+    4. assign canonical node IDs and return aliases/import receipts.
+
+    Context nodes are otherwise left exactly as the user placed them. A
+    Context is an opt-in the user adds and removes on the canvas, so this
+    never creates, reconnects or deletes one. The legacy edge in stage 3 is
+    the one exception, because it was itself an explicit continuity
+    declaration.
 
     Raw legacy Markdown is returned only in ``state_imports``.  It is never
     copied into the Context node or workflow graph.
@@ -237,223 +225,37 @@ def normalize_workflow_graph(
             )
             tool_pairs.add((memory_id, agent_id))
 
-    required_agent_ids = {node_id for node_id, node in node_by_id.items() if _requires_context(str(node.get("type") or ""))}
-    # A legacy edge is itself an explicit continuity declaration. It remains
-    # migratable even if an optional plugin is not installed on this host.
-    required_agent_ids.update(legacy_by_agent)
-
-    # Resolve system companion ownership before repairing edges. This prevents
-    # a stale Context whose owner was deleted from being silently adopted by a
-    # different agent merely because an unrelated edge still points at it.
-    context_targets: Dict[str, List[str]] = {}
+    # Stage 3, second half: the legacy edge declared continuity, so its agent
+    # keeps it. Reuse a Context the agent is already connected to, otherwise
+    # add one. A legacy edge stays migratable even when the destination
+    # plugin is not installed on this host.
+    connected_contexts: Dict[str, str] = {}
     for edge in normalized_edges:
         source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        if (
-            source in context_ids
-            and _source_handle(edge) == "output-context"
-            and _target_handle(edge) == "input-context"
-            and target in required_agent_ids
-        ):
-            context_targets.setdefault(source, []).append(target)
-
-    declared_owners: Dict[str, str] = {}
-    resolved_system_owners: Dict[str, str] = {}
-    orphaned_system_contexts: set[str] = set()
-    for context_id in sorted(context_ids):
-        context_node = node_by_id[context_id]
-        data = dict(context_node.get("data") or {})
-        if data.get("systemManaged") is not True:
-            continue
-        declared_owner = str(data.get("agentNodeId") or "")
-        if declared_owner:
-            if declared_owner not in required_agent_ids:
-                orphaned_system_contexts.add(context_id)
-                warnings.append(f"Removed orphaned system Context {context_id!r}")
-                continue
-            declared_owners[context_id] = declared_owner
-            resolved_system_owners[context_id] = declared_owner
-            continue
-
-        inferred = sorted(set(context_targets.get(context_id, [])))
-        if len(inferred) == 1:
-            resolved_system_owners[context_id] = inferred[0]
-        elif not inferred:
-            orphaned_system_contexts.add(context_id)
-            warnings.append(f"Removed orphaned system Context {context_id!r}")
-        # A shared system Context without ownership metadata is ambiguous.
-        # Preserve it so the validation boundary rejects the graph instead of
-        # guessing which agent owns provider state.
-
-    # If retries or an older client produced two system companions for one
-    # agent, retain one deterministically and archive the rest after save.
-    contexts_by_owner: Dict[str, List[str]] = {}
-    for context_id, owner_id in resolved_system_owners.items():
-        if context_id not in orphaned_system_contexts:
-            contexts_by_owner.setdefault(owner_id, []).append(context_id)
-    for owner_id, candidates in sorted(contexts_by_owner.items()):
-        if len(candidates) < 2:
-            continue
-        keeper = min(
-            candidates,
-            key=lambda context_id: (
-                context_id not in declared_owners,
-                owner_id not in context_targets.get(context_id, []),
-                context_id,
-            ),
-        )
-        for context_id in sorted(candidates):
-            if context_id == keeper:
-                continue
-            orphaned_system_contexts.add(context_id)
-            resolved_system_owners.pop(context_id, None)
-            warnings.append(f"Removed duplicate system Context {context_id!r} for agent {owner_id!r}; retained {keeper!r}")
-
-    if orphaned_system_contexts:
-        normalized_nodes = [node for node in normalized_nodes if str(node.get("id") or "") not in orphaned_system_contexts]
-        normalized_edges = [
-            edge
-            for edge in normalized_edges
-            if str(edge.get("source") or "") not in orphaned_system_contexts
-            and str(edge.get("target") or "") not in orphaned_system_contexts
-        ]
-        for context_id in orphaned_system_contexts:
-            params.pop(context_id, None)
-            node_by_id.pop(context_id, None)
-            context_ids.discard(context_id)
-
-    # A system-owned Context may only point at its recorded owner. Repair
-    # stale/shared system edges, but leave ambiguous user-authored topology
-    # untouched so validation can reject it.
-    repaired_edges: List[Dict[str, Any]] = []
-    owner_pairs: set[tuple[str, str]] = set()
-    for edge in normalized_edges:
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
-        owner_id = resolved_system_owners.get(source)
-        is_context_edge = _source_handle(edge) == "output-context" and _target_handle(edge) == "input-context"
-        if owner_id and is_context_edge:
-            if target != owner_id:
-                warnings.append(f"Removed stale system Context edge {source!r} -> {target!r}; owner is {owner_id!r}")
-                continue
-            owner_pairs.add((source, target))
-        repaired_edges.append(edge)
-    normalized_edges = repaired_edges
-    for context_id, owner_id in sorted(resolved_system_owners.items()):
-        if (context_id, owner_id) in owner_pairs:
-            continue
-        normalized_edges.append(
-            {
-                "id": _edge_id("context", context_id, owner_id),
-                "source": context_id,
-                "target": owner_id,
-                "sourceHandle": "output-context",
-                "targetHandle": "input-context",
-                "data": {"systemManaged": True},
-            }
-        )
-
-    existing_contexts: Dict[str, List[str]] = {}
-    for edge in normalized_edges:
-        source = str(edge.get("source") or "")
-        target = str(edge.get("target") or "")
         if source in context_ids and _source_handle(edge) == "output-context" and _target_handle(edge) == "input-context":
-            existing_contexts.setdefault(target, []).append(source)
-
-    # A required system edge removed in the editor is repaired by the
-    # backend. The companion records its owner as non-runtime UI metadata so
-    # repair does not rely on geometry or agent type-name heuristics.
-    existing_pairs = {(source, target) for target, sources in existing_contexts.items() for source in sources}
-    for context_id in sorted(context_ids):
-        context_node = node_by_id[context_id]
-        data = context_node.get("data") or {}
-        owner_id = str(data.get("agentNodeId") or "")
-        if (
-            data.get("systemManaged") is True
-            and owner_id in node_by_id
-            and _requires_context(str((node_by_id.get(owner_id) or {}).get("type") or ""))
-            and (context_id, owner_id) not in existing_pairs
-        ):
-            normalized_edges.append(
-                {
-                    "id": _edge_id("context", context_id, owner_id),
-                    "source": context_id,
-                    "target": owner_id,
-                    "sourceHandle": "output-context",
-                    "targetHandle": "input-context",
-                    "data": {"systemManaged": True},
-                }
-            )
-            existing_contexts.setdefault(owner_id, []).append(context_id)
-            existing_pairs.add((context_id, owner_id))
+            connected_contexts.setdefault(str(edge.get("target") or ""), source)
 
     occupied_ids = set(node_by_id)
-    for ordinal, agent_id in enumerate(sorted(required_agent_ids), start=1):
-        if existing_contexts.get(agent_id):
+    for ordinal, agent_id in enumerate(sorted(legacy_by_agent), start=1):
+        if agent_id in connected_contexts:
             continue
-        temporary_id = f"__context__:{ordinal}:{agent_id}"
+        context_id = f"__context__:{ordinal}:{agent_id}"
         suffix = 1
-        while temporary_id in occupied_ids:
+        while context_id in occupied_ids:
             suffix += 1
-            temporary_id = f"__context__:{ordinal}:{agent_id}:{suffix}"
-        occupied_ids.add(temporary_id)
-        context_node = _context_node_for(node_by_id[agent_id], temporary_id)
-        normalized_nodes.append(context_node)
-        node_by_id[temporary_id] = context_node
-        context_ids.add(temporary_id)
-        existing_contexts[agent_id] = [temporary_id]
+            context_id = f"__context__:{ordinal}:{agent_id}:{suffix}"
+        occupied_ids.add(context_id)
+        normalized_nodes.append(_context_node_for(node_by_id[agent_id], context_id))
+        connected_contexts[agent_id] = context_id
         normalized_edges.append(
             {
-                "id": _edge_id("context", temporary_id, agent_id),
-                "source": temporary_id,
+                "id": _edge_id("context", context_id, agent_id),
+                "source": context_id,
                 "target": agent_id,
                 "sourceHandle": "output-context",
                 "targetHandle": "input-context",
-                "data": {"systemManaged": True},
             }
         )
-
-    # Persist the ownership marker for backend edge repair/cascade semantics.
-    # It is UI metadata only; runtime state lives in the conversation store.
-    agents_for_context: Dict[str, List[str]] = {}
-    for agent_id, sources in existing_contexts.items():
-        for source_id in dict.fromkeys(sources):
-            agents_for_context.setdefault(source_id, []).append(agent_id)
-    for agent_id, sources in existing_contexts.items():
-        unique_sources = list(dict.fromkeys(sources))
-        if len(unique_sources) != 1:
-            continue
-        source_id = unique_sources[0]
-        if len(set(agents_for_context.get(source_id, []))) != 1:
-            continue
-        context_node = node_by_id.get(source_id)
-        if context_node is None:
-            continue
-        context_node["data"] = {
-            **dict(context_node.get("data") or {}),
-            "systemManaged": True,
-            "agentNodeId": agent_id,
-        }
-
-    # Cascade-delete an orphaned system companion when its owning agent is
-    # absent. User-authored/unowned Context nodes are left for validation.
-    claimed_context_ids = {source_id for sources in existing_contexts.values() for source_id in sources}
-    unclaimed_system_contexts = {
-        node_id
-        for node_id, node in node_by_id.items()
-        if node.get("type") == "context" and (node.get("data") or {}).get("systemManaged") is True and node_id not in claimed_context_ids
-    }
-    if unclaimed_system_contexts:
-        normalized_nodes = [node for node in normalized_nodes if str(node.get("id") or "") not in unclaimed_system_contexts]
-        normalized_edges = [
-            edge
-            for edge in normalized_edges
-            if str(edge.get("source") or "") not in unclaimed_system_contexts
-            and str(edge.get("target") or "") not in unclaimed_system_contexts
-        ]
-        for context_id in unclaimed_system_contexts:
-            params.pop(context_id, None)
-            warnings.append(f"Removed orphaned system Context {context_id!r}")
 
     aliases: Dict[str, str] = {}
     if canonicalize_ids and workflow_id:

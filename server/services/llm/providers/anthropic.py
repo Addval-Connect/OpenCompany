@@ -38,7 +38,6 @@ class AnthropicProvider:
         }
         if proxy_url:
             kwargs["base_url"] = proxy_url
-            kwargs["api_key"] = "ollama"
         self._client = anthropic.AsyncAnthropic(**kwargs)
 
     # ------------------------------------------------------------------

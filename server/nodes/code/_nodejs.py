@@ -1,7 +1,7 @@
-"""Shared Node.js executor access for the JS/TS plugins.
+"""Shared JS executor sidecar access for the JS/TS plugins.
 
 Both ``javascript_executor`` and ``typescript_executor`` dispatch
-through the same persistent Node.js sidecar. This helper owns the
+through the same persistent bun-hosted sidecar. This helper owns the
 singleton HTTP client AND the on-demand spawn: :func:`acquire_client`
 ensures the backend-supervised runtime (see :mod:`._runtime`) is up
 before handing back the client, so JS/TS nodes work in every mode

@@ -16,15 +16,9 @@ class DeploymentState:
     edges: List[Dict]
     session_id: str
     user_id: str = "owner"
-    # Temporal namespace this deployment executes in.  Defaults to "default"
-    # (= Settings.temporal_namespace) so single-tenant behaviour is unchanged.
-    # Set by handle_start_workflow / handle_deploy_workflow from
-    # resolve_tenant_namespace so canary listeners and MachinaWorkflows
-    # start in the correct namespace.
-    temporal_namespace: str = "default"
-    # Context V2 cutover metadata. Both must be present for
-    # MachinaWorkflow to select AgentWorkflowV2; legacy/uncontrolled
-    # deployments leave them at zero and retain AgentWorkflow V1.
+    # Conversation scope. Both must be present for MachinaWorkflow to
+    # stamp a Context generation on node activities; legacy/uncontrolled
+    # deployments leave them at zero and run without a Context store.
     graph_version: int = 0
     generation: int = 0
     # Human-readable slug resolved from DB at deploy time. Used to
@@ -33,6 +27,9 @@ class DeploymentState:
     # name instead of by UUID. Falls back to ``workflow_id`` when the
     # DB row is missing (one-off deploys, tests).
     workflow_slug: str = ""
+    # Temporal namespace for multi-tenant routing. "default" routes to the
+    # shared namespace; a tenant-specific value routes to an isolated one.
+    temporal_namespace: str = "default"
     settings: Dict[str, Any] = field(default_factory=dict)
     deployed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 

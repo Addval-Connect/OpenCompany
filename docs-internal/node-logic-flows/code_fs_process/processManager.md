@@ -38,7 +38,8 @@ envelope so the framework returns a clean failure.
 | `name` | string | `""` | yes (all except `list`) | - | Unique process name within the workflow (LLM `"None"` coerced to empty by `_clean`) |
 | `command` | string | `""` | yes (`start` only) | `operation=start` | Command (`ProcessService` parses with `shlex.split`) |
 | `cwd` | string | `""` | no | `operation=start` | Working directory; defaults to `<workspace>/<node_id>` |
-| `env` | object (Dict[str,str]) | `{}` | no | `operation=start` | Declared param, but the `dispatch` op does NOT forward it to `svc.start` — currently inert |
+| `ports` | int[] | `[]` | no | `operation=start` | Listener ports reserved before spawn; occupied ports fail with `PORT_IN_USE` instead of launching |
+| `env` | object (Dict[str,str]) | `{}` | no | `operation=start` | Extra environment variables, forwarded to `ProcessService.start(extra_env=...)` |
 | `input_text` | string | `""` | yes (`send_input`) | `operation=send_input` | Text to write to stdin (newline auto-appended by the service) |
 | `stream` | `stdout`/`stderr` (Literal) | `stdout` | no | `operation=get_output` | Stream to read for `get_output` |
 | `tail` | number | `100` (ge=1, le=10000) | no | `operation=get_output` | Tail N lines |
@@ -57,8 +58,7 @@ card listed pre-Wave-11 frontend fields). `get_output` is always called with
 ### Output payload per operation
 
 The shapes below are whatever `ProcessService` returns (passed through `_unwrap`).
-`node_output_schemas.ProcessManagerOutput` declares `operation` / `pid` /
-`status` / `output` / `processes` (extra fields allowed by `_OutputBase`).
+The plugin's own [`ProcessManagerOutput`](../../../server/nodes/utility/process_manager/__init__.py) declares operation / pid / status / output / processes (`extra="allow"`).
 
 - `start` / `stop` / `restart`: the `ProcessInfo` dict from the service
   (`{name, command, pid, status, started_at, exit_code, working_directory,

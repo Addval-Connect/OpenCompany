@@ -1,54 +1,51 @@
-# Dependabot policy: SECURITY UPDATES ONLY.
+# Dependabot is DISABLED by policy (2026-09-12): no version-update PRs and no
+# security-update PRs. Dependencies move by hand, alongside test runs:
+#   JS   -> bump the range in the relevant package.json (or the top-level
+#           `overrides` block for transitive pins), `bun install`, run tests
+#   pip  -> `uv lock --upgrade-package <name>` in server/, `uv sync`, tests
+# Alerts stay visible in the repository's Security tab.
 #
-# Version-update PRs are deliberately disabled (open-pull-requests-limit: 0).
-# History: weekly version bumps produced 12-26 PRs/week, ~89% closed unmerged
-# (105 PRs May-Aug 2026; see docs-internal/ci_cd.md "Dependency update
-# policy"). Dependencies move deliberately, alongside test runs - not
-# piecemeal. Security PRs are NOT affected by the limit or the schedule:
-# they open as soon as a fixable vulnerability is disclosed.
+# Why this file still exists: without an entry for a directory, Dependabot
+# routes that directory's alerts to whatever updater it guesses, and for a
+# bun.lock tree it guesses npm_and_yarn, which cannot read bun.lock and fails
+# every run ("can't update vulnerable dependencies for projects without a
+# lockfile or pinned version requirement", desktop/vitest, 2026-09-11). The
+# entries below keep every surface mapped to the right ecosystem while the
+# `ignore: "*"` rule stops every PR, security updates included.
 #
-# Do not "fix" the 0 limits without reading the ci_cd.md section first.
+# Turning Dependabot's security-update attempts off entirely is a repository
+# setting (Settings > Code security > Dependabot), not something this file
+# can do; see docs-internal/ci_cd.md "Dependency update policy".
 version: 2
 updates:
-  # bun - the root bun workspace covers package.json, client/, and
-  # server/nodejs/ through the single bun.lock. (A former `/server`
-  # entry pointed at a manifest deleted in d0e1b816 and was removed.)
-  # NOTE: the bun ecosystem supports version updates only - Dependabot
-  # does NOT open security-update PRs for bun.lock (alerts still fire
-  # from the dependency graph). The top-level `overrides` block in
-  # package.json is this repo's actual security-pin remediation channel.
   - package-ecosystem: bun
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 0
-    groups:
-      bun-security:
-        applies-to: security-updates
-        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
 
-  # pip - the server runtime. Authoritative manifest: server/pyproject.toml;
-  # the committed requirements.txt (a `uv export` of the transitive tree)
-  # doubles as the pinned surface security updates can patch. (A former root
-  # `pip: /` entry never updated the root CLI pyproject - its >= floors need
-  # no PRs - and only re-bumped server/requirements.txt, duplicating this
-  # entry's PRs; it was removed.)
+  - package-ecosystem: bun
+    directory: /desktop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
+
   - package-ecosystem: pip
     directory: /server
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 0
-    groups:
-      pip-security:
-        applies-to: security-updates
-        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 0
-    groups:
-      actions-security:
-        applies-to: security-updates
-        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"

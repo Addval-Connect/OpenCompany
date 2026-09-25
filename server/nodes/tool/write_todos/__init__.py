@@ -73,7 +73,7 @@ class WriteTodosNode(ToolNode):
         {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
         {"name": "output-tool", "kind": "output", "position": "top", "label": "Tool", "role": "tools"},
     )
-    ui_hints = {"isToolPanel": True, "hideRunButton": True, "isTodoEditor": True}
+    ui_hints = {"hideRunButton": True, "isTodoEditor": True}
     annotations = {"destructive": False, "readonly": False, "open_world": False}
     task_queue = TaskQueue.DEFAULT
 

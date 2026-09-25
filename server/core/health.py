@@ -87,6 +87,42 @@ async def check_cache(cache: "CacheService") -> bool:
         return False
 
 
+def readiness_report(
+    *,
+    db_ok: bool,
+    temporal_enabled: bool,
+    phase: str,
+    worker_ready: bool,
+    pool_ready: bool,
+    client_connected: bool,
+    version: str,
+) -> tuple[int, Dict[str, Any]]:
+    """Pure readiness verdict shared by ``/health/ready`` and its tests.
+
+    Ready = database reachable AND (Temporal disabled OR the worker manager
+    has started). The worker manager is the LAST thing
+    ``services.temporal.lifecycle`` wires, so it is the honest signal that a
+    Run can actually execute; a connected client alone is not enough.
+    Returns ``(status_code, body)``: 200 when ready, 503 otherwise, with the
+    coarse ``phase`` string a splash screen can show.
+    """
+    ready = bool(db_ok and (not temporal_enabled or worker_ready))
+    body: Dict[str, Any] = {
+        "ready": ready,
+        "phase": "ready" if ready else ("disabled" if not temporal_enabled else phase),
+        "database": bool(db_ok),
+        "temporal": {
+            "enabled": bool(temporal_enabled),
+            "phase": phase,
+            "client_connected": bool(client_connected),
+            "worker_ready": bool(worker_ready),
+            "pool_ready": bool(pool_ready),
+        },
+        "version": version,
+    }
+    return (200 if ready else 503), body
+
+
 async def get_health_status(database: "Database", cache: "CacheService", settings: "Settings") -> Dict[str, Any]:
     """Get comprehensive health status for /health endpoint.
 

@@ -26,6 +26,8 @@ Transcribe audio through any configured provider. Replaces the vendor-locked
 
 | Name | Type | Default | Required | Description |
 |------|------|---------|----------|-------------|
+| `tool_name` | string | `speech_to_text` | no | Override name shown to the LLM when used as a tool |
+| `tool_description` | string | `"Transcribe an audio file to text. Accepts a workspace path or an audio reference produced by an upstream node. Use when the user asks what was said in a recording, or wants a transcript."` | no | Override description shown to the LLM when used as a tool (`rows: 3`) |
 | `provider` | enum | `deepgram` | no | Registry-driven: the enum is `stt_providers()` |
 | `audio_file` | string \| AudioRef \| upload | `""` | yes | Widget `file`. Three shapes accepted — see below |
 | `stt_model` | string | `""` | no | Blank uses the provider default. **Not** named `model` |

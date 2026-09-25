@@ -12,7 +12,7 @@ historical container topology.
 
 One command provisions a login-gated OpenCompany VM on a cloud provider. Two stages:
 
-1. **Operator's cloud CLI** (gcloud; aws planned) handles auth + project/region/zone resolution +
+1. **Operator's cloud CLI** (gcloud; the AWS Terraform module in `cli/terraform/aws/` is complete and validated on t3.micro, but the `cli/commands/deploy/providers/aws.py` CLI adapter is still a stub that exits 1) handles auth + project/region/zone resolution +
    ADC verification + API enablement.
 2. **Terraform** (`cli/terraform/gcp/`) owns all resources — new VMs use the
    `opencompany` resource id,

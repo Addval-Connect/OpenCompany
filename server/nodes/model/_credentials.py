@@ -8,18 +8,19 @@ The native SDK client pulls the key directly from
 :mod:`services.auth`; this class is the Credentials-modal + discovery
 manifest, not the runtime client.
 
-Local servers (Ollama, LM Studio) follow the same shape as the cloud
-credentials but their api_key is optional — many users run them on
-localhost with no auth. The existing ``{provider}_proxy`` mechanism
-in :func:`services.ai.AIService.create_model` already handles the
-"override base_url + use placeholder api_key" path; the credential
-class only needs to return a placeholder when nothing is stored so
-the central "API key is required" check in ``execute_chat`` passes.
+Servers the user runs (Ollama, LM Studio, and named OpenAI-compatible
+endpoints) store their Base URL under ``{provider}_proxy`` and need no
+key unless the server enforces one; without one, the placeholder the
+vendor documents is sent (``auth.placeholder_key`` in llm_defaults.json,
+resolved by :func:`services.llm.config.resolve_credential`). All three
+save through one path, ``_local_validator.save_llm_server`` (RFC-0003 §6).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from services.plugin.credential import ApiKeyCredential, ProbeResult
 
@@ -194,32 +195,26 @@ class _LocalLLM(_LLMApiKey):
     """Base for local-server credentials (Ollama, LM Studio).
 
     Same shape as :class:`_LLMApiKey`, but ``resolve()`` returns the
-    documented Ollama placeholder when no key is stored instead of
-    raising. The user's custom server address rides on the existing
-    ``{id}_proxy`` credential — :func:`services.ai.AIService.create_model`
-    already reads it and OpenAIProvider already overrides ``base_url``
-    + forces ``api_key="ollama"``. Nothing else to wire.
+    vendor's documented placeholder when no key is stored instead of
+    raising. The server address rides on the ``{id}_proxy`` row, which
+    the unifier reads before building the client.
     """
 
     @classmethod
     async def resolve(cls, *, user_id: str = "owner") -> Dict[str, Any]:
+        from services.llm.config import resolve_credential
         from services.plugin.deps import get_auth_service
 
         api_key = await get_auth_service().get_api_key(cls.id)
-        return {"api_key": api_key or "ollama"}
+        return {"api_key": resolve_credential(cls.id, api_key)}
 
     @classmethod
     async def validate(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Probe the user's local server via the official SDK.
+        """Root the URL, list the loaded models, and save both rows.
 
-        Overrides the base ``Credential.validate`` because local-LLM
-        side-effect ordering genuinely differs from the cloud case:
-        the user's URL is persisted under ``{cls.id}_proxy`` BEFORE
-        the probe runs, the placeholder ``api_key="ollama"`` is
-        stored under ``cls.id`` only on success, and per-model context
-        is registered in the model registry. Delegates to the
-        SDK-typed probe in ``_local_validator.py`` which already owns
-        that full flow.
+        Overrides the base ``Credential.validate`` because the value is a
+        Base URL, not a key, and two rows are written (``{id}_proxy`` and
+        ``{id}``). See ``_local_validator.save_llm_server``.
         """
         from ._local_validator import validate_local_llm
 
@@ -238,3 +233,118 @@ class LMStudioCredential(_LocalLLM):
     display_name = "LM Studio"
     icon = "lobehub:lmstudio"
     docs_url = "https://lmstudio.ai/docs/local-server"
+
+
+# Mirrors the provider column limit: "openai_compatible:" + slug + "_proxy"
+# must fit in EncryptedAPIKey.provider (max 50 characters).
+_ENDPOINT_SLUG_MAX = 24
+_SLUG_PATTERN = re.compile(r"^[a-z0-9-]+$")
+
+
+def _endpoint_slug(label: str, base_url: str) -> str:
+    """Slug for a new endpoint: from its label, else from the URL's host and port.
+
+    Never from the whole network location, which can carry a username and
+    password: the slug is the endpoint's name, stored and shown in plain
+    text. Empty when there is neither a label nor a host to name it by.
+    """
+    from slugify import slugify
+
+    source = label
+    if not source:
+        parts = urlsplit(base_url)
+        try:
+            port = parts.port
+        except ValueError:  # malformed port: name it by the host alone
+            port = None
+        source = " ".join(str(part) for part in (parts.hostname, port) if part)
+    return slugify(source, max_length=_ENDPOINT_SLUG_MAX, separator="-")
+
+
+def _rejected(message: str) -> Dict[str, Any]:
+    return {"provider": OpenAICompatibleCredential.id, "success": True, "valid": False, "message": message, "models": []}
+
+
+class OpenAICompatibleCredential(_LLMApiKey):
+    """Named OpenAI-compatible endpoints (RFC-0003 D13).
+
+    Any number of servers, each saved under its own provider reference
+    ``openai_compatible:<slug>`` with the same two rows Ollama uses
+    (``{ref}`` for the key, ``{ref}_proxy`` for the resolved URL). The
+    LiteLLM ``model_list`` shape: a label, a base URL, an optional key.
+
+    Saved and refreshed through the standard ``validate_api_key`` message:
+    ``api_key`` carries the Base URL, the other catalogue fields ride
+    alongside under their own keys, and ``ref`` marks a refresh of an
+    existing endpoint. Removed through ``delete_api_key`` with the
+    endpoint's reference, which also clears its URL row.
+    """
+
+    id = "openai_compatible"
+    display_name = "OpenAI-compatible"
+    docs_url = "https://docs.litellm.ai/docs/providers/openai_compatible"
+
+    # Field keys of this provider's entry in config/credential_providers.json.
+    label_field = "openai_compatible_label"
+    key_field = "openai_compatible_api_key"
+
+    @classmethod
+    async def validate(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        from services.llm.config import endpoint_ref, split_provider_ref
+        from services.llm.endpoints import FULL_URL_REQUIRED, SERVER_META_KEY, base_url_key
+        from services.plugin.deps import get_auth_service
+
+        from ._local_validator import save_llm_server
+
+        auth = get_auth_service()
+        label = (data.get(cls.label_field) or "").strip()
+        user_key: Optional[str] = (data.get(cls.key_field) or "").strip() or None
+        ref = (data.get("ref") or "").strip()
+
+        if ref:
+            # Refresh. The stored URL is authoritative: the panel only ever
+            # sees the redacted form, which may have lost userinfo.
+            name, slug = split_provider_ref(ref)
+            if name != cls.id or not _SLUG_PATTERN.match(slug):
+                return _rejected(f"Unknown endpoint {ref!r}.")
+            candidate = await auth.get_api_key(base_url_key(ref))
+            if not candidate:
+                return _rejected(f"The endpoint '{slug}' no longer exists.")
+            user_key = user_key or await auth.get_api_key(ref)
+            if not label:
+                meta = (await auth.get_model_params(ref)).get(SERVER_META_KEY) or {}
+                label = meta.get("label") or slug
+        else:
+            candidate = (data.get("api_key") or "").strip()
+            slug = _endpoint_slug(label, candidate)
+            if not slug:
+                return _rejected(
+                    "Give the endpoint a label with at least one letter or digit." if label else FULL_URL_REQUIRED
+                )
+            ref = endpoint_ref(slug)
+            if await auth.get_api_key(ref):
+                return _rejected(
+                    f"An endpoint named '{slug}' already exists. Choose another label, "
+                    "or refresh the existing endpoint."
+                )
+            label = label or slug
+
+        return await save_llm_server(ref, candidate, user_key, display=label, label=label)
+
+    @classmethod
+    async def catalogue_extras(cls) -> Dict[str, Any]:
+        """``stored`` (any endpoint saved) plus the endpoint list for the panel."""
+        from services.llm.endpoints import list_endpoints
+        from services.plugin.deps import get_auth_service
+
+        endpoints = [
+            {"ref": e.ref, "label": e.label, "base_url": e.base_url, "kind": e.kind, "model_count": len(e.models)}
+            for e in await list_endpoints(get_auth_service())
+        ]
+        return {"stored": bool(endpoints), "endpoints": endpoints}
+
+    @classmethod
+    async def is_configured(cls, auth_service: Any, parameters: Dict[str, Any]) -> bool:
+        """The endpoint the node names is saved. Nothing is stored under the bare id."""
+        ref = str(parameters.get("endpoint") or "")
+        return bool(ref) and bool(await auth_service.has_valid_key(ref))

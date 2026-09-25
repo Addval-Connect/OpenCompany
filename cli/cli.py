@@ -288,7 +288,7 @@ version_app = typer.Typer(
 
 @version_app.command(
     "sync",
-    help="Sync package.json versions from latest git tag.",
+    help="Sync every version file from a git tag (default: the latest).",
 )
 def _version_sync(
     tag: str | None = typer.Argument(

@@ -60,7 +60,7 @@ import { cn } from '@/lib/utils';
 import { useCanvasDockStore } from '../../stores/canvasDockStore';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApiKeys, GlobalModelState } from '../../hooks/useApiKeys';
-import { useStoredProviderCount } from '../../hooks/useCatalogueQuery';
+import { useStoredCredentialSignature } from '../../hooks/useCatalogueQuery';
 import { AI_PROVIDER_META } from '../icons/AIProviderIcons';
 
 // New-contract token: --border-default ↔ Tailwind utility `bg-border-default`.
@@ -146,15 +146,15 @@ const TopToolbar: React.FC<TopToolbarProps> = ({
   const { getValidatedAiProviders, saveGlobalModel, isConnected: apiKeysConnected } = useApiKeys();
   const [globalModelState, setGlobalModelState] = useState<GlobalModelState>({ providers: [], global_provider: null, global_model: null });
 
-  // Re-fetch validated providers whenever the count of stored
-  // credentials changes. Read from the catalogue (single source of
-  // truth — `provider.stored` flag); the retired
-  // `apiKeyStatuses[id].hasKey` mirror duplicated this answer.
-  const apiKeyCount = useStoredProviderCount();
+  // Re-fetch validated providers whenever the stored credentials change:
+  // a provider added or removed, or a named endpoint added, removed or
+  // refreshed. Read from the catalogue (single source of truth); a count of
+  // stored providers would miss a second endpoint.
+  const storedSignature = useStoredCredentialSignature();
   useEffect(() => {
     if (!apiKeysConnected) return;
     getValidatedAiProviders().then(state => setGlobalModelState(state));
-  }, [apiKeysConnected, apiKeyCount, getValidatedAiProviders]);
+  }, [apiKeysConnected, storedSignature, getValidatedAiProviders]);
 
   const handleSelectGlobalModel = useCallback((value: string) => {
     const [provider, ...rest] = value.split('::');

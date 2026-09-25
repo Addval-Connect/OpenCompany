@@ -18,11 +18,7 @@ def _node(node_id: str, node_type: str, x: int = 0):
     }
 
 
-def test_legacy_memory_becomes_isolated_context_and_shared_tool(monkeypatch):
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
+def test_legacy_memory_becomes_isolated_context_and_shared_tool():
     nodes = [
         _node("memory", "simpleMemory"),
         _node("first", "agent", 400),
@@ -62,11 +58,7 @@ def test_legacy_memory_becomes_isolated_context_and_shared_tool(monkeypatch):
     assert all("memory_content" not in node.get("data", {}) for node in contexts)
 
 
-def test_context_graph_normalization_is_idempotent(monkeypatch):
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
+def test_context_graph_normalization_is_idempotent():
     first = normalize_workflow_graph(
         "7",
         [_node("agent", "agent")],
@@ -83,157 +75,55 @@ def test_context_graph_normalization_is_idempotent(monkeypatch):
     assert second.aliases == {}
 
 
-def test_backend_repairs_required_edge_and_removes_deleted_agent_context(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
-    nodes = [
-        {
-            **_node("agent", "agent"),
-            "data": {"label": "Agent"},
-        },
-        {
-            **_node("ctx", "context"),
-            "data": {
-                "label": "Context",
-                "systemManaged": True,
-                "agentNodeId": "agent",
-            },
-        },
-    ]
-    repaired = normalize_workflow_graph("3", nodes, [])
-    assert [edge for edge in repaired.edges if edge.get("targetHandle") == "input-context"]
-    context = next(node for node in repaired.nodes if node["type"] == "context")
-    assert context["data"]["agentNodeId"] == "3:agent:1"
-
-    deleted = normalize_workflow_graph(
+def test_normalization_never_recreates_a_deleted_context():
+    # The user deleted the agent's Context on the canvas; saving must not
+    # bring it back. Stale companion metadata on the remaining nodes changes
+    # nothing either.
+    result = normalize_workflow_graph(
         "3",
-        [node for node in repaired.nodes if node["type"] != "agent"],
+        [
+            {
+                **_node("agent", "agent"),
+                "data": {"label": "Agent"},
+            },
+        ],
         [],
     )
-    assert not [node for node in deleted.nodes if node["type"] == "context"]
+
+    assert not [node for node in result.nodes if node["type"] == "context"]
+    assert not [edge for edge in result.edges if edge.get("targetHandle") == "input-context"]
+    assert result.warnings == []
 
 
-def test_normalization_removes_duplicate_system_context_deterministically(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
+def test_normalization_leaves_user_context_topology_alone():
+    # A Context left without its agent, and a Context whose edge the user
+    # removed, stay exactly as placed: no cascade delete, no edge repair.
     nodes = [
         _node("agent", "agent"),
         {
-            **_node("ctx-a", "context"),
+            **_node("orphan", "context"),
             "data": {
-                "label": "ctx-a",
-                "systemManaged": True,
-                "agentNodeId": "agent",
-            },
-        },
-        {
-            **_node("ctx-b", "context"),
-            "data": {
-                "label": "ctx-b",
-                "systemManaged": True,
-                "agentNodeId": "agent",
-            },
-        },
-    ]
-    edges = [
-        {
-            "source": "ctx-b",
-            "target": "agent",
-            "sourceHandle": "output-context",
-            "targetHandle": "input-context",
-        }
-    ]
-
-    result = normalize_workflow_graph("5", nodes, edges)
-
-    contexts = [node for node in result.nodes if node["type"] == "context"]
-    assert len(contexts) == 1
-    assert contexts[0]["data"]["label"] == "ctx-b"
-    assert contexts[0]["data"]["agentNodeId"] == "5:agent:1"
-    assert any("Removed duplicate system Context" in warning for warning in result.warnings)
-
-
-def test_stale_system_context_owner_is_removed_instead_of_reassigned(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
-    nodes = [
-        _node("agent", "agent"),
-        {
-            **_node("ctx", "context"),
-            "data": {
-                "label": "stale",
+                "label": "orphan",
                 "systemManaged": True,
                 "agentNodeId": "deleted-agent",
             },
         },
-    ]
-    edges = [
         {
-            "source": "ctx",
-            "target": "agent",
-            "sourceHandle": "output-context",
-            "targetHandle": "input-context",
-        }
-    ]
-
-    result = normalize_workflow_graph("6", nodes, edges)
-
-    contexts = [node for node in result.nodes if node["type"] == "context"]
-    assert len(contexts) == 1
-    assert contexts[0]["data"]["label"] == "Context"
-    assert contexts[0]["data"]["agentNodeId"] == "6:agent:1"
-    assert any("Removed orphaned system Context 'ctx'" == warning for warning in result.warnings)
-
-
-def test_system_context_shared_edge_is_repaired_to_recorded_owner(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
-    nodes = [
-        _node("a", "agent"),
-        _node("b", "agent"),
-        {
-            **_node("ctx", "context"),
+            **_node("unwired", "context"),
             "data": {
-                "label": "existing",
+                "label": "unwired",
                 "systemManaged": True,
-                "agentNodeId": "a",
+                "agentNodeId": "agent",
             },
         },
     ]
-    edges = [
-        {
-            "source": "ctx",
-            "target": target,
-            "sourceHandle": "output-context",
-            "targetHandle": "input-context",
-        }
-        for target in ("a", "b")
-    ]
 
-    result = normalize_workflow_graph("8", nodes, edges)
+    result = normalize_workflow_graph("5", nodes, [])
 
-    context_edges = [edge for edge in result.edges if edge.get("targetHandle") == "input-context"]
-    assert len(context_edges) == 2
-    assert len({edge["source"] for edge in context_edges}) == 2
-    existing = next(node for node in result.nodes if node["type"] == "context" and node["data"]["label"] == "existing")
-    assert existing["data"]["agentNodeId"] == "8:agent:1"
-    assert next(edge["target"] for edge in context_edges if edge["source"] == existing["id"]) == "8:agent:1"
+    contexts = [node for node in result.nodes if node["type"] == "context"]
+    assert [node["data"]["label"] for node in contexts] == ["orphan", "unwired"]
+    assert result.edges == []
+    assert result.warnings == []
 
 
 class _Params(BaseModel):
@@ -255,7 +145,7 @@ class _ContextNode:
 
 
 @pytest.mark.asyncio
-async def test_validator_rejects_missing_multiple_and_shared_contexts(monkeypatch):
+async def test_validator_rejects_multiple_and_shared_contexts_not_missing(monkeypatch):
     from services.workflow_validator import validate_workflow
 
     monkeypatch.setattr(
@@ -296,8 +186,9 @@ async def test_validator_rejects_missing_multiple_and_shared_contexts(monkeypatc
     assert "MULTIPLE_CONTEXTS" in codes
     assert "SHARED_CONTEXT" in codes
 
+    # A Context is optional: an agent without one is a valid graph.
     missing = await validate_workflow([_node("a", "agent")], [])
-    assert "MISSING_CONTEXT" in {issue["code"] for issue in missing["errors"]}
+    assert missing["errors"] == []
 
 
 @pytest.mark.asyncio
@@ -306,10 +197,6 @@ async def test_save_rejects_ambiguous_shared_context_before_persistence(
 ):
     from services.workflow_storage import handlers
 
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
     monkeypatch.setattr(
         "services.workflow_validator.get_node_class",
         lambda node_type: {
@@ -391,15 +278,11 @@ async def test_save_uses_authenticated_owner_and_ignores_client_owner(
 
 
 @pytest.mark.asyncio
-async def test_save_cannot_replace_backend_owned_context(
+async def test_save_keeps_a_deleted_context_deleted(
     monkeypatch,
 ):
     from services.workflow_storage import handlers
 
-    monkeypatch.setattr(
-        "services.workflow_migrations._requires_context",
-        lambda node_type: node_type == "agent",
-    )
     monkeypatch.setattr(
         "services.workflow_validator.get_node_class",
         lambda node_type: {
@@ -442,49 +325,25 @@ async def test_save_cannot_replace_backend_owned_context(
     database.save_workflow = AsyncMock(return_value=True)
     monkeypatch.setattr(handlers.container, "database", lambda: database)
 
+    # The user deleted the Context node (and with it, its edge).
     result = await handlers.handle_save_workflow(
         {
             "workflow_id": "1",
             "name": "Owned",
             "data": {
-                "nodes": [
-                    _node("1:agent:1", "agent"),
-                    {
-                        **_node("1:context:99", "context"),
-                        "data": {
-                            "label": "Forged",
-                            "systemManaged": True,
-                            "agentNodeId": "1:agent:1",
-                        },
-                    },
-                ],
-                "edges": [
-                    {
-                        "source": "1:context:99",
-                        "target": "1:agent:1",
-                        "sourceHandle": "output-context",
-                        "targetHandle": "input-context",
-                    }
-                ],
-                "owner_id": "forged-owner",
+                "nodes": [_node("1:agent:1", "agent")],
+                "edges": [],
             },
         },
         websocket=None,
     )
 
-    contexts = [
-        node
-        for node in result["data"]["nodes"]
-        if node["type"] == "context"
-    ]
-    assert [node["id"] for node in contexts] == ["1:context:1"]
-    assert contexts[0]["data"]["agentNodeId"] == "1:agent:1"
-    assert result["data"]["owner_id"] == "owner"
-    assert any(
-        "Ignored untrusted Context companion '1:context:99'"
-        == warning
-        for warning in result["migration_warnings"]
-    )
+    assert result["success"] is True
+    assert [node["id"] for node in result["data"]["nodes"]] == ["1:agent:1"]
+    assert result["data"]["edges"] == []
+    assert result["migration_warnings"] == []
+    saved = database.save_workflow.await_args.kwargs["data"]
+    assert [node["id"] for node in saved["nodes"]] == ["1:agent:1"]
 
 
 def test_save_owner_resolution_preserves_existing_backend_owner():

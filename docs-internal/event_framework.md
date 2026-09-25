@@ -43,8 +43,8 @@ phase plan lives in `~/.claude/plans/properly-fix-the-tech-dreamy-tarjan.md`.
 | Phase | State |
 |---|---|
 | D2 — Custom `event_dlq` SQLModel table | ❌ **dropped** (commit `89b15bd`, docs only). Temporal Event History + Visibility queries cover the ops-inspection use case; reinventing them would contradict Wave 12's "Temporal-native, no custom infra" thesis. See § "Failure inspection — no separate DLQ table". |
-| D2b — Retire `event_waiter.py` Redis-Streams branch | ✅ shipped as Wave 15.3 (see [TEMPORAL_CLEANUP_AND_RESILIENCE_PLAN.md](./TEMPORAL_CLEANUP_AND_RESILIENCE_PLAN.md)). `event_waiter` is memory-mode-only now; Temporal owns durable delivery. The in-memory collector still backs canvas-Run + non-canary (Twitter) triggers. |
-| D4 — Drain remaining dual-emit on message/newsletter/history wire keys | ⏳ pending — paired with FE migration to envelope-aware readers on those channels (`whatsapp_message_received` et al). |
+| D2b — Retire `event_waiter.py` Redis-Streams branch | ✅ shipped as Wave 15.3 (see [TEMPORAL_CLEANUP_AND_RESILIENCE_PLAN.md](./ARCHIVE/TEMPORAL_CLEANUP_AND_RESILIENCE_PLAN.md)). `event_waiter` is memory-mode-only now; Temporal owns durable delivery. The in-memory collector still backs canvas-Run + non-canary (Twitter) triggers. |
+| D4 — Drain the last legacy `event_waiter.dispatch` dual-emit | ⏳ pending — only `nodes/twitter/_events.py` remains (twitterReceive is not canary-registered). The whatsapp message/newsletter/history wire keys are now one-way legacy WS frames for FE readers, not dual-emit. |
 | WorkflowEnvironment integration smoke test | ⏳ pending — full 7-canary in-process Temporal cluster. Existing unit tests + per-canary producer tests + `TestCanaryRegistryCoverage` cover the static surface; the integration smoke would catch real-cluster regressions only. |
 
 **Test surface: 256 passed + 1 xfail** across 18 event-framework test files.

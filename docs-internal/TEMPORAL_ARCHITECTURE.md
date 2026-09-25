@@ -350,13 +350,12 @@ AgentWorkflow.run(context):
        _build_tool_from_node produces AgentToolSpec values. Tool entries
        carry the serialized ToolDef declaration plus routing tool_info;
        native LLM steps consume the definition directly.
-       Records llm_engine="native" + message_wire_version=2.
   emit_phase("starting", status="executing")
   loop until "final" or max_iterations:
     1. emit_phase("llm_step", iteration=N)
     2. execute_activity("agent.execute_llm_step")
          returns {kind, assistant_message, calls?, content?, usage}.
-         assistant_message is MessageWireV2: ordered text/reasoning/tool
+         assistant_message is a MessageWire dict: ordered text/reasoning/tool
          blocks plus JSON-safe provider continuation state (Gemini thought
          signatures, Anthropic signed/redacted thinking, OpenAI response
          metadata). It is appended verbatim to messages.
@@ -384,7 +383,10 @@ AgentWorkflow.run(context):
            _serialise_tool_result unwraps F4.A's {success, result, ...}
            envelope so the LLM sees only the handler's return value
            (matches the in-process tool-call serialisation in
-           services/agent_runtime.py:run_native_agent_loop).
+           services/agent_runtime.py:run_native_agent_loop), then an
+           external tool's text is cut to payload["tool_result_max_chars"]
+           (services/tool_output.py; delegations, skill loads and Task
+           Manager are never cut).
     4. for each tool result with an ``operations`` field
        (canvas-mutating tools — today only ``agentBuilder``):
          if payload["auto_rebind_tools"] is True:
@@ -401,10 +403,19 @@ AgentWorkflow.run(context):
          append_to_memory_markdown(content, "human", prompt) +
          (content, "ai", response); trim window; broadcast
          node_parameters_updated CloudEvents (source_hint="agent").
-    6. if token_total >= compaction_threshold:
-         execute_activity("agent.compact_context")
-         null-guarded against worker-bootstrap race; replaces messages
-         with summary only when result.success is True.
+    6. transcript pressure, rules picked by the recorded
+       payload["context_pressure_version"] (agent_context_pressure.py):
+         version 1: clear earlier turns' tool results past
+           payload["transcript_budget_bytes"]; if the next request reaches
+           compaction_threshold, or the earlier turns alone keep the
+           transcript over budget, execute_activity("agent.compact_context")
+           on the earlier turns only and keep the latest turn verbatim;
+           then cut the latest turn's external results to fit.
+         no version (histories recorded before it): if the running sum of
+           every step's tokens >= compaction_threshold, summarize the
+           whole transcript.
+         A summarizer failure after the activity's retries ends the run
+         with error_type="CompactionError".
   execute_activity("agent.store_output")
        wraps workflow_service.store_node_output for output_main /
        output_top / output_0 — same writes NodeExecutor.execute does
@@ -413,17 +424,15 @@ AgentWorkflow.run(context):
   emit_phase("completed", status="success")
 ```
 
-The `agent.prepare_payload` result is recorded in history and therefore
-acts as the deterministic engine selector. New executions default to
-`llm_engine="native"` with Message Wire V2 and use `ChatUnifier` plus the
-native provider SDKs for every turn. Histories whose recorded prepare result
-has no engine marker are pre-cutover histories: their messages are in a retired
-wire format the native reader cannot interpret, so `agent.execute_llm_step`
-refuses them with a non-retryable
-`ApplicationError(type="InvalidAgentLLMEngine")` rather than misreading them.
-The operator fix is to Reset the deployment, which starts a fresh generation.
-Changing the environment cannot change an execution after it starts,
-and a native run never falls back after a provider request starts.
+The `agent.prepare_payload` result is recorded in history. There is one
+engine and one wire standard (`MessageWire`): every turn uses `ChatUnifier`
+plus the native provider SDKs, and no `llm_engine` / `message_wire_version`
+discriminator is recorded (the cutover-era markers and the
+`InvalidAgentLLMEngine` refusal path were purged; `tests/llm/test_single_wire_standard.py`
+fails the build if they reappear). Pre-cutover deployments are handled by Reset,
+which starts a fresh generation. Changing the environment cannot change an
+execution after it starts, and a native run never falls back after a provider
+request starts.
 
 `emit_phase(phase, status?)` is a thin helper that schedules `agent.broadcast_progress`. The activity emits `WorkflowEvent.agent_progress` (CloudEvents v1.0, `type="com.opencompany.agent.progress"`) for FE consumers; when `status` is supplied it also drives a raw-dict `update_node_status` for the canvas-glow color (executing / success / error). Same dual-channel pattern F4.A's `_node_activity` uses. When this workflow is itself a delegated child (`context["parent_node_id"]` set), every `emit_phase` call ALSO schedules a second broadcast against the parent's `node_id` with `phase="delegating"` — the parent's canvas badge then advances in real time while the child loops, instead of freezing at "executing" glow until the child completes.
 
@@ -441,11 +450,11 @@ addition. Seven are the core loop activities:
 
 | Activity | Purpose |
 |---|---|
-| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / auto_rebind_tools), records `llm_engine` + `message_wire_version`, and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit` + `UserSettings.auto_rebind_tools_after_canvas_change`. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
+| `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / tool_result_max_chars / transcript_budget_bytes / context_pressure_version / auto_rebind_tools), and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit`, `auto_rebind_tools_after_canvas_change`, `tool_result_max_chars`, `max_concurrent_subagents` and `max_delegation_depth`. Recording the three transcript-pressure keys here is what lets a history recorded before them replay the original rules. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
 | `agent.execute_llm_step` | One LLM turn. The native branch decodes Message Wire V2, rebuilds `ToolDef` values, calls `run_native_llm_step(ChatUnifier, ...)` with SDK retries disabled, heartbeats while awaiting the provider, and returns the exact assistant message + tool calls + normalized usage. Guards against un-invokable payloads: post-filter system-only message lists raise `ApplicationError(type="EmptyAgentPrompt", non_retryable=True)`. |
 | `agent.refresh_tools` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
 | `agent.persist_turn` | Appends the latest human/assistant exchange to memory markdown, trims the window, broadcasts `node.parameters.updated`. |
-| `agent.compact_context` | Context-pressure compaction when cumulative active-context tokens hit the threshold (the shared client-side summarizer). Best-effort: continues with un-compacted history on failure; it is not an agent termination control. |
+| `agent.compact_context` | The shared client-side summarizer, run under transcript pressure (step 6 above). Not best-effort: after the activity's retries a failure ends the run with `CompactionError`, because past that point the transcript could only grow until the provider rejected it. |
 | `agent.store_output` | Writes `output_main` / `output_top` / `output_0` so downstream nodes resolve `{{aiAgent.response}}` via `ParameterResolver`. |
 | `agent.broadcast_progress` | Emits `WorkflowEvent.agent_progress` (CloudEvents v1.0) + optional raw-dict `update_node_status` for canvas-glow color. Single helper drives every phase emit. |
 
@@ -482,9 +491,12 @@ in the per-type activity payload so ToolNodes validate against their
 `ToolInput` via `execute_as_tool` (see `tests/nodes/test_tool_call_dispatch.py`).
 
 The F4.B compaction threshold is prepared from the model context length and
-the ratio configuration. It currently does not read
-`SessionTokenState.custom_threshold` or `compaction_enabled`; those stored
-per-session controls are therefore not authoritative for this path.
+the ratio configuration, and is absent when the global `COMPACTION_ENABLED`
+is off. It does not read `SessionTokenState.custom_threshold` or the
+per-session `compaction_enabled`; those stored per-session controls are
+therefore not authoritative for this path. The transcript's byte budget and
+the tool-result cap apply whether or not compaction is on (see
+[agent_context_flow.md → Transcript size](./agent_context_flow.md)).
 
 **Broadcasts inside the loop** wrap `WorkflowEvent` (CloudEvents v1.0) per RFC §6.4: `agent_progress` events (`com.opencompany.agent.progress`) and `node_parameters_updated` events (`com.opencompany.node.parameters.updated`) flow through the `StatusBroadcaster.broadcast_agent_progress` and `StatusBroadcaster.broadcast_node_parameters_updated` wrappers respectively. The latter is reused by the legacy `routers/websocket.py:handle_save_node_parameters` (user-source) and `services/cli_agent/service.py:_persist_memory` (cli-source) — all three emission sites share the same envelope, distinguished by `source_hint` (`"user"` / `"cli"` / `"agent"`).
 
@@ -502,7 +514,7 @@ Certain nodes provide configuration rather than executing:
 CONFIG_HANDLES = {
     "input-context",
     "input-tools",
-    "input-memory",  # replay/import compatibility for V1 graph snapshots only
+    "input-memory",  # replay/import compatibility for legacy input-memory graphs only
     "input-model",
     "input-skill",
     "input-task",
@@ -642,7 +654,7 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 
 **Months-long durability contract**: running and paused deployments survive backend restarts, are never auto-terminated, and keep executing for months. Mechanisms, each replay-patch-guarded where it changes recorded commands:
 
-- **No lifetime caps on new child runs.** Trigger/cron-spawned `MachinaWorkflow` runs, agent children, and delegated-task runners previously carried 1-2h `execution_timeout`/`run_timeout` — Temporal's timeout timers keep ticking through a cooperative pause, so any pause longer than the cap silently terminated the run (and a timed-out delegated runner skipped its compensation: leaked permit + stuck task row). New executions start children unbounded (patches: `*-unbounded-child-runs-v1`, `machina-unbounded-lifetimes-v1`, `agent-unbounded-lifetimes-v1`). Liveness is the activity layer's job: node activities heartbeat every 30s against a 2-minute `heartbeat_timeout`; their `start_to_close` is a generous 24h ceiling, not 10 minutes. The subagent-permit wait uses `PERMIT_WAIT_RETRY` (unlimited attempts) so a queued delegation waits as long as admission takes instead of failing after ~3h.
+- **No lifetime caps on new child runs.** Trigger/cron-spawned `MachinaWorkflow` runs, agent children, and delegated-task runners previously carried 1-2h `execution_timeout`/`run_timeout` — Temporal's timeout timers keep ticking through a cooperative pause, so any pause longer than the cap silently terminated the run (and a timed-out delegated runner skipped its compensation: leaked permit + stuck task row). New executions start children unbounded (no patch marker was retained for this change; the only live `workflow.patched` markers in the tree are `machina-conditional-edges-v1` in `services/temporal/workflow.py` and `machina-trigger-listener-node-filter` in `services/temporal/trigger_listener_workflow.py` — verify with `grep -rn "workflow.patched(" server/services/temporal`). Liveness is the activity layer's job: node activities heartbeat every 30s against a 2-minute `heartbeat_timeout`; their `start_to_close` is a generous 24h ceiling, not 10 minutes. The subagent-permit wait uses `PERMIT_WAIT_RETRY` (unlimited attempts) so a queued delegation waits as long as admission takes instead of failing after ~3h.
 - **History-pressure continue-as-new everywhere.** Temporal terminates any workflow around ~51,200 history events. `WorkflowControlWorkflow` (which multiplexes all of a deployment's triggers into one history) now rolls over on `is_continue_as_new_suggested()` / a 10K-event soft cap, carrying trigger specs, per-trigger provider `seen_ids` (written back into the spec after every poll cycle), queued push events, the bounded dedup baseline, and the control state — a rollover works mid-pause too, since a paused controller still accretes signal history. `TriggerListenerWorkflow`/`PollingTriggerWorkflow` gained the same pressure check (the old `_processed_count >= 16_000` gate was unreachable: real spawns cost ~15-25 events each, and polling counted only emitted events while a quiet mailbox burned ~11 events/cycle — dead in ~3 days at the 60s default). Poll intervals are clamped to a 30s floor on the patched path. Because run ids change on rollover, **controller handles are addressed by workflow id only, never run_id-pinned** (`_controller_handle`, manager `register_trigger`).
 - **dispatch.emit controller narrowing.** Controllers advertise their push event types via the `ControlEventTypes` keyword-list Search Attribute (upserted as triggers register); `dispatch.emit` skips controllers with no matching trigger instead of signalling every running controller with every platform event (each unmatched signal was ~4 immutable history events — one busy deployment burned every other controller's rollover budget). Controllers without the attribute (pre-upgrade histories) keep match-all behaviour.
 - **Boot-time reconcile** (`reconcile_active_controls_on_boot`, called from the lifecycle module after workers start): runs the lazy `_reconcile_control` over every active control row, converges `starting` rows a crash left behind (controller alive with triggers registered → `running`; alive-but-empty for a graph that declares triggers → `failed` + controller closed; vanished → `failed`), and re-arms the process-local half of running/paused generations from the persisted graph snapshot — DeploymentManager state, in-process collectors for non-canary trigger types, cron pause posture. Idempotent by construction (controller `register_trigger` keyed by listener id, legacy starts use `USE_EXISTING`, cron creation preserves server-owned pause state).
@@ -669,6 +681,11 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 | `temporal_graceful_shutdown_seconds` | `TEMPORAL_GRACEFUL_SHUTDOWN_SECONDS` | `30` | `CTRL_BREAK_EVENT` (Windows) / `SIGTERM` (POSIX) → tree-kill grace window. Shared with the embedded worker shutdown. |
 | `temporal_terminate_running_on_startup` | `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP` | `false` | Debug-only startup sweep (see the durability contract above). Keep false so running and paused deployments survive restarts. |
 | `temporal_health_monitor_interval_seconds` | `TEMPORAL_HEALTH_MONITOR_INTERVAL_SECONDS` | `15` | Resident dev-server watchdog probe cadence (lifecycle module; loopback deployments only). |
+| `temporal_health_check_attempts` | `TEMPORAL_HEALTH_CHECK_ATTEMPTS` | `5` | Startup readiness gate: how many times to poll the WorkflowService gRPC health check for SERVING (after the gRPC port binds) before the worker / visibility sweep act. Bounded — the unbounded layer is the lifecycle reconnect loop. Carries a matching Python default so a pre-existing `.env` keeps booting. |
+| `temporal_health_check_delay_seconds` | `TEMPORAL_HEALTH_CHECK_DELAY_SECONDS` | `0.5` | Delay between readiness-probe attempts. |
+| `temporal_health_check_timeout_seconds` | `TEMPORAL_HEALTH_CHECK_TIMEOUT_SECONDS` | `2.0` | Per-attempt timeout for one gRPC health-check call. |
+| `temporal_sweep_attempts` | `TEMPORAL_SWEEP_ATTEMPTS` | `4` | Boot-time terminate-running sweep: retries for the Visibility query that races shard acquisition ("shard status unknown") before giving up for that boot. Only relevant when `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP=true`. |
+| `temporal_sweep_backoff_seconds` | `TEMPORAL_SWEEP_BACKOFF_SECONDS` | `0.5` | Linear backoff base for the sweep retries (`attempt x base`). |
 | `workflow_control_crash_recovery` | `WORKFLOW_CONTROL_CRASH_RECOVERY` | `pause` | After an UNCLEAN shutdown (kill/crash, dirty-bit marker), boot pauses generations still `running` so the user consciously resumes; `resume` restores them running. Clean restarts always restore as-is. |
 | `workflow_control_missing_controller` | `WORKFLOW_CONTROL_MISSING_CONTROLLER` | `pause` | A live generation whose controller vanished converges to `paused` (Resume rebuilds the controller); `fail` preserves the legacy Reset-only behaviour. |
 | `workflow_control_pause_on_failure` | `WORKFLOW_CONTROL_PAUSE_ON_FAILURE` | `true` | Circuit breaker: repeatedly-failing trigger-spawned runs pause their deployment (fix + Resume) instead of firing into the same error indefinitely. Evaluated activity-side; never touches recorded commands. |

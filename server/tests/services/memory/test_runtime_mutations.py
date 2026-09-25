@@ -15,7 +15,7 @@ from services.memory.runtime import append_memory_turns_atomic
 
 
 @pytest.fixture
-async def runtime_database():
+async def runtime_database(tmp_path: Path):
     # The suite's root conftest intentionally stubs ``core.database`` for
     # fast node-contract tests. Load the real implementation under a private
     # module name for these SQLite integration tests.
@@ -29,7 +29,7 @@ async def runtime_database():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
 
-    db_path = Path.cwd() / f".runtime-mutations-{uuid.uuid4().hex}.db"
+    db_path = tmp_path / f"runtime-mutations-{uuid.uuid4().hex}.db"
     settings = SimpleNamespace(
         database_url=f"sqlite+aiosqlite:///{db_path.as_posix()}",
         database_echo=False,

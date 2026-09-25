@@ -10,6 +10,12 @@
 
 import { z } from 'zod';
 
+/**
+ * Tool Result Limit range in characters, shared by the schema below and the
+ * Settings slider so validation and the control cannot drift apart.
+ */
+export const TOOL_RESULT_MAX_CHARS_RANGE = { min: 10_000, max: 200_000, step: 10_000 } as const;
+
 export const workflowSettingsSchema = z.object({
   autoSave: z.boolean().default(true),
   autoSaveInterval: z.number().int().min(10).max(300).default(30),
@@ -19,6 +25,13 @@ export const workflowSettingsSchema = z.object({
   memoryWindowSize: z.number().int().min(1).max(100).default(100),
   compactionRatio: z.number().min(0.05).max(0.99).default(0.8),
   agentRecursionLimit: z.number().int().min(1).max(5000).default(200),
+  // Mirrors the server's TOOL_RESULT_MAX_CHARS default.
+  toolResultMaxChars: z
+    .number()
+    .int()
+    .min(TOOL_RESULT_MAX_CHARS_RANGE.min)
+    .max(TOOL_RESULT_MAX_CHARS_RANGE.max)
+    .default(100_000),
   maxProcesses: z.number().int().min(1).max(50).default(10),
   autoAddSkillForTools: z.boolean().default(true),
   autoRebindToolsAfterCanvasChange: z.boolean().default(true),
@@ -46,6 +59,7 @@ export function fromServerRow(row: Record<string, any> | null | undefined): Work
     autoAddSkillForTools: row.auto_add_skill_for_tools,
     autoRebindToolsAfterCanvasChange: row.auto_rebind_tools_after_canvas_change,
     agentRecursionLimit: row.agent_recursion_limit,
+    toolResultMaxChars: row.tool_result_max_chars,
   });
 }
 
@@ -66,5 +80,6 @@ export function toServerRow(s: WorkflowSettings): Record<string, any> {
     auto_add_skill_for_tools: s.autoAddSkillForTools,
     auto_rebind_tools_after_canvas_change: s.autoRebindToolsAfterCanvasChange,
     agent_recursion_limit: s.agentRecursionLimit,
+    tool_result_max_chars: s.toolResultMaxChars,
   };
 }

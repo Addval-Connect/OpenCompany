@@ -89,8 +89,9 @@ def strip_ansi(text: str) -> str:
 
 def extract_login_url(text: str) -> Optional[str]:
     """First https URL in the CLI's login banner. Prefers a link that
-    embeds the device code (``code=`` query param) because the frontend
-    only opens ``url`` — it never renders a separate code."""
+    embeds the device code (``code=`` query param) so the opened tab
+    works on its own; the frontend also shows ``verification_code``
+    (``OAuthConnect.tsx``) as a fallback the user can type."""
     urls = [u.rstrip(".,;)'\"") for u in _URL_RE.findall(strip_ansi(text))]
     if not urls:
         return None

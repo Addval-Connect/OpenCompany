@@ -8,5 +8,5 @@ class KimiChatModelNode(ChatModelBase):
     display_name = "Kimi"
     subtitle = "Chat Model"
     group = ("model",)
-    description = "Kimi K2 models by Moonshot AI with 256K context (thinking on by default)"
+    description = "Kimi models by Moonshot AI (K3 1M context; K2 tiers 256K, thinking on by default)"
     credentials = (KimiCredential,)

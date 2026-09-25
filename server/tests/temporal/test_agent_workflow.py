@@ -1309,3 +1309,45 @@ class TestAgentContinueAsNew:
         guard = "delegation_handles or task_manager_delegation_tasks"
         assert guard in source
         assert source.index(guard) < source.index("workflow.continue_as_new(")
+
+
+class TestTranscriptPressureReplaySafety:
+    """The recorded payload, not a code edit, selects the pressure rules.
+
+    Whether ``agent.compact_context`` is scheduled depends on these rules, so
+    a history recorded before ``context_pressure_version`` existed must replay
+    through the original cumulative gate. Behavior is locked in
+    ``test_agent_workflow_pressure.py``; these guard the selection itself.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        return inspect.getsource(AgentWorkflow.run)
+
+    def test_the_rules_are_selected_by_the_recorded_payload(self):
+        source = self._source()
+
+        assert 'payload.get("context_pressure_version")' in source
+        assert 'payload.get("tool_result_max_chars")' in source
+        assert 'payload.get("transcript_budget_bytes")' in source
+        assert source.count("if pressure_version >= 1:") == 2
+
+    def test_the_original_cumulative_gate_is_kept_for_old_histories(self):
+        source = self._source()
+        section = source[source.index("# ---- Transcript pressure and compaction") :]
+
+        assert 'context_usage_total.get("total_tokens")' in section
+        assert "compact_source = messages" in section
+
+    def test_only_external_results_outside_delegation_are_cut(self):
+        source = self._source()
+        start = source.index("tool_content = _serialise_tool_result(tool_result)")
+        cap = source[start : start + 600]
+
+        assert "not is_delegation" in cap
+        assert 'tool_output_is_capped(tool_info["node_type"])' in cap
+        assert "bound_tool_output(" in cap

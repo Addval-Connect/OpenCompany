@@ -14,7 +14,7 @@
 Ultra-fast inference via Groq's LPU hardware. Models include Llama 3.x / 4,
 Qwen3-32b, GPT-OSS. The `ChatModelBase.chat` operation calls
 `AIService.execute_chat`, which routes through `ChatUnifier`; Groq is one of
-the eight OpenAI-compatible providers registered in `providers/_compat.py`.
+the nine OpenAI-compatible providers registered in `providers/_compat.py`.
 Bare chat and current agent executions share this native provider path.
 
 ## Inputs (handles)
@@ -29,11 +29,11 @@ Bare chat and current agent executions share this native provider path.
 |------|------|---------|----------|---------------------|-------------|
 | `prompt` | string | `""` | yes | - | User message |
 | `system_prompt` | string | `""` | no | - | System prompt |
-| `model` | string | `""` (injected) | no | - | e.g. `llama-3.1-70b-versatile`, `qwen/qwen3-32b`, `groq/compound-beta` |
+| `model` | string | `""` (injected) | no | - | e.g. `openai/gpt-oss-120b` (default), `llama-3.3-70b-versatile`, `qwen/qwen3.8-27b` |
 | `temperature` | number\|null | `null` | no | - | 0-2 |
 | `max_tokens` | number\|null | `null` (8-131K per model) | no | - | 1-200000 |
 | `top_p` | number\|null | `1.0` | no | - | |
-| `thinking_enabled` | boolean | `false` | no | - | Only Qwen3-32b supports reasoning |
+| `thinking_enabled` | boolean | `false` | no | - | Only the Qwen3 family supports format-based reasoning; GPT-OSS takes `reasoning_effort` |
 | `reasoning_format` | enum | `parsed` | no | `thinking_enabled=[true]` | `parsed` (returns reasoning) or `hidden` (suppresses it) |
 | `api_key` | string\|null | `null` (injected) | no | - | `auth_service.get_api_key('groq', 'default')` |
 
@@ -84,8 +84,8 @@ flowchart TD
 - **Native OpenAI-compatible path**: `ChatUnifier` resolves the `groq` spec
   registered in `providers/_compat.py` (reuses `OpenAIProvider` with the
   `base_url` from `llm_defaults.json`) for both chat and agent requests.
-- **Reasoning**: only Qwen3-32b actually honors `reasoningFormat`. Non-Qwen models ignore the flag.
-- **Model ID handling**: only the UI-only `[FREE] ` decoration is stripped. Owner-qualified IDs such as `openai/gpt-oss-120b` and `qwen/qwen3-32b` are preserved because Groq requires them.
+- **Reasoning**: only the Qwen3 family honors `reasoningFormat` (`qwen/qwen3.8-27b` today; Groq retired `qwen/qwen3-32b`). Other models ignore the flag, and GPT-OSS takes `reasoning_effort` instead.
+- **Model ID handling**: only the UI-only `[FREE] ` decoration is stripped. Owner-qualified IDs such as `openai/gpt-oss-120b` and `qwen/qwen3.8-27b` are preserved because Groq requires them.
 
 ## Side Effects
 

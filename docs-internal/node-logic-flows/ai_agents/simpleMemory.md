@@ -45,10 +45,14 @@ recall away.
 
 One locked multi-operation schema: `operation` ∈ `remember | recall | list |
 get | update | forget`, plus `content`/`title`/`category`/`tags`/`expires_at`
-(remember/update patch), `query`/`categories`/`limit`/`cursor`
-(recall/list), `memory_id`/`expected_version` (get/update/forget). The lock
-means the plugin's schema and description always win over stale `ToolSchema`
-DB rows.
+(remember), `query`/`categories`/`limit`/`cursor` (recall/list),
+`memory_id`/`expected_version` (get/update/forget), and `patch` (a
+`MemoryUpdatePatch` object, `update` only). The lock means the plugin's
+schema and description always win over stale `ToolSchema` DB rows.
+
+`ui_hints`: `isMemoryPanel`, `isMemoryToolPanel`, `hasCodeEditor` (kept as a
+wire-compatibility hint for older clients), `hideInputSection`,
+`hideOutputSection`, `hideRunButton` — all `True`.
 
 ## Storage
 

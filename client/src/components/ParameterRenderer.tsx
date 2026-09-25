@@ -31,6 +31,7 @@ import { shouldShowParameter } from '../utils/parameterVisibility';
 
 // Map node types to provider keys for AI model nodes
 import { AI_MODEL_PROVIDER_MAP } from '../lib/aiModelProviders';
+import { nextDynamicOptionValue } from '../lib/dynamicOptions';
 
 import { resolveNodeDescription } from '../lib/nodeSpec';
 import { uploadToWorkspace } from '../lib/workspaceUpload';
@@ -834,6 +835,10 @@ const ParameterRenderer: React.FC<ParameterRendererProps> = ({
   activeNodeIdRef.current = selectedNode?.id ?? null;
   const onChangeRef = React.useRef(onChange);
   onChangeRef.current = onChange;
+  // Dependency values of the last completed option load, per node, so a
+  // dependent field can tell "its parent just changed" from "the panel
+  // opened" (see nextDynamicOptionValue).
+  const lastOptionDepsRef = React.useRef<{ nodeId: string; key: string } | null>(null);
 
   // Don't render hidden parameters
   if (parameter.type === 'hidden') {
@@ -1080,10 +1085,17 @@ const ParameterRenderer: React.FC<ParameterRendererProps> = ({
           value: o.value,
         }));
 
+        const dependencyKey = JSON.stringify(dependsOn.map((dep: string) => allParamsResolved[dep] ?? null));
+        const previousDeps = lastOptionDepsRef.current;
+        const dependencyChanged =
+          dependsOn.length > 0 && previousDeps?.nodeId === nodeId && previousDeps.key !== dependencyKey;
+        lastOptionDepsRef.current = { nodeId, key: dependencyKey };
+
         setDynamicOptions(options);
         DynamicParameterService.updateParameterOptions(nodeId, parameter.name, options);
-        if (options.length > 0 && (!currentValue || currentValue === '')) {
-          onChangeRef.current(options[0].value);
+        const nextValue = nextDynamicOptionValue(currentValue, options, dependencyChanged);
+        if (nextValue !== undefined) {
+          onChangeRef.current(nextValue);
         }
       } catch (error) {
         if (isCurrent()) {

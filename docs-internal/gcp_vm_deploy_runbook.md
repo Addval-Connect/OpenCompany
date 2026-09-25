@@ -1,6 +1,6 @@
-# GCP VM Deploy Runbook (released npm package, manual gcloud + cf)
+# GCP VM Deploy Runbook (released package via `bun add -g`, manual gcloud + cf)
 
-Step-by-step runbook for deploying the **released** `@zeenie-ai/opencompany` npm package on a fresh
+Step-by-step runbook for deploying the **released** `@zeenie-ai/opencompany` package (from the npm registry, installed with `bun add -g` — no Node, no npm on the VM) on a fresh
 GCP VM behind a Cloudflare-proxied domain, with the single-owner login gate enabled.
 Written to be executable by an AI agent (or a human) with no other context.
 
@@ -52,8 +52,9 @@ print('ENC='+secrets.token_hex(24))"
 
 ## Known pitfalls (read first — these each cost a redeploy or a debugging loop)
 
-1. **Debian 12 fails.** The npm package's `postinstall` hard-requires Python 3.12+;
-   Debian 12 ships 3.11 and `npm install -g @zeenie-ai/opencompany` exits 1
+1. **Debian 12 fails.** The package's provisioning step (`scripts/install.js`, run
+   after `bun add -g`; it was the npm `postinstall` when this was first hit)
+   hard-requires Python 3.12+; Debian 12 ships 3.11 and it exits 1
    (`ERROR: Python 3.12+ is required.`). Use **Ubuntu 24.04** (`ubuntu-2404-lts-amd64`
    in `ubuntu-os-cloud`), which ships Python 3.12.
 2. **`company serve` exists only in `>= 0.0.95`.** Releases up to 0.0.88 shipped only
@@ -63,11 +64,11 @@ print('ENC='+secrets.token_hex(24))"
    on **:3010**) plus an nginx reverse proxy on :80/:443 — it works on every release.
    **Releases after 0.0.95**: `company start` became single-port itself (uvicorn
    serves the SPA; no :3000 static server) AND the default ports moved to the
-   serial 5678 block (backend :5678, Temporal UI :5680, Temporal gRPC :5681,
-   Node.js executor :5682, WhatsApp :5683).
+   ports named in `.env.template`: `PYTHON_BACKEND_PORT` (backend), `TEMPORAL_UI_PORT`,
+   `TEMPORAL_FRONTEND_GRPC_PORT`, `NODEJS_EXECUTOR_PORT`, `WHATSAPP_RPC_PORT`.
    When upgrading a VM past 0.0.95, point EVERY nginx `proxy_pass` in step 2
    (`/api/`, `/ws/`, `/webhook/`, `/health`, and `location /`) at
-   `http://127.0.0.1:5678;` and reload nginx.
+   `http://127.0.0.1:$PYTHON_BACKEND_PORT;` and reload nginx.
 3. **Owner env seeding requires `>= 0.0.95`.** 0.0.88 ignored `MACHINA_OWNER_*`
    entirely. Since 0.0.95 the backend seeds the owner at startup from
    `OPENCOMPANY_OWNER_EMAIL` + `OPENCOMPANY_OWNER_PASSWORD` (>= 8 chars;
@@ -135,20 +136,28 @@ systemd):
 
 ```bash
 #!/bin/bash
-# OpenCompany VM startup script: released npm package via `company start`,
+# OpenCompany VM startup script: released package via `company start`,
 # nginx on :80/:443 (self-signed TLS for Cloudflare Full mode), login gate on.
+# Toolchain block mirrors cli/terraform/gcp/startup.sh.tftpl (the bun channel):
+# bun + uv, no Node, no npm.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 echo "[opencompany] installing toolchain..."
 apt-get update
-apt-get install -y curl ca-certificates git build-essential pkg-config libffi-dev libssl-dev nginx
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
+apt-get install -y curl ca-certificates git unzip build-essential pkg-config libffi-dev libssl-dev nginx
+# bun on a stable system path: the runtime for the `company` shim, the JS
+# executor sidecar and the plugin CLIs, and the installer for the package.
+export BUN_INSTALL=/usr/local
+curl -fsSL https://bun.sh/install | bash
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 echo "[opencompany] installing OpenCompany released package..."
-npm install -g @zeenie-ai/opencompany@latest
+bun add -g @zeenie-ai/opencompany@latest
+# bun runs no lifecycle scripts for a global package; provision the Python
+# side now so the service's first start is warm. The shim lives in bun's
+# global bin dir ($BUN_INSTALL/bin) and knows its own package root.
+"$BUN_INSTALL/bin/company" provision
 
 echo "[opencompany] writing login-gate env..."
 mkdir -p /etc/opencompany
@@ -238,8 +247,10 @@ systemctl reload nginx
 
 echo "[opencompany] installing systemd service (README usage: company start)..."
 OPENCOMPANY_BIN=$(command -v company)
-OPENCOMPANY_PACKAGE_DIR="$(npm root -g)/@zeenie-ai/opencompany"
-test -d "$OPENCOMPANY_PACKAGE_DIR"
+# The shim is a symlink into the package (bun keeps global packages wherever it
+# likes); resolve it rather than spelling that directory.
+OPENCOMPANY_PACKAGE_DIR="$(cd "$(dirname "$(readlink -f "$OPENCOMPANY_BIN")")/.." && pwd)"
+test -f "$OPENCOMPANY_PACKAGE_DIR/package.json"
 cat > /etc/systemd/system/opencompany.service <<SERVICE_EOF
 [Unit]
 Description=OpenCompany (released, company start)
@@ -318,7 +329,7 @@ and (in Full SSL mode) connects to the origin's self-signed :443.
 
 ## Step 5 — Wait for provisioning
 
-Provisioning takes ~5-8 minutes (apt + Node 22 + npm install with Python dep sync).
+Provisioning takes ~5-8 minutes (apt + bun + `bun add -g` + the Python dep sync in `install.js`).
 Poll until healthy:
 
 ```bash
@@ -411,7 +422,7 @@ gcloud compute ssh <VM_NAME> --zone=<ZONE> --quiet --command="sudo journalctl -u
 # restart app:
 gcloud compute ssh <VM_NAME> --zone=<ZONE> --quiet --command="sudo systemctl restart opencompany"
 # upgrade to a new release:
-gcloud compute ssh <VM_NAME> --zone=<ZONE> --quiet --command="sudo npm install -g @zeenie-ai/opencompany@latest && sudo systemctl restart opencompany"
+gcloud compute ssh <VM_NAME> --zone=<ZONE> --quiet --command="sudo env BUN_INSTALL=/usr/local bun add -g @zeenie-ai/opencompany@latest && sudo env BUN_INSTALL=/usr/local /usr/local/bin/company provision && sudo systemctl restart opencompany"
 # flip an env toggle (sudo on EVERY command touching the 600 env file - pitfall 13c):
 gcloud compute ssh <VM_NAME> --zone=<ZONE> --quiet --command="sudo sed -i 's/TEMPORAL_ENABLED=false/TEMPORAL_ENABLED=true/' /etc/opencompany/opencompany.env; sudo systemctl restart opencompany"
 # Temporal Web UI (localhost-bound on the VM; gRPC :7233 / UI :8080 are the

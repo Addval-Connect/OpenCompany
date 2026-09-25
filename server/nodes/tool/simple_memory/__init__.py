@@ -191,7 +191,6 @@ class SimpleMemoryNode(ToolNode):
         },
     )
     ui_hints = {
-        "isToolPanel": True,
         "isMemoryPanel": True,
         "isMemoryToolPanel": True,
         # Kept as a wire-compatibility hint for older clients. V2 clients

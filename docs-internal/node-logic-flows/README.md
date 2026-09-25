@@ -52,6 +52,7 @@ match its doc here, and each doc must still describe what the code does.
 - [Mistral Chat Model (`mistralChatModel`)](./ai_chat_models/mistralChatModel.md)
 - [Ollama Chat Model (`ollamaChatModel`)](./ai_chat_models/ollamaChatModel.md)
 - [OpenAI Chat Model (`openaiChatModel`)](./ai_chat_models/openaiChatModel.md)
+- [OpenAI-compatible Chat Model (`openaiCompatibleChatModel`)](./ai_chat_models/openaiCompatibleChatModel.md)
 - [OpenRouter Chat Model (`openrouterChatModel`)](./ai_chat_models/openrouterChatModel.md)
 - [Sarvam AI Chat Model (`sarvamChatModel`)](./ai_chat_models/sarvamChatModel.md)
 

@@ -91,6 +91,17 @@ export interface ServerQrDef {
   scan_text: string;
 }
 
+/** One saved row of a provider that holds several (named OpenAI-compatible
+ *  endpoints). `ref` is the provider reference agents select; `base_url`
+ *  is already redacted server-side. */
+export interface ServerEndpointSummary {
+  ref: string;
+  label: string;
+  base_url: string;
+  kind: string;
+  model_count: number;
+}
+
 /** One entry as it appears in the `providers` array of the catalogue response. */
 export interface ServerProviderConfig {
   id: string;
@@ -118,6 +129,8 @@ export interface ServerProviderConfig {
   stored?: boolean;
   /** Connected account identifier (email or display name) for OAuth providers. */
   account_label?: string | null;
+  /** Saved rows, for a provider that holds several (server-resolved). */
+  endpoints?: ServerEndpointSummary[];
 }
 
 export interface CatalogueResponse {
@@ -379,4 +392,23 @@ export function useStoredProviderCount(): number {
   const { data } = useCatalogueQuery();
   if (!data?.providers) return 0;
   return data.providers.filter((p) => p.stored).length;
+}
+
+/**
+ * A key that changes whenever what a model picker can offer changes: which
+ * providers have a stored credential, and each saved named endpoint with its
+ * model count. A count of stored providers misses a second endpoint, because
+ * the provider holding it is already stored.
+ */
+export function storedCredentialSignature(providers: ReadonlyArray<ServerProviderConfig> | undefined): string {
+  if (!providers) return '';
+  return providers
+    .filter((p) => p.stored)
+    .map((p) => [p.id, ...(p.endpoints ?? []).map((e) => `${e.ref}:${e.model_count}`)].join(','))
+    .join('|');
+}
+
+export function useStoredCredentialSignature(): string {
+  const { data } = useCatalogueQuery();
+  return storedCredentialSignature(data?.providers);
 }

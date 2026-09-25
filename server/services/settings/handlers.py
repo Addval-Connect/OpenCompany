@@ -178,6 +178,23 @@ async def handle_get_validated_ai_providers(
             }
         )
 
+    # Each named endpoint is its own provider, so one can be the global
+    # default (RFC-0003 D13). The bare ``openai_compatible`` id holds no
+    # key, so the loop above already skipped it.
+    from services.llm.endpoints import list_endpoints
+
+    for endpoint in await list_endpoints(auth_service):
+        endpoint_defaults = await database.get_provider_defaults(endpoint.ref)
+        providers.append(
+            {
+                "provider": endpoint.ref,
+                "display_name": f"{endpoint.label} (OpenAI-compatible)",
+                "models": endpoint.models,
+                "popular_models": [],
+                "default_model": (endpoint_defaults or {}).get("default_model", ""),
+            }
+        )
+
     user_id = data.get("user_id", "default")
     settings = await database.get_user_settings(user_id)
     global_provider = settings.get("default_llm_provider") if settings else None
