@@ -20,6 +20,7 @@ Supported operations (mirrors /api/v1/*):
 """
 from __future__ import annotations
 
+import httpx
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -161,8 +162,8 @@ class BlueflowActionNode(ActionNode):
 
     # ── Operation ─────────────────────────────────────────────────────────
 
-    @Operation("execute")
-    async def execute(self, ctx: NodeContext, params: BlueflowActionParams) -> BlueflowActionOutput:
+    @Operation("call")
+    async def call(self, ctx: NodeContext, params: BlueflowActionParams) -> BlueflowActionOutput:
         base = self._base(params)
         op = params.operation
         body = params.body or {}
