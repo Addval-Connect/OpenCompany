@@ -144,7 +144,8 @@ def make_oauth_lifecycle_handlers(
         as a raw column — 'default' != 'owner' there, causing disconnect to
         look for tokens under the wrong key.
         """
-        return getattr(getattr(websocket, "state", None), "active_namespace", None) or "owner"
+        ns = getattr(getattr(websocket, "state", None), "active_namespace", None)
+        return ns if ns and ns != "default" else "owner"
 
     async def login(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
         from core.container import container
