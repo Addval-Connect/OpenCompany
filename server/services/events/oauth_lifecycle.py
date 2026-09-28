@@ -152,17 +152,16 @@ def make_oauth_lifecycle_handlers(
         from services.oauth_utils import get_redirect_uri
 
         auth_service = container.auth_service()
-        # client_id / client_secret are instance-level — always stored under "owner".
-        client_id = await auth_service.get_api_key(f"{provider}_client_id")
+        ns = _active_ns(websocket)
+        # client_id / client_secret belong to the active namespace.
+        client_id = await auth_service.get_api_key(f"{provider}_client_id", credential_customer_id=ns)
         if not client_id:
             return {
                 "success": False,
                 "error": (f"{provider.capitalize()} Client ID not configured. " f"Add your {provider.capitalize()} API credentials first."),
             }
-
-        ns = _active_ns(websocket)
         redirect_uri = get_redirect_uri(websocket, provider)
-        oauth = await oauth_factory(redirect_uri=redirect_uri)
+        oauth = await oauth_factory(redirect_uri=redirect_uri, credential_customer_id=ns)
         # Pass the active namespace in state_data so the callback stores
         # the tokens in the correct namespace slot.
         auth_data = oauth.generate_authorization_url(state_data={"namespace": ns})
@@ -192,7 +191,7 @@ def make_oauth_lifecycle_handlers(
 
         access_token = tokens["access_token"]
         redirect_uri = get_redirect_uri(websocket, provider)
-        oauth = await oauth_factory(redirect_uri=redirect_uri)
+        oauth = await oauth_factory(redirect_uri=redirect_uri, credential_customer_id=ns)
         user_info = await oauth.fetch_user_info(access_token)
 
         # Silent refresh on token failure (RFC 9700: refresh_token not
@@ -244,7 +243,7 @@ def make_oauth_lifecycle_handlers(
 
         if access_token or refresh_token:
             redirect_uri = get_redirect_uri(websocket, provider)
-            oauth = await oauth_factory(redirect_uri=redirect_uri)
+            oauth = await oauth_factory(redirect_uri=redirect_uri, credential_customer_id=ns)
             if access_token:
                 await oauth.revoke_token(access_token, "access_token")
             if refresh_token:
@@ -381,11 +380,12 @@ def make_oauth_callback_router(
         state_record = oauth.state_store.peek(state) if hasattr(oauth, "state_store") else None
         redirect_uri = state_record.get("redirect_uri") if state_record else None
         state_data = state_record.get("data") if state_record else {}
+        # Read namespace early so the factory rebuild uses the correct credential bucket.
+        ns_from_state = (state_data or {}).get("namespace") or "owner"
 
-        if redirect_uri:
-            # rebuild factory with the right redirect_uri so exchange_code
-            # POSTs the same URI the auth request used.
-            oauth = await oauth_factory(redirect_uri=redirect_uri)
+        # Rebuild with correct redirect_uri AND namespace so exchange_code and
+        # token storage use the same credential bucket as the original login.
+        oauth = await oauth_factory(redirect_uri=redirect_uri or "", credential_customer_id=ns_from_state)
 
         result = await oauth.exchange_code(code, state)
         if not result.get("success"):

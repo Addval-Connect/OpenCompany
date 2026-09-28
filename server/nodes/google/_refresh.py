@@ -24,39 +24,10 @@ tracer = trace.get_tracer(__name__)
 
 
 async def refresh_google_status(broadcaster: "StatusBroadcaster") -> None:
-    """Refresh Google cache + broadcast. One pass per
-    ``_refresh_all_services`` cycle.
+    """No-op: Google OAuth status is namespace-scoped.
+
+    The background refresh has no namespace context and cannot determine
+    which namespace's token to check. Status is reported correctly by the
+    on-demand ``status()`` handler in ``oauth_lifecycle.py``, which reads
+    the active namespace from the WebSocket connection.
     """
-    with tracer.start_as_current_span("broadcaster.refresh_google") as span:
-        try:
-            from services.plugin.deps import get_auth_service
-
-            auth_service = get_auth_service()
-            tokens = await auth_service.get_oauth_tokens("google", customer_id="owner")
-            if not tokens or not tokens.get("access_token"):
-                broadcaster._status["google"] = {
-                    "connected": False,
-                    "email": None,
-                    "name": None,
-                }
-            else:
-                broadcaster._status["google"] = {
-                    "connected": True,
-                    "email": tokens.get("email"),
-                    "name": tokens.get("name"),
-                }
-                logger.debug(
-                    "[StatusBroadcaster] Google status: connected as %s",
-                    tokens.get("email"),
-                )
-
-            await broadcaster.broadcast(
-                {
-                    "type": "google_status",
-                    "data": broadcaster._status["google"],
-                }
-            )
-            span.set_attribute("connected", bool(broadcaster._status["google"]["connected"]))
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            logger.debug("[StatusBroadcaster] Could not refresh Google status: %s", exc)

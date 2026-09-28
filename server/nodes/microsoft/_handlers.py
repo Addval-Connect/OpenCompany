@@ -24,14 +24,15 @@ from ._oauth import MicrosoftOAuth
 async def _microsoft_oauth_factory(
     *,
     redirect_uri: Optional[str] = None,
+    credential_customer_id: str = "owner",
     **_kwargs,
 ) -> MicrosoftOAuth:
     """Build a :class:`MicrosoftOAuth` from stored client credentials."""
     from services.plugin.deps import get_auth_service
 
     auth_service = get_auth_service()
-    client_id = await auth_service.get_api_key("microsoft_client_id") or ""
-    client_secret = await auth_service.get_api_key("microsoft_client_secret") or ""
+    client_id = await auth_service.get_api_key("microsoft_client_id", credential_customer_id=credential_customer_id) or ""
+    client_secret = await auth_service.get_api_key("microsoft_client_secret", credential_customer_id=credential_customer_id) or ""
     return MicrosoftOAuth(
         client_id=client_id,
         client_secret=client_secret or None,

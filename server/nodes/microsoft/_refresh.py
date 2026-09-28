@@ -21,26 +21,10 @@ tracer = trace.get_tracer(__name__)
 
 
 async def refresh_microsoft_status(broadcaster: "StatusBroadcaster") -> None:
-    """Refresh Microsoft cache. One pass per ``_refresh_all_services`` cycle."""
-    with tracer.start_as_current_span("broadcaster.refresh_microsoft") as span:
-        try:
-            from services.plugin.deps import get_auth_service
+    """No-op: Microsoft OAuth status is namespace-scoped.
 
-            auth_service = get_auth_service()
-            tokens = await auth_service.get_oauth_tokens("microsoft", customer_id="owner")
-            if not tokens or not tokens.get("access_token"):
-                broadcaster._status["microsoft"] = {
-                    "connected": False,
-                    "email": None,
-                    "name": None,
-                }
-            else:
-                broadcaster._status["microsoft"] = {
-                    "connected": True,
-                    "email": tokens.get("email"),
-                    "name": tokens.get("name"),
-                }
-            span.set_attribute("connected", bool(broadcaster._status["microsoft"]["connected"]))
-        except Exception as exc:  # noqa: BLE001
-            span.record_exception(exc)
-            logger.debug("[StatusBroadcaster] Could not refresh Microsoft status: %s", exc)
+    The background refresh has no namespace context and cannot determine
+    which namespace's token to check. Status is reported correctly by the
+    on-demand ``status()`` handler in ``oauth_lifecycle.py``, which reads
+    the active namespace from the WebSocket connection.
+    """
