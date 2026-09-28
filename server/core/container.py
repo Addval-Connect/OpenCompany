@@ -21,6 +21,8 @@ from core.database import Database
 from core.cache import CacheService
 from core.encryption import EncryptionService
 from core.credentials_database import CredentialsDatabase
+from core.db_pool import DatabasePool, CredentialsPool
+from core.namespaced_db import NamespacedDatabase, NamespacedCredentialsDatabase
 
 _clog("core imports done")
 from services.ai import AIService
@@ -118,19 +120,22 @@ class Container(containers.DeclarativeContainer):
         Settings,
     )
 
-    # Database (needed by CacheService for SQLite fallback)
-    database = providers.Singleton(Database, settings=settings)
+    # Encryption service for credentials (one singleton; each namespace
+    # DB also creates its own EncryptionService within CredentialsPool)
+    encryption_service = providers.Singleton(EncryptionService)
+
+    # Per-namespace DB pools (lazy — DBs created on first namespace access)
+    _database_pool = providers.Singleton(DatabasePool, settings=settings)
+    _credentials_pool = providers.Singleton(CredentialsPool, settings=settings, encryption=encryption_service)
+
+    # Namespace-routing proxies — the rest of the app uses these.
+    # Auth queries always hit the "owner" DB; workflow/credential queries
+    # hit the namespace-specific DB resolved from the active ContextVar.
+    database = providers.Singleton(NamespacedDatabase, pool=_database_pool)
+    credentials_database = providers.Singleton(NamespacedCredentialsDatabase, pool=_credentials_pool)
 
     # Cache service (uses Redis when available, SQLite otherwise)
     cache = providers.Singleton(CacheService, settings=settings, database=database)
-
-    # Encryption service for credentials (initialized on user login)
-    encryption_service = providers.Singleton(EncryptionService)
-
-    # Credentials database (separate encrypted database for API keys and OAuth tokens)
-    credentials_database = providers.Singleton(
-        CredentialsDatabase, db_path=settings.provided.credentials_db_resolved, encryption=encryption_service
-    )
 
     # Temporal client
     temporal_client = providers.Singleton(

@@ -67,6 +67,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.user_email = "anonymous"
             request.state.is_owner = True
             request.state.active_namespace = "default"
+            from core.namespace_context import set_active_namespace
+            set_active_namespace("owner")
             return await call_next(request)
 
         # Auth enabled - check token
@@ -87,6 +89,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.user_email = payload.get("email")
         request.state.is_owner = payload.get("is_owner", False)
         request.state.active_namespace = payload.get("active_namespace", "default")
+        from core.namespace_context import set_active_namespace
+        from constants import normalize_credential_ns
+        set_active_namespace(normalize_credential_ns(request.state.active_namespace))
 
         return await call_next(request)
 

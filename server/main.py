@@ -183,17 +183,12 @@ async def lifespan(app: FastAPI):
     await container.cache().startup()
     _startup_log("Database + cache started")
 
-    # Initialize credentials database (creates tables if not exist)
-    credentials_db = container.credentials_database()
-    salt = await credentials_db.initialize()
-    logger.info("Credentials database initialized")
-
-    # Initialize encryption with server-scoped key (n8n pattern)
-    # Key from .env persists across restarts, not tied to user sessions
-    encryption = container.encryption_service()
-    if not encryption.is_initialized():
-        encryption.initialize(settings.api_key_encryption_key, salt)
-        logger.info("Encryption service initialized")
+    # Initialize the "owner" namespace credentials DB and its encryption.
+    # CredentialsPool.startup_namespace handles table creation + per-DB salt
+    # derivation so each namespace gets isolated Fernet keys.
+    creds_pool = container._credentials_pool()
+    await creds_pool.startup_namespace("owner")
+    logger.info("Credentials database initialized (owner namespace)")
     _startup_log("Credentials + encryption initialized")
 
     # Seed the owner login credential from the environment (container

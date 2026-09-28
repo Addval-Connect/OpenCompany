@@ -133,38 +133,21 @@ def make_oauth_lifecycle_handlers(
             drop legacy API-key entries from the pre-OAuth layout.
     """
 
-    def _active_ns(websocket: WebSocket) -> str:
-        """Active namespace from WS state; falls back to 'owner'.
-
-        'owner' matches the default customer_id used by store_oauth_tokens()
-        so tokens stored in single-tenant mode (or before multi-tenancy was
-        enabled) are found by login/logout/status lookups without migration.
-        'default' was an incorrect fallback: it maps to the same empty prefix
-        as 'owner' for api_keys, but the OAuth token table stores customer_id
-        as a raw column — 'default' != 'owner' there, causing disconnect to
-        look for tokens under the wrong key.
-        """
-        ns = getattr(getattr(websocket, "state", None), "active_namespace", None)
-        return ns if ns and ns != "default" else "owner"
-
     async def login(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
         from core.container import container
         from services.oauth_utils import get_redirect_uri
 
         auth_service = container.auth_service()
-        ns = _active_ns(websocket)
-        # client_id / client_secret belong to the active namespace.
-        client_id = await auth_service.get_api_key(f"{provider}_client_id", credential_customer_id=ns)
+        # ContextVar already set at WS connect — no explicit namespace needed.
+        client_id = await auth_service.get_api_key(f"{provider}_client_id")
         if not client_id:
             return {
                 "success": False,
                 "error": (f"{provider.capitalize()} Client ID not configured. " f"Add your {provider.capitalize()} API credentials first."),
             }
         redirect_uri = get_redirect_uri(websocket, provider)
-        oauth = await oauth_factory(redirect_uri=redirect_uri, credential_customer_id=ns)
-        # Pass the active namespace in state_data so the callback stores
-        # the tokens in the correct namespace slot.
-        auth_data = oauth.generate_authorization_url(state_data={"namespace": ns})
+        oauth = await oauth_factory(redirect_uri=redirect_uri)
+        auth_data = oauth.generate_authorization_url(state_data={})
 
         return {
             "success": True,
@@ -177,30 +160,20 @@ def make_oauth_lifecycle_handlers(
         from core.container import container
         from services.oauth_utils import get_redirect_uri
 
-        ns = _active_ns(websocket)
         auth_service = container.auth_service()
-        tokens = await auth_service.get_oauth_tokens(provider, customer_id=ns)
+        tokens = await auth_service.get_oauth_tokens(provider)
         if not tokens or not tokens.get("access_token"):
-            # Match pre-S handler shape -- frontends key on these
-            # exact field names. Both Twitter (username/user_id) and
-            # Google (email/name) field sets included so a single
-            # disconnected payload satisfies every provider.
             payload = _disconnected_payload()
             await _maybe_legacy_broadcast(legacy_status_broadcast, payload)
             return payload
 
         access_token = tokens["access_token"]
         redirect_uri = get_redirect_uri(websocket, provider)
-        oauth = await oauth_factory(redirect_uri=redirect_uri, credential_customer_id=ns)
+        oauth = await oauth_factory(redirect_uri=redirect_uri)
         user_info = await oauth.fetch_user_info(access_token)
 
-        # Silent refresh on token failure (RFC 9700: refresh_token not
-        # cached in memory; pull from DB on demand).
         if not user_info.get("success"):
-            refresh_token = await auth_service.get_oauth_refresh_token(
-                provider,
-                customer_id=ns,
-            )
+            refresh_token = await auth_service.get_oauth_refresh_token(provider)
             if refresh_token:
                 refresh = await oauth.refresh_access_token(refresh_token)
                 if refresh.get("success"):
@@ -211,22 +184,15 @@ def make_oauth_lifecycle_handlers(
                         email=tokens.get("email", ""),
                         name=tokens.get("name", ""),
                         scopes=tokens.get("scopes", ""),
-                        customer_id=ns,
                     )
                     user_info = await oauth.fetch_user_info(refresh["access_token"])
 
         if not user_info.get("success"):
-            payload = {
-                **_disconnected_payload(),
-                "error": user_info.get("error"),
-            }
+            payload = {**_disconnected_payload(), "error": user_info.get("error")}
             await _maybe_legacy_broadcast(legacy_status_broadcast, payload)
             return payload
 
-        payload = {
-            "connected": True,
-            **{k: v for k, v in user_info.items() if k != "success"},
-        }
+        payload = {"connected": True, **{k: v for k, v in user_info.items() if k != "success"}}
         await _maybe_legacy_broadcast(legacy_status_broadcast, payload)
         return payload
 
@@ -235,33 +201,31 @@ def make_oauth_lifecycle_handlers(
         from services.oauth_utils import get_redirect_uri
         from services.status_broadcaster import get_status_broadcaster
 
-        ns = _active_ns(websocket)
         auth_service = container.auth_service()
-        tokens = await auth_service.get_oauth_tokens(provider, customer_id=ns)
+        tokens = await auth_service.get_oauth_tokens(provider)
         access_token = tokens.get("access_token") if tokens else None
-        refresh_token = await auth_service.get_oauth_refresh_token(provider, customer_id=ns) if tokens else None
+        refresh_token = await auth_service.get_oauth_refresh_token(provider) if tokens else None
 
         if access_token or refresh_token:
             redirect_uri = get_redirect_uri(websocket, provider)
-            oauth = await oauth_factory(redirect_uri=redirect_uri, credential_customer_id=ns)
+            oauth = await oauth_factory(redirect_uri=redirect_uri)
             if access_token:
                 await oauth.revoke_token(access_token, "access_token")
             if refresh_token:
                 await oauth.revoke_token(refresh_token, "refresh_token")
 
-        await auth_service.remove_oauth_tokens(provider, customer_id=ns)
+        await auth_service.remove_oauth_tokens(provider)
 
         if extra_logout is not None:
             try:
                 await extra_logout()
-            except Exception as exc:  # noqa: BLE001 -- best-effort cleanup
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(f"[{provider}] extra_logout failed: {exc}")
 
         broadcaster = get_status_broadcaster()
         await broadcaster.broadcast_credential_event(
             "credential.oauth.disconnected",
             provider=provider,
-            customer_id=ns,
         )
 
         return {"success": True, "message": f"{provider.capitalize()} disconnected"}
@@ -380,12 +344,14 @@ def make_oauth_callback_router(
         state_record = oauth.state_store.peek(state) if hasattr(oauth, "state_store") else None
         redirect_uri = state_record.get("redirect_uri") if state_record else None
         state_data = state_record.get("data") if state_record else {}
-        # Read namespace early so the factory rebuild uses the correct credential bucket.
-        ns_from_state = (state_data or {}).get("namespace") or "owner"
 
-        # Rebuild with correct redirect_uri AND namespace so exchange_code and
-        # token storage use the same credential bucket as the original login.
-        oauth = await oauth_factory(redirect_uri=redirect_uri or "", credential_customer_id=ns_from_state)
+        # Set ContextVar from state_data so credential lookups in the callback
+        # (factory, store_oauth_tokens) hit the correct namespace DB.
+        from core.namespace_context import set_active_namespace as _set_cb_ns
+        from constants import normalize_credential_ns
+        _set_cb_ns(normalize_credential_ns((state_data or {}).get("namespace")))
+
+        oauth = await oauth_factory(redirect_uri=redirect_uri or "")
 
         result = await oauth.exchange_code(code, state)
         if not result.get("success"):
@@ -425,10 +391,9 @@ def make_oauth_callback_router(
         from core.container import container
 
         auth_service = container.auth_service()
-        # Use namespace from state_data if present (set by the login handler),
-        # falling back to any customer_id override (customer-mode Google), then "default".
-        ns_from_state = (state_data or {}).get("namespace") or "owner"
-        effective_customer = store_overrides.pop("customer_id", ns_from_state)
+        # ContextVar already set above from state_data — store_oauth_tokens
+        # routes to the correct namespace DB automatically.
+        store_overrides.pop("customer_id", None)  # no longer needed
         await auth_service.store_oauth_tokens(
             provider=provider,
             access_token=access_token,
@@ -436,7 +401,6 @@ def make_oauth_callback_router(
             email=email,
             name=name,
             scopes=",".join((result.get("scope") or "").split()),
-            customer_id=effective_customer,
             **store_overrides,
         )
 
@@ -457,7 +421,6 @@ def make_oauth_callback_router(
         await broadcaster.broadcast_credential_event(
             "credential.oauth.connected",
             provider=provider,
-            customer_id=effective_customer,
         )
 
         if redirect_after:

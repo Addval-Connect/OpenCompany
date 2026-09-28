@@ -149,18 +149,23 @@ class WorkflowService:
     def _get_workspace_dir(self, workflow_slug: Optional[str]) -> str:
         """Get or create workspace directory for a workflow.
 
+        Each namespace has its own workspaces subtree:
+          {data_dir}/namespaces/{namespace}/workspaces/{slug}/
+
         Keyed by the human-readable ``workflow_slug`` (Wave 14) so the
         on-disk dir name matches the Temporal Web UI listing and the
         sidebar entry. Callers that don't have a slug yet pass
         ``"default"`` (one-off Run, no DB row) — preserved as the
         anonymous workspace.
         """
-        base = Path(self.settings.workspace_base_resolved)
+        from core.namespace_context import get_active_namespace
+        ns = get_active_namespace()
+        base = Path(self.settings.data_dir) / "namespaces" / ns / "workspaces"
         slug = workflow_slug or "default"
         workspace = base / slug
         workspace.mkdir(parents=True, exist_ok=True)
         resolved = str(workspace.resolve())
-        logger.info("[Workspace] workflow_slug=%s -> %s", slug, resolved)
+        logger.info("[Workspace] namespace=%s slug=%s -> %s", ns, slug, resolved)
         return resolved
 
     async def _resolve_workflow_slug(self, workflow_id: Optional[str]) -> Optional[str]:
@@ -192,17 +197,9 @@ class WorkflowService:
         outputs: Dict[str, Any] = None,
         extras: Optional[Dict[str, Any]] = None,
         user_id: str = "owner",
-        credential_customer_id: str = "owner",
+        credential_customer_id: str = "owner",  # kept for call-site compat; ContextVar already set at request entry
     ) -> Dict[str, Any]:
-        """Execute a single workflow node.
-
-        ``extras`` is merged into the ``NodeContext.raw`` dict so callers
-        (notably the F4.A per-type activity wrapper) can plumb context
-        fields like ``auto_rebind_tools`` through without adding a
-        dedicated parameter per flag.
-        ``credential_customer_id`` scopes API key and OAuth token lookups
-        to the active namespace. Must be normalized (never "default").
-        """
+        """Execute a single workflow node."""
         # Resolve slug from DB if caller passed only workflow_id.
         if workflow_slug is None:
             workflow_slug = await self._resolve_workflow_slug(workflow_id)

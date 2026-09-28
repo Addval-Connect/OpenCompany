@@ -1689,6 +1689,8 @@ async def websocket_status_endpoint(websocket: WebSocket):
     websocket.state.active_namespace = (
         payload.get("active_namespace", "default") if not auth_disabled else "default"
     )
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(normalize_credential_ns(websocket.state.active_namespace))
 
     broadcaster = get_status_broadcaster()
     await broadcaster.connect(websocket)
@@ -1825,6 +1827,11 @@ async def websocket_internal_endpoint(websocket: WebSocket):
 
             msg_type = data.get("type", "")
             request_id = data.get("request_id")
+
+            # Set namespace context from the message so credential lookups
+            # in Temporal-initiated node execution use the correct namespace.
+            from core.namespace_context import set_active_namespace as _set_ns
+            _set_ns(data.get("credential_customer_id") or "owner")
 
             # Deny-by-default: this socket is unauthenticated, so it may
             # reach only the handlers the activity worker actually needs.

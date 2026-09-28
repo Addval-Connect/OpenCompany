@@ -79,36 +79,6 @@ class AuthService:
         """Create hash for API key identification."""
         return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
-    @staticmethod
-    def _credential_prefix(customer_id: str) -> str:
-        """Tenant prefix for credential storage keys.
-
-        Empty for the default credential customer so every existing key
-        stays byte-identical — no data migration needed.  Non-default
-        customers get a deterministic prefix that scopes their keys to
-        their account even though they share the same ``credentials.db``
-        file and the same Fernet key (isolation is by access predicate).
-
-        The prefix format ``"t:{customer_id}:"`` is chosen to:
-        - Be prefix-queryable in SQLite (LIKE filter on the indexed
-          ``session_id`` column).
-        - Be clearly distinguishable from legacy ``"default"`` / Discord
-          ``"discord:<app_id>"`` session_ids — none of those start with
-          ``"t:"``.
-        - Remain server-derived (computed here, never taken from client
-          payloads) so a compromised WS client cannot scope-escape.
-        """
-        from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
-
-        # "owner" (auth-disabled) and "default" (the default namespace) both map
-        # to the empty prefix so existing credentials stay byte-identical across
-        # the auth-enabled → namespace migration.
-        if customer_id in (DEFAULT_CREDENTIAL_CUSTOMER_ID, "default"):
-            return ""
-        # Non-default namespaces get an "ns:" prefix to avoid colliding with the
-        # legacy "t:{user_id}:" per-user rows (which the migration clears).
-        return f"ns:{customer_id}:"
-
     def _bump_catalogue_version(self) -> None:
         """Notify the credential registry that a credential has changed.
 
@@ -139,58 +109,26 @@ class AuthService:
         models: List[str],
         session_id: str = "default",
         model_params: Optional[Dict[str, Dict[str, Any]]] = None,
+        # credential_customer_id kept for call-site compat; ignored —
+        # NamespacedCredentialsDatabase routes to the correct namespace DB
+        # automatically via ContextVar.
         credential_customer_id: str = "owner",
     ) -> bool:
-        """Store API key with models in encrypted credentials database.
-
-        Args:
-            provider: API provider name (e.g., 'openai', 'anthropic')
-            api_key: The API key to store (will be encrypted)
-            models: List of available models for this key
-            session_id: Session identifier for multi-account support
-                (e.g. 'default', 'discord:<app_id>').  NOT the tenant axis.
-            model_params: Optional per-model parameters (context_length etc.)
-            credential_customer_id: The account that owns this credential.
-                Defaults to the server constant DEFAULT_CREDENTIAL_CUSTOMER_ID
-                so existing single-tenant call sites are unaffected.
-                Multi-tenant callers pass ``str(User.id)`` / the WS principal.
-
-        Returns:
-            True if stored successfully, False otherwise
-        """
+        """Store API key in the active-namespace credentials DB."""
         try:
-            prefix = self._credential_prefix(credential_customer_id)
-            storage_session_id = f"{prefix}{session_id}"
-            cache_key = f"{storage_session_id}_{provider}"
-
-            logger.info(f"Storing API key for provider: {provider}, session: {storage_session_id}")
-
-            # 1. DB write first (canonical source).
+            cache_key = f"{session_id}_{provider}"
+            logger.info(f"Storing API key for provider: {provider}, session: {session_id}")
             await self.credentials_db.save_api_key(
                 provider=provider,
                 api_key=api_key,
                 models=models,
-                session_id=storage_session_id,
+                session_id=session_id,
                 model_params=model_params,
             )
-
-            # 2. Cache update only after DB write succeeds. One entry,
-            #    not two parallel dicts — see ApiKeyCacheEntry docstring.
-            self._api_key_cache[cache_key] = ApiKeyCacheEntry(
-                key=api_key,
-                models=list(models),
-            )
-
-            # 3. Bump the catalogue version so the frontend's conditional
-            #    fetch (``since: <prior version>``) returns a fresh
-            #    catalogue instead of ``{unchanged: true}`` — without
-            #    this the per-provider ``stored`` flag stays stale on
-            #    every connected client until the process restarts.
+            self._api_key_cache[cache_key] = ApiKeyCacheEntry(key=api_key, models=list(models))
             self._bump_catalogue_version()
-
             logger.info(f"Stored and cached API key for {provider}")
             return True
-
         except Exception as e:
             logger.error("Failed to store API key", provider=provider, error=str(e))
             return False
@@ -215,42 +153,21 @@ class AuthService:
         self,
         provider: str,
         session_id: str = "default",
+        # credential_customer_id kept for call-site compat; ignored
         credential_customer_id: str = "owner",
     ) -> Optional[str]:
-        """Get decrypted API key.
-
-        Checks memory cache first, then falls back to encrypted database.
-
-        Args:
-            provider: API provider name
-            session_id: Session identifier (multi-account axis)
-            credential_customer_id: Owning account — used to compute the
-                tenant prefix so only that account's key is returned.
-        """
+        """Get decrypted API key from the active-namespace credentials DB."""
         try:
-            prefix = self._credential_prefix(credential_customer_id)
-            storage_session_id = f"{prefix}{session_id}"
-            cache_key = f"{storage_session_id}_{provider}"
-
-            # Check memory cache first (fastest, most secure).
+            cache_key = f"{session_id}_{provider}"
             entry = self._api_key_cache.get(cache_key)
             if entry is not None:
                 return entry.key
-
-            # Fallback to encrypted database. The lazy fetch also pulls
-            # the models list so we populate the cache entry fully — no
-            # second roundtrip on the next get_stored_models() call.
-            api_key = await self.credentials_db.get_api_key(provider, storage_session_id)
+            api_key = await self.credentials_db.get_api_key(provider, session_id)
             if api_key:
-                models = await self.credentials_db.get_api_key_models(provider, storage_session_id) or []
-                self._api_key_cache[cache_key] = ApiKeyCacheEntry(
-                    key=api_key,
-                    models=models,
-                )
+                models = await self.credentials_db.get_api_key_models(provider, session_id) or []
+                self._api_key_cache[cache_key] = ApiKeyCacheEntry(key=api_key, models=models)
                 return api_key
-
             return None
-
         except Exception as e:
             logger.error("Failed to get API key", provider=provider, error=str(e))
             return None
@@ -258,30 +175,9 @@ class AuthService:
     async def list_key_scopes(
         self, provider: str, *, credential_customer_id: str = "owner"
     ) -> List[str]:
-        """List every session_id holding a key for one provider.
-
-        Reads the database directly rather than the cache: the cache is
-        populated lazily per lookup, so it only knows the scopes that
-        happen to have been read already.
-
-        The tenant prefix is stripped from results so callers always receive
-        the raw session_id (e.g. ``"discord:<app_id>"``) regardless of whether
-        the credential is stored under a tenant prefix.
-
-        Args:
-            provider: API provider name
-            credential_customer_id: Owning account — limits results to that
-                account's keys only.
-
-        Returns:
-            Sorted list of session identifiers (prefix-stripped), empty on failure
-        """
+        """List every session_id holding a key for one provider (active namespace)."""
         try:
-            prefix = self._credential_prefix(credential_customer_id)
-            raw_scopes = await self.credentials_db.list_key_scopes(provider, prefix=prefix)
-            if prefix:
-                return [s[len(prefix):] for s in raw_scopes if s.startswith(prefix)]
-            return raw_scopes
+            return await self.credentials_db.list_key_scopes(provider, prefix="")
         except Exception as e:
             logger.error("Failed to list key scopes", provider=provider, error=str(e))
             return []
@@ -308,40 +204,19 @@ class AuthService:
     async def get_stored_models(
         self, provider: str, session_id: str = "default", credential_customer_id: str = "owner"
     ) -> List[str]:
-        """Get stored models for provider.
-
-        Args:
-            provider: API provider name
-            session_id: Session identifier
-
-        Returns:
-            List of model names or empty list
-        """
+        """Get stored models for provider (active namespace)."""
         try:
-            prefix = self._credential_prefix(credential_customer_id)
-            storage_session_id = f"{prefix}{session_id}"
-            cache_key = f"{storage_session_id}_{provider}"
-
-            # Check memory cache first
+            cache_key = f"{session_id}_{provider}"
             entry = self._api_key_cache.get(cache_key)
             if entry is not None:
                 return entry.models
-
-            # Fallback to encrypted database. Pull the key alongside so
-            # the cache entry is populated fully — symmetric with
-            # get_api_key()'s lazy-populate path.
-            models = await self.credentials_db.get_api_key_models(provider, storage_session_id)
+            models = await self.credentials_db.get_api_key_models(provider, session_id)
             if models:
-                api_key = await self.credentials_db.get_api_key(provider, storage_session_id)
+                api_key = await self.credentials_db.get_api_key(provider, session_id)
                 if api_key:
-                    self._api_key_cache[cache_key] = ApiKeyCacheEntry(
-                        key=api_key,
-                        models=list(models),
-                    )
+                    self._api_key_cache[cache_key] = ApiKeyCacheEntry(key=api_key, models=list(models))
                 return models
-
             return []
-
         except Exception as e:
             logger.error("Failed to get stored models", provider=provider, error=str(e))
             return []
@@ -349,24 +224,14 @@ class AuthService:
     async def remove_api_key(
         self, provider: str, session_id: str = "default", credential_customer_id: str = "owner"
     ) -> bool:
-        """Remove API key from storage and cache."""
+        """Remove API key from the active-namespace credentials DB."""
         try:
-            prefix = self._credential_prefix(credential_customer_id)
-            storage_session_id = f"{prefix}{session_id}"
-            cache_key = f"{storage_session_id}_{provider}"
-
-            # 1. DB delete first (canonical source).
-            await self.credentials_db.delete_api_key(provider, storage_session_id)
-
-            # 2. Cache evict only after DB succeeds. One pop, not two.
+            cache_key = f"{session_id}_{provider}"
+            await self.credentials_db.delete_api_key(provider, session_id)
             self._api_key_cache.pop(cache_key, None)
-
-            # 3. Bump the catalogue version — same reason as store.
             self._bump_catalogue_version()
-
             logger.info(f"Removed API key for {provider}")
             return True
-
         except Exception as e:
             logger.error("Failed to remove API key", provider=provider, error=str(e))
             return False
@@ -404,26 +269,13 @@ class AuthService:
         email: Optional[str] = None,
         name: Optional[str] = None,
         scopes: Optional[str] = None,
+        # customer_id kept for call-site compat; NamespacedCredentialsDatabase
+        # routes to the correct namespace DB automatically via ContextVar.
         customer_id: str = "owner",
     ) -> bool:
-        """Store OAuth tokens in encrypted credentials database.
-
-        Args:
-            provider: OAuth provider name (e.g., 'google', 'twitter')
-            access_token: OAuth access token
-            refresh_token: OAuth refresh token
-            email: User email or identifier
-            name: User display name
-            scopes: Comma-separated scopes
-            customer_id: Customer identifier (default 'owner' for single-user)
-
-        Returns:
-            True if stored successfully
-        """
+        """Store OAuth tokens in the active-namespace credentials DB."""
         try:
-            cache_key = f"{customer_id}_{provider}"
-
-            # 1. DB write first (canonical source).
+            cache_key = f"oauth_{provider}"
             await self.credentials_db.save_oauth_tokens(
                 provider=provider,
                 access_token=access_token,
@@ -431,60 +283,28 @@ class AuthService:
                 email=email,
                 name=name,
                 scopes=scopes,
-                customer_id=customer_id,
+                customer_id="owner",  # single row per provider per namespace DB
             )
-
-            # 2. Cache only the access token + display fields. Refresh
-            #    tokens are long-lived secrets per RFC 9700 (OAuth 2.0
-            #    BCP 2024) and are NOT cached in memory — readers go
-            #    through ``get_oauth_refresh_token()`` which hits the DB.
             self._oauth_cache[cache_key] = {
                 "access_token": access_token,
                 "email": email,
                 "name": name,
                 "scopes": scopes,
             }
-
-            # 3. Bump the catalogue version so the frontend's conditional
-            #    fetch returns fresh ``stored`` flags after this OAuth
-            #    save (login).
             self._bump_catalogue_version()
-
             logger.info(f"Stored OAuth tokens for {provider}")
             return True
-
         except Exception as e:
             logger.error("Failed to store OAuth tokens", provider=provider, error=str(e))
             return False
 
     async def get_oauth_tokens(self, provider: str, customer_id: str = "owner") -> Optional[Dict[str, Any]]:
-        """Get OAuth display tokens from cache or encrypted database.
-
-        Returns ``{access_token, email, name, scopes}`` only — the
-        refresh token is intentionally NOT included. Callers that need
-        the refresh token (token-refresh + revoke flows) must call
-        :meth:`get_oauth_refresh_token` explicitly. This split implements
-        RFC 9700 (OAuth 2.0 BCP 2024) §5.1 — refresh tokens are
-        long-lived secrets and must not live in process memory.
-
-        Args:
-            provider: OAuth provider name
-            customer_id: Customer identifier
-
-        Returns:
-            Dict with ``access_token``, ``email``, ``name``, ``scopes`` or
-            ``None`` if no tokens are stored.
-        """
+        """Get OAuth display tokens from the active-namespace credentials DB."""
         try:
-            cache_key = f"{customer_id}_{provider}"
-
-            # Check memory cache first.
+            cache_key = f"oauth_{provider}"
             if cache_key in self._oauth_cache:
                 return self._oauth_cache[cache_key]
-
-            # Fallback to encrypted database. Strip refresh_token before
-            # caching so the in-memory copy is short-lived-display-only.
-            tokens = await self.credentials_db.get_oauth_tokens(provider, customer_id)
+            tokens = await self.credentials_db.get_oauth_tokens(provider, "owner")
             if tokens:
                 display = {
                     "access_token": tokens.get("access_token"),
@@ -494,9 +314,7 @@ class AuthService:
                 }
                 self._oauth_cache[cache_key] = display
                 return display
-
             return None
-
         except Exception as e:
             logger.error("Failed to get OAuth tokens", provider=provider, error=str(e))
             return None
@@ -506,24 +324,9 @@ class AuthService:
         provider: str,
         customer_id: str = "owner",
     ) -> Optional[str]:
-        """Read the OAuth refresh token directly from the encrypted DB.
-
-        Per RFC 9700 (OAuth 2.0 BCP 2024) §5.1 the refresh token is a
-        long-lived bearer secret and must not be cached in process
-        memory. Every call decrypts from disk; this is acceptable
-        because refresh tokens are accessed rarely (only at access-token
-        renewal + on revoke / logout).
-
-        Args:
-            provider: OAuth provider name
-            customer_id: Customer identifier
-
-        Returns:
-            The decrypted refresh token, or ``None`` if no tokens are
-            stored for ``(provider, customer_id)``.
-        """
+        """Read the OAuth refresh token from the active-namespace credentials DB."""
         try:
-            tokens = await self.credentials_db.get_oauth_tokens(provider, customer_id)
+            tokens = await self.credentials_db.get_oauth_tokens(provider, "owner")
             if tokens:
                 return tokens.get("refresh_token")
             return None
@@ -626,20 +429,12 @@ class AuthService:
             True if removed successfully
         """
         try:
-            cache_key = f"{customer_id}_{provider}"
-
-            # 1. DB delete first (canonical source).
-            await self.credentials_db.delete_oauth_tokens(provider, customer_id)
-
-            # 2. Cache evict after DB succeeds.
+            cache_key = f"oauth_{provider}"
+            await self.credentials_db.delete_oauth_tokens(provider, "owner")
             self._oauth_cache.pop(cache_key, None)
-
-            # 3. Bump the catalogue version — same reason as store.
             self._bump_catalogue_version()
-
             logger.info(f"Removed OAuth tokens for {provider}")
             return True
-
         except Exception as e:
             logger.error("Failed to remove OAuth tokens", provider=provider, error=str(e))
             return False

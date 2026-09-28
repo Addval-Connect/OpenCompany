@@ -171,22 +171,9 @@ class DeploymentManager:
         generation: int = 0,
         user_id: str = "owner",
         temporal_namespace: str = "default",
-        credential_customer_id: str = "owner",
+        credential_customer_id: str = "owner",  # kept for call-site compat; now in listener_args for Temporal activities
     ) -> Dict[str, Any]:
-        """Deploy workflow in event-driven mode.
-
-        Args:
-            nodes: Workflow nodes
-            edges: Workflow edges
-            session_id: Session identifier
-            status_callback: Status update callback
-            workflow_id: Workflow ID for per-workflow deployment tracking
-            graph_version: Normalized graph contract version
-            generation: Durable workflow-control generation
-            user_id: Authenticated server-owned user identity
-            credential_customer_id: Credential bucket for OAuth/API-key lookups
-                in Temporal polling activities. Must be normalized (never "default").
-        """
+        """Deploy workflow in event-driven mode."""
         # Generate workflow_id if not provided
         if not workflow_id:
             workflow_id = f"workflow_{int(time.time() * 1000)}"
@@ -240,7 +227,6 @@ class DeploymentManager:
             generation=max(0, int(generation or 0)),
             settings=self._settings.copy(),
             temporal_namespace=str(temporal_namespace or "default"),
-            credential_customer_id=str(credential_customer_id or "owner"),
         )
 
         logger.info("Deployment starting", deployment_id=deployment_id, workflow_id=workflow_id, nodes=len(nodes))
@@ -817,7 +803,7 @@ class DeploymentManager:
             "edges": state.edges,
             "session_id": state.session_id,
             "user_id": state.user_id,
-            "credential_customer_id": state.credential_customer_id,
+            "credential_customer_id": state.temporal_namespace,  # namespace used for credential routing in Temporal activities
             **capture_temporal_routing_input(),
         }
         if state.graph_version > 0 and state.generation > 0:

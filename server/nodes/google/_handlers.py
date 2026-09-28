@@ -24,15 +24,14 @@ from ._oauth import GoogleOAuth
 async def _google_oauth_factory(
     *,
     redirect_uri: Optional[str] = None,
-    credential_customer_id: str = "owner",
     **_kwargs,
 ) -> GoogleOAuth:
-    """Build a :class:`GoogleOAuth` from stored client credentials."""
+    """Build a :class:`GoogleOAuth` from the active-namespace credentials DB."""
     from services.plugin.deps import get_auth_service
 
     auth_service = get_auth_service()
-    client_id = await auth_service.get_api_key("google_client_id", credential_customer_id=credential_customer_id) or ""
-    client_secret = await auth_service.get_api_key("google_client_secret", credential_customer_id=credential_customer_id) or ""
+    client_id = await auth_service.get_api_key("google_client_id") or ""
+    client_secret = await auth_service.get_api_key("google_client_secret") or ""
     return GoogleOAuth(
         client_id=client_id,
         client_secret=client_secret,

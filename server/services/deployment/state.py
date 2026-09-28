@@ -30,10 +30,6 @@ class DeploymentState:
     # Temporal namespace for multi-tenant routing. "default" routes to the
     # shared namespace; a tenant-specific value routes to an isolated one.
     temporal_namespace: str = "default"
-    # Credential bucket for OAuth / API-key lookups in Temporal activities.
-    # Always "owner" or a real tenant namespace — never "default" (which is
-    # the Temporal routing namespace, not a credential bucket).
-    credential_customer_id: str = "owner"
     settings: Dict[str, Any] = field(default_factory=dict)
     deployed_at: str = field(default_factory=lambda: datetime.now().isoformat())
 

@@ -389,13 +389,10 @@ class OAuth2Credential(Credential):
         from core.container import container
 
         auth_service = container.auth_service()
-        tokens = await auth_service.get_oauth_tokens(cls.id, user_id)
+        # user_id ignored — NamespacedCredentialsDatabase routes to the
+        # correct namespace DB automatically via ContextVar.
+        tokens = await auth_service.get_oauth_tokens(cls.id)
         if not tokens or not tokens.get("access_token"):
-            # Annotate the exception so BaseNode.execute can surface the
-            # failing provider in the response envelope and emit a
-            # CloudEvents-typed broadcast (credential.oauth.runtime_failed)
-            # via broadcast_credential_event. Plain attribute assignment —
-            # no new exception class.
             err = PermissionError(f"No OAuth tokens for '{cls.id}'. Connect via Credentials modal.")
             err.provider = cls.id
             err.reason = "missing"
@@ -465,7 +462,8 @@ class ApiKeyCredential(Credential):
         from core.container import container
 
         auth_service = container.auth_service()
-        api_key = await auth_service.get_api_key(cls.id, credential_customer_id=user_id)
+        # user_id ignored — NamespacedCredentialsDatabase routes via ContextVar
+        api_key = await auth_service.get_api_key(cls.id)
         if not api_key:
             err = PermissionError(f"No API key for '{cls.id}'. Add via Credentials modal.")
             err.provider = cls.id
@@ -474,7 +472,7 @@ class ApiKeyCredential(Credential):
             raise err
         secrets: Dict[str, Any] = {"api_key": api_key}
         for field in cls.extra_fields:
-            value = await auth_service.get_api_key(field, credential_customer_id=user_id)
+            value = await auth_service.get_api_key(field)
             if value:
                 secrets[field] = value
         return secrets
