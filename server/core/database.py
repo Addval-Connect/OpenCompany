@@ -2336,7 +2336,16 @@ class Database:
                     existing = UserSettings(user_id=user_id, **payload)
                     session.add(existing)
 
-                await session.commit()
+                try:
+                    await session.commit()
+                except Exception as commit_exc:
+                    # Concurrent request already inserted the row — treat as success.
+                    from sqlalchemy.exc import IntegrityError as _IE
+                    if isinstance(commit_exc, _IE):
+                        await session.rollback()
+                        logger.debug(f"[DB] user_settings concurrent insert for {user_id}, ignoring")
+                        return True
+                    raise
                 logger.info(f"[DB] User settings saved for user_id: {user_id}")
                 return True
 
