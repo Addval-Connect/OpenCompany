@@ -1042,6 +1042,7 @@ async def handle_execute_ai_node(data: Dict[str, Any], websocket: WebSocket) -> 
             execution_id=execution_id,
             workflow_id=workflow_id,
             user_id=user_id,
+            credential_customer_id=normalize_credential_ns(getattr(websocket.state, "active_namespace", None)),
         )
 
         if result.get("success"):

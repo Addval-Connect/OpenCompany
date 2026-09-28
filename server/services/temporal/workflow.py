@@ -545,6 +545,8 @@ class MachinaWorkflow:
                     )
                 if "user_id" in workflow_data:
                     context["user_id"] = workflow_data.get("user_id")
+                if "credential_customer_id" in workflow_data:
+                    context["credential_customer_id"] = workflow_data.get("credential_customer_id")
                 context["temporal_worker_pool_enabled"] = bool(
                     frozen_routing.get("worker_pool_enabled")
                 )

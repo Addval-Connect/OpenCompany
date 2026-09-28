@@ -118,6 +118,7 @@ class WSConnectionPool:
             "session_id": context.get("session_id", "default"),
             "workflow_id": context.get("workflow_id"),
             "execution_id": context.get("execution_id"),
+            "credential_customer_id": context.get("credential_customer_id", "owner"),
         }
         for key in (
             "auto_rebind_tools",

@@ -465,7 +465,7 @@ class ApiKeyCredential(Credential):
         from core.container import container
 
         auth_service = container.auth_service()
-        api_key = await auth_service.get_api_key(cls.id)
+        api_key = await auth_service.get_api_key(cls.id, credential_customer_id=user_id)
         if not api_key:
             err = PermissionError(f"No API key for '{cls.id}'. Add via Credentials modal.")
             err.provider = cls.id
@@ -474,7 +474,7 @@ class ApiKeyCredential(Credential):
             raise err
         secrets: Dict[str, Any] = {"api_key": api_key}
         for field in cls.extra_fields:
-            value = await auth_service.get_api_key(field)
+            value = await auth_service.get_api_key(field, credential_customer_id=user_id)
             if value:
                 secrets[field] = value
         return secrets
