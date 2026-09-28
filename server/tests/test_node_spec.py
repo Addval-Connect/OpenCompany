@@ -947,6 +947,8 @@ class TestNodeSpecContractInvariants:
             "executionTimeoutMs",
             "showLocationPanel",
             "isChatTrigger",
+            "isTrigger",
+            "isToolPanel",
             "isConsoleSink",
             "hasSkills",
             # Wave 10.A: size hints carried by plugin registrations
