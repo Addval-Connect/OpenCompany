@@ -86,6 +86,8 @@ class Database:
 
     async def startup(self):
         """Initialize database connection and create tables."""
+        if self.engine is not None:
+            return  # Already started — idempotent guard for pool reuse
         try:
             # Disable verbose database and asyncio logging
             import logging
@@ -117,9 +119,10 @@ class Database:
             # Create session factory
             self.async_session = async_sessionmaker(bind=self.engine, class_=AsyncSession, expire_on_commit=False)
 
-            # Create tables
+            # Create tables (checkfirst=True so multiple startups are safe —
+            # the per-namespace pool may call startup() more than once).
             async with self.engine.begin() as conn:
-                await conn.run_sync(SQLModel.metadata.create_all)
+                await conn.run_sync(lambda c: SQLModel.metadata.create_all(c, checkfirst=True))
 
             # Add missing columns to existing tables (simple migration)
             await self._migrate_user_settings()

@@ -41,7 +41,6 @@ class DatabasePool:
     def get(self, namespace: str) -> "Database":
         """Return (creating and lazily starting if needed) the Database for *namespace*."""
         if namespace not in self._pool:
-            import asyncio
             from core.database import Database
 
             class _NsSettings:
@@ -62,13 +61,6 @@ class DatabasePool:
             ns_settings = _NsSettings(self.settings, ns_url)
             db = Database(ns_settings)  # type: ignore[arg-type]
             self._pool[namespace] = db
-            # Lazy-startup: schedule in the running event loop so tables are
-            # created before the first real query arrives.
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self.startup_namespace(namespace))
-            except RuntimeError:
-                pass  # no loop yet; called explicitly at app startup
             logger.debug("DatabasePool: created DB for namespace=%s", namespace)
         return self._pool[namespace]
 
@@ -123,7 +115,6 @@ class CredentialsPool:
         if namespace not in self._pool:
             from core.credentials_database import CredentialsDatabase
             from core.encryption import EncryptionService
-            import asyncio
 
             enc = EncryptionService()
             self._encryptions[namespace] = enc
@@ -132,14 +123,6 @@ class CredentialsPool:
                 encryption=enc,
             )
             self._pool[namespace] = creds_db
-            # Lazy-initialize in a fire-and-forget task if event loop is running.
-            # The first actual DB call will await the underlying engine so this
-            # is safe — the engine is created synchronously in __init__.
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self.startup_namespace(namespace))
-            except RuntimeError:
-                pass  # no loop yet; startup_namespace will be called explicitly
             logger.debug("CredentialsPool: created DB for namespace=%s", namespace)
         return self._pool[namespace]
 
