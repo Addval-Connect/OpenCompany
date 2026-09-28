@@ -1002,9 +1002,8 @@ class Database:
         """
         try:
             async with self.get_session() as session:
+                # Per-namespace DBs: physical file is the security boundary.
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
-                if owner_user_id is not None:
-                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 workflow = result.scalar_one_or_none()
 
