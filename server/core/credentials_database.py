@@ -123,6 +123,7 @@ class CredentialsDatabase:
             expire_on_commit=False,
         )
         self._salt: Optional[bytes] = None
+        self._initialized: bool = False  # set to True after initialize() completes
 
     async def initialize(self) -> bytes:
         """
@@ -160,6 +161,7 @@ class CredentialsDatabase:
             self._salt = bytes.fromhex(salt_hex)
             logger.debug("Loaded existing encryption salt")
 
+        self._initialized = True
         return self._salt
 
     def get_salt(self) -> Optional[bytes]:

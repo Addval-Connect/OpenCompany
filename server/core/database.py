@@ -406,7 +406,8 @@ class Database:
         CancelledError still propagates to the caller.
         """
         if not self.async_session:
-            raise RuntimeError("Database not initialized")
+            # Lazy startup for namespace DBs created after server boot.
+            await self.startup()
 
         session = self.async_session()
         try:
@@ -599,7 +600,7 @@ class Database:
         future production databases, using their regular transaction begin.
         """
         if not self.async_session:
-            raise RuntimeError("Database not initialized")
+            await self.startup()
 
         async with self.async_session() as session:
             try:

@@ -133,18 +133,35 @@ class NamespacedCredentialsDatabase:
     """CredentialsDatabase proxy — all calls go to namespace-specific DB.
 
     No auth distinction: credentials are 100% per-namespace.
+    Auto-starts the namespace DB on first access (lazy init).
     """
 
     def __init__(self, pool: "CredentialsPool") -> None:
         self._pool = pool
 
-    def _active_creds(self) -> "CredentialsDatabase":
-        return self._pool.get(get_active_namespace())
+    async def _active_creds(self) -> "CredentialsDatabase":
+        ns = get_active_namespace()
+        creds_db = self._pool.get(ns)
+        if not creds_db._initialized:
+            await self._pool.startup_namespace(ns)
+        return creds_db
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(self._active_creds(), name)
+
+        # Return an async wrapper that ensures the namespace DB is started
+        # before delegating to the real method.
+        pool = self._pool
+
+        async def _delegated(*args, **kwargs):
+            ns = get_active_namespace()
+            creds_db = pool.get(ns)
+            if not creds_db._initialized:
+                await pool.startup_namespace(ns)
+            return await getattr(creds_db, name)(*args, **kwargs)
+
+        return _delegated
 
     @property
     def encryption(self):
