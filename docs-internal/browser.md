@@ -1,0 +1,197 @@
+# Native browser runtime
+
+The `browser` node launches installed Chrome, Edge or Chromium in an
+OpenCompany-owned profile. By default it runs headless and is displayed inside
+the workspace, without a separate desktop window. It does not attach to or copy
+your personal browser profile. Agents use the
+browser-use CLI for ordinary browser operations; people watch and control the
+same Chrome through the [Browser workspace](./browser_workspace.md). The old
+agent-browser driver and separate `browserHarness` node are retired.
+
+## Execution paths
+
+| Path | Implementation | Lifetime |
+| --- | --- | --- |
+| Agent and workflow operations | `nodes/browser/browser/__init__.py` → `_scripts.py` / `_cli.py` → browser-use → Chrome CDP | A CLI subprocess per operation; Chrome and the profile's CLI daemon persist |
+| WebMCP tools | `_webmcp.py` through the runtime's CDP connection | Tracked per page/frame, subject to saved node policy |
+| Live picture | `_stream.py` → `Page.startScreencast` → binary `/ws/browser` frames | One capture hub per running profile, bounded queues per viewer |
+| Human input | `_live_control.py` → dedicated page CDP session | One ordered command worker per hub; independent of CLI and capture resizing |
+| Session and profile requests | `_handlers.py` over the application's authenticated request socket | Resolve ownership and saved node settings before opening sessions |
+
+The native viewer is a streamed Chrome surface. Canvas URL items continue to
+use sandboxed iframe previews. Neither displaying a Canvas URL nor attaching a
+viewer silently starts a browser; **Start browser** explicitly opens an idle
+session. Normal and Dev modes use the same viewer component.
+
+## Installation and configuration
+
+The defaults `BROWSER_RUNTIME=system` and `BROWSER_FAMILY=chrome` discover
+installed Chrome without storing its executable path in `.env`. Windows discovery
+reads per-user and machine App Paths registrations (both registry views), then
+PATH and standard installation locations. macOS checks PATH and application
+folders; Linux checks PATH. Discovery runs again at profile startup, so a moved
+installation is not cached indefinitely.
+
+`BROWSER_FAMILY=edge` or `chromium` chooses another installed browser by name.
+`auto` explicitly allows Chrome → Edge → Chromium fallback when checking profile
+version compatibility. Selecting `chrome` never silently switches to Edge.
+`BROWSER_CHROME_PATH` remains an optional exclusive executable override for
+special deployments; normally leave it empty. If no compatible browser
+is available, startup fails with setup guidance: there is no automatic Chrome
+for Testing download or fallback. System mode preserves the browser's native
+user agent. An installed browser is not a guarantee that a website will accept
+automation or permit a login; Take control remains available for human steps.
+
+`BROWSER_RUNTIME=testing` explicitly selects pinned Chrome for Testing. Its
+version, platform checksums and the browser-use CLI pin live in
+[`server/config/browser_runtime.json`](../server/config/browser_runtime.json).
+Only testing mode installs Chrome under `<DATA_DIR>/packages/chrome-for-testing/`.
+Both modes install the pinned browser-use CLI through an isolated uv tool
+installation under `<DATA_DIR>/packages/browser-use/`, outside the shared Bun
+package tree. `uv` must be on PATH or selected by `OPENCOMPANY_UV_BIN`.
+Installation can outlive the open request; the workspace reports progress.
+
+Runtime settings are declared in
+[`server/core/config.py`](../server/core/config.py); stream diagnostics reads
+its opt-in flag directly from the process environment:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `BROWSER_RUNTIME` | `system` | Installed browser discovery; `testing` explicitly enables pinned Chrome for Testing |
+| `BROWSER_FAMILY` | `chrome` | Discover `chrome`, `edge`, or `chromium`; `auto` allows cross-browser fallback |
+| `BROWSER_HEADLESS` | `true` | Render in the workspace without a desktop window; `false` additionally opens a separate window |
+| `BROWSER_CHROME_PATH` | Empty | Explicit Chrome/Edge/Chromium executable override |
+| `BROWSER_MAX_INSTANCES` | `3` | Bound simultaneously running browser profiles |
+| `BROWSER_IDLE_TIMEOUT_MS` | `600000` | Reap idle profiles; attached viewers and pending user work count as busy |
+| `BROWSER_INSTALL_TIMEOUT_SECONDS` | `900` | Bound installer work |
+| `BROWSER_SANDBOX` | `auto` | Select `auto`, `on` or `off`; auto accounts for Linux root and restricted user namespaces |
+| `OPENCOMPANY_BROWSER_DIAGNOSTICS` | Unset | Set to `1` for bounded, payload-free live-stream timing summaries |
+
+`AGENT_BROWSER_EXECUTABLE_PATH` is a legacy driver setting and is not read by
+the native installer. See [Docker](./docker.md) for the current image's browser
+extra and explicit system-Chromium configuration. CDP stays internal to the
+runtime; deploy the authenticated application socket, not an exposed Chrome
+debugging endpoint.
+
+## Profiles, ownership and control
+
+OpenCompany reuses the user's installed browser executable and its normal
+update mechanism. It launches a separate OpenCompany process with a dedicated
+data directory, then reuses that running process for agent actions and the
+workspace viewer. Opening the same profile again does not launch another browser;
+concurrent opens share one startup task. Cookies and local storage persist across
+restarts of that profile and remain separate from other profiles and personal
+browsing. Sessions intentionally assigned the same saved profile share its logins.
+
+This is installed-browser reuse, not attachment to the user's everyday running
+browser. Chrome's CDP debugging switches require a non-default data directory
+since Chrome 136 ([Chrome documentation](https://developer.chrome.com/blog/remote-debugging-port)).
+Using the existing executable with separate persistent profiles retains the
+workspace live view without an extension or personal-profile migration.
+
+Profile metadata is stored in the `browser_profiles` table. Chrome state is
+under `<DATA_DIR>/browser/profiles/<profile-id>/user-data/`, with generated
+directory IDs rather than user-supplied names. A saved `profile_id` selects an
+owner-scoped profile; leaving it empty creates/reuses the workflow's profile.
+The CLI receives its own per-profile home, runtime and temporary directories.
+
+The node's profile dropdown (`browserProfiles` option loader) lists the
+caller's own profiles. It reads the caller from
+`services.ws_handler_registry.current_load_options_principal()`, which the
+load-options handlers set from the authenticated socket or HTTP request; a
+`user_id` in the request parameters is never trusted. The **Web browser**
+entry in Credentials and Normal-mode Connectors (panel kind
+`browserProfiles`, `components/credentials/panels/BrowserProfilesPanel.tsx`)
+lists the caller's profiles with their sites as domains and cookie counts,
+adds and deletes shared profiles, and imports logins from a session file:
+Playwright storage state, Cookie-Editor JSON or `cookies.txt`, uploaded to
+`POST /api/browser/profiles/{id}/session-file` and applied with
+`browser_import_commit`. To sign in by hand, use Take control in the
+workspace.
+
+The profile version guard checks the browser executable actually selected, not
+the testing pin. A browser older than the version that last wrote the profile
+is skipped during automatic discovery, or rejected with actionable guidance
+when explicitly selected or no compatible browser is installed. OpenCompany neither deletes that profile
+nor silently creates a replacement; select a compatible browser or explicitly
+choose a different profile. This protects saved sessions during runtime changes.
+
+The server derives identity from the authenticated caller and the saved
+workflow. Browser discovery uses the plugin's `isBrowserPanel` hint, not a
+second frontend list of browser type names. The node's profile, read-only mode,
+WebMCP permissions, domain restrictions and private-network permission come
+from saved operator settings, not model-supplied tool arguments.
+
+`ProfileController` coordinates the profile lease and agent operation lock.
+**Take control** waits for or interrupts an agent step before granting user
+ownership. Human commands carry viewer and page generations and are checked
+again immediately before CDP dispatch. **Hand back**, hiding, blur and
+disconnect stop admission, discard stale queued work, settle dispatched work
+and release held keys/buttons before the agent can resume. If a timed-out CDP
+command has an unknown outcome, safe hand-back retires the managed Chrome; if
+that fails, control remains held rather than resuming the agent prematurely.
+
+The policy proxy in `_egress.py` enforces allowed destinations for browser
+traffic. `allow_private_network` does not permit OpenCompany's protected ports
+or cloud metadata endpoints. This network enforcement is separate from the
+control lease and from agent read-only behavior.
+
+## Normal mode
+
+Hire attaches a browser through the **Web browser** app (`web` in
+[`config/employee_apps.json`](../server/config/employee_apps.json)). Its
+catalogue entry, `browser`, has nothing to connect (`connected_check:
+builtin`), so it never blocks Start; a missing installed browser shows up at
+the first browser step instead. With "Ask me before sending anything" on,
+the tool is attached with its `ask_first_params`, `interaction: read_only`:
+the agent reads pages and hands any change to the owner through
+`request_user`. The employee's instructions say when to call it.
+
+While the agent waits in `request_user`, the plugin's node-state source
+(`services/employees/node_signals.py`) reports `awaiting_user`, and the
+employee summary carries `browser_request` (`{node_id, reason, since}`, never
+the agent's message). See [Normal mode](./normal_mode.md) and
+[Browser workspace](./browser_workspace.md#when-the-agent-asks-for-help).
+
+## Node contract and compatibility
+
+The tool schema exposes navigation, snapshots, element interaction, screenshots,
+tabs, page reading, waits, WebMCP, user assistance and diagnostics. Workflow-only
+`evaluate`, `run_python` and `close` are excluded from the model's tool schema.
+See the [browser node flow](./node-logic-flows/web_automation/browser.md) for
+operation and output details.
+
+Snapshots return compact `[eN]` references; their backend node-ID mappings stay
+on the server. Screenshot output is a workspace `FileRef`, never inline image
+bytes or an unservable absolute host path. The screenshot helper copies the
+CLI's contained temporary PNG into the workflow workspace and removes the
+temporary file; persistence failure produces a notice.
+
+[`services/workflow_migrations.py`](../server/services/workflow_migrations.py)
+contains the legacy browser-node migration. `BrowserParams` also normalizes
+legacy parameters from saved deployment snapshots. Use the current `browser`
+node for new graphs; the [retired harness reference](./browser_harness.md)
+exists to direct older links to the current implementation.
+
+## Troubleshooting and validation
+
+- **No Browser node listed:** save the workflow and browser node first. Normal
+  mode discovers nodes from the employee summary; Dev mode observes hydrated
+  node-schema hints.
+- **First launch is slow:** inspect `browser_runtime_status` for installer
+  progress and use `diagnose` for runtime/host details. Cold installation and
+  warm live-view latency are separate measurements.
+- **Frames stop or the view disconnects:** use Reconnect. Screencast attachment
+  retries at 1, 2 and 4 seconds; authentication and target failures require
+  explicit correction. Details and diagnostics are in
+  [Browser workspace](./browser_workspace.md#live-view-latency-and-diagnostics).
+- **Agent steps are slow but manual input is responsive:** each ordinary agent
+  operation still starts a CLI process and can wait for page readiness. The
+  stream changes do not replace that path or prove its latency improved.
+
+Backend regression tests live in `server/tests/nodes/browser/`; viewer and
+workspace tests live beside their client components. The
+[local benchmark](./browser_workspace.md#reproducible-local-benchmark) exercises
+real Chrome/CDP and production stream code with an isolated reference canvas.
+Its recorded Chrome 153 results describe the prior benchmark configuration,
+not a full React test or validation of the current default runtime selection.

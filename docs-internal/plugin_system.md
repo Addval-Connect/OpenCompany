@@ -205,7 +205,7 @@ plugins that don't declare any group render flat exactly like today.
 ```python
 class AIAgentParams(BaseModel):
     # Top-level fields (always visible)
-    provider: Literal[...] = "openai"
+    provider: ProviderRef = "openai"   # loader-driven (aiProviders), nodes/agent/_provider.py
     model: str = Field(default="")
     prompt: str = Field(default="", json_schema_extra={"rows": 4})
     system_message: Optional[str] = Field(default="")
@@ -397,10 +397,10 @@ on a plugin resolves to a registered class.
 | `nodes/twitter/_credentials.py` | `TwitterCredential` | oauth2 | twitterSend / twitterSearch / twitterUser / twitterReceive |
 | `nodes/telegram/_credentials.py` | `TelegramCredential` | api_key | telegramSend / telegramReceive |
 | `nodes/scraper/_credentials.py` | `ApifyCredential` / `TikHubCredential` | api_key (bearer) | apifyActor / tikhubAction (TikHub probes `tikhub/user/get_user_info` declaratively — see [tikhub_service.md](./tikhub_service.md)) |
-| `nodes/model/_credentials.py` | `OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / Xai / Sarvam / Ollama / LMStudio` | api_key | 13 credential classes covering the 13 agent-selectable providers and the 12 standalone chat-model nodes (`ls server/nodes/model/*_chat_model`). Ollama / LM Studio store a local server URL; xAI is agent-selectable but has no standalone node; `SarvamCredential` also serves the speech / translate plugins. |
+| `nodes/model/_credentials.py` | `OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / Xai / Sarvam / Ollama / LMStudio / OpenAICompatible` | api_key | One credential class per LLM provider, covering every agent-selectable provider and every standalone chat-model node (`ls server/nodes/model/*_chat_model`). Ollama / LM Studio store a local server URL; `OpenAICompatibleCredential` stores any number of named endpoints, each under its own `openai_compatible:<slug>` reference (RFC-0003); xAI is agent-selectable but has no standalone node; `SarvamCredential` also serves the speech / translate plugins. |
 | `nodes/search/<name>/__init__.py` (inline) | `BraveSearch / Serper / Perplexity` | api_key | single-use search nodes |
 
-This table is the Wave 11.E snapshot, not an inventory — later plugins (Stripe, Vercel, GitHub, Cloudflare, gcloud, WhatsApp, WhatsApp Business, Discord, Microsoft, ElevenLabs, Deepgram, DeepL, ...) each ship their own `_credentials.py`. Read the live set from `len(services.plugin.credential.CREDENTIAL_REGISTRY)` (34 at the time of writing).
+This table is the Wave 11.E snapshot, not an inventory — later plugins (Stripe, Vercel, GitHub, Cloudflare, gcloud, WhatsApp, WhatsApp Business, Discord, Microsoft, ElevenLabs, Deepgram, DeepL, ...) each ship their own `_credentials.py`. Read the live set from `len(services.plugin.credential.CREDENTIAL_REGISTRY)`.
 
 `GoogleCredential` exposes a `build_credentials()` classmethod that
 returns a `google.oauth2.credentials.Credentials` — hand-off to
@@ -519,7 +519,9 @@ Queue distribution (live count via
 | `triggers-event` | Push-based triggers | 100 |
 | `triggers-poll` | Polling triggers (Gmail, etc.) | 100 |
 | `code-exec` | Python / JS / TS sandboxes | 10 |
-| `browser` | Playwright / agent-browser | 4 |
+| `browser` | Installed Chrome/Edge/Chromium / browser-use / CDP | 4 |
+
+The current Browser plugin launches installed Chrome/Edge/Chromium in dedicated profiles rendered headless in the workspace UI by default, owns browser-use tool execution and the CDP live view, and offers Chrome for Testing only through explicit testing mode. See [browser.md](./browser.md) and [browser_workspace.md](./browser_workspace.md); the retired `browserHarness` node is not a second active plugin.
 
 Env overrides: `TEMPORAL_<QUEUE>_CONCURRENCY` (e.g.
 `TEMPORAL_AI_HEAVY_CONCURRENCY=8`).
@@ -572,7 +574,7 @@ per node type) — same pattern as every other folder.
 |---|---|---|
 | Credentials-modal WebSocket commands (Connect / Disconnect / Send / Status / etc.) | `services.ws_handler_registry` | `register_ws_handlers({type: handler, ...})` |
 | FastAPI HTTP router (OAuth callbacks, webhook receivers, etc.) | `services.ws_handler_registry` | `register_router(router, name='<plugin>')` — Wave 11.I; declare a `_router.py` exposing an `APIRouter` and call from `__init__.py`. Discovered at startup via `services.ws_handler_registry.get_routers()`. |
-| `loadOptionsMethod` async loader for a dynamic dropdown (`json_schema_extra={"loadOptionsMethod": "..."}`) | `services.ws_handler_registry` | `register_option_loader(method_name, fn)` |
+| `loadOptionsMethod` async loader for a dynamic dropdown (`json_schema_extra={"loadOptionsMethod": "..."}`). A loader that lists one user's things reads the caller from `current_load_options_principal()`, never a `user_id` in its params (the client writes those) | `services.ws_handler_registry` | `register_option_loader(method_name, fn)` |
 | OAuth callback path (`/api/<provider>/callback`) so `services.oauth_utils.get_redirect_uri` never cross-imports `nodes/<plugin>/_oauth.py` | `services.ws_handler_registry` | `register_oauth_callback_path(provider, path)` |
 | Trigger event-filter builder | `services.event_waiter` | `register_filter_builder(node_type, fn)` |
 | Trigger pre-execution check (e.g. "bot not connected") | `services.event_waiter` | `register_trigger_precheck(node_type, fn)` |
@@ -700,10 +702,11 @@ server/
 │   │   │                        # subclasses, rlm / claude_code / codex, vertex_* variants)
 │   │   ├── _handles.py          # Shared handle topology helpers
 │   │   ├── _inline.py           # prepare_agent_call()
+│   │   ├── _provider.py         # ProviderRef: the loader-driven provider field every agent shares
 │   │   ├── _specialized.py      # SpecializedAgentBase
 │   │   ├── _vertex.py           # Shared Vertex Agent Engine helpers
 │   │   └── <agent>/__init__.py  # one folder per agent
-│   ├── model/                   # AI chat models (12 providers; all agent-capable)
+│   ├── model/                   # AI chat models (one per provider except xAI, plus openaiCompatibleChatModel for named endpoints)
 │   │   ├── _base.py             # ChatModelBase + ChatModelParams/Output
 │   │   └── <provider>_chat_model/__init__.py
 │   ├── android/                 # 16 Android service nodes
@@ -733,7 +736,7 @@ server/
 │   ├── email/                   # emailSend / emailRead / emailReceive
 │   ├── chat/                    # chatSend / chatHistory
 │   ├── social/                  # socialSend / socialReceive
-│   ├── browser/                 # browser (agent-browser CLI) / browser_harness (browser-use CDP)
+│   ├── browser/                 # browser (managed Chrome, browser-use CLI, live CDP view)
 │   ├── utility/                 # httpRequest / webhookResponse / console / team_monitor / process_manager
 │   ├── text/                    # textGenerator / fileHandler
 │   ├── location/                # gmaps_create / gmaps_locations / gmaps_nearby_places
@@ -846,8 +849,8 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
   TelegramCredential + ApifyCredential + 12 LLM providers + 3 inline
   search credentials + Stripe / Vercel / GitHub / Cloudflare /
   WhatsApp); 29 plugins declared `credentials = (...)`. Today the live
-  numbers are `len(CREDENTIAL_REGISTRY)` (35) and 55 node types with a
-  non-empty `credentials` tuple (September 2026). Agents stay poly-provider (empty tuple).
+  numbers are `len(CREDENTIAL_REGISTRY)` (36) and 56 node types with a
+  non-empty `credentials` tuple (late September 2026). Agents stay poly-provider (empty tuple).
 - Wave 11.E.1 — Modularised credentials into per-domain
   `nodes/<group>/_credentials.py` files. `server/credentials/`
   directory deleted; auto-discovery rides on node-package import.

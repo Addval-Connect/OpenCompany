@@ -472,16 +472,31 @@ class Settings(BaseSettings):
     # WhatsApp runtime settings live in the plugin: nodes/whatsapp/_runtime.py
     # reads the WHATSAPP_* env vars directly (plugin-owned config).
 
-    # Browser automation (agent-browser CLI). Canonical values live in
+    # Browser node (nodes/browser): OpenCompany launches a pinned Chrome for
+    # Testing, one process per browser profile. Canonical values live in
     # .env.template (same pattern as COMPACTION_RATIO — the code default
     # only mirrors the template for bare Settings() construction, e.g.
-    # pytest/CI without the CLI env layering). Each distinct session name
-    # maps to one Chrome instance; the cap closes the oldest session
-    # before a new one would exceed it. Idle timeout (ms) makes the
-    # agent-browser daemon shut down its browser after inactivity; 0
-    # disables.
+    # pytest/CI without the CLI env layering). The instance cap stops the
+    # least recently used idle profile before another would exceed it; the
+    # idle timeout (ms) stops a profile's Chrome after that long with no
+    # agent step, viewer or login; 0 disables. The install timeout bounds
+    # the browser-use CLI install (and Chrome only in explicit testing mode). Sandbox:
+    # auto disables Chrome's sandbox only as root on Linux, where it cannot
+    # start. system discovers installed Chrome/Edge/Chromium; testing opts into
+    # the pinned download. browser_family selects the browser by name;
+    # chrome_path is an optional explicit executable override.
+    # Render inside the workspace by default; a separate window is opt-in.
+    # Downloads a page starts are
+    # capped at download_max_mb each.
     browser_max_instances: int = Field(default=3, env="BROWSER_MAX_INSTANCES", ge=1, le=50)
     browser_idle_timeout_ms: int = Field(default=600_000, env="BROWSER_IDLE_TIMEOUT_MS", ge=0)
+    browser_install_timeout_seconds: int = Field(default=900, env="BROWSER_INSTALL_TIMEOUT_SECONDS", ge=60)
+    browser_sandbox: str = Field(default="auto", env="BROWSER_SANDBOX", pattern="^(auto|on|off)$")
+    browser_chrome_path: str = Field(default="", env="BROWSER_CHROME_PATH")
+    browser_family: str = Field(default="chrome", env="BROWSER_FAMILY", pattern="^(chrome|edge|chromium|auto)$")
+    browser_runtime: str = Field(default="system", env="BROWSER_RUNTIME", pattern="^(system|testing)$")
+    browser_headless: bool = Field(default=True, env="BROWSER_HEADLESS")
+    browser_download_max_mb: int = Field(default=200, env="BROWSER_DOWNLOAD_MAX_MB", ge=1)
 
     # Compaction Configuration. Threshold = model context_length ×
     # compaction_ratio. Per-user UserSettings row overrides at runtime.

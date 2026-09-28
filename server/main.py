@@ -161,6 +161,11 @@ async def lifespan(app: FastAPI):
     # get_workflow / get_all_workflows / delete_workflow).
     import services.workflow_storage  # noqa: F401
 
+    # Normal mode: services/employees/__init__.py self-registers the
+    # employee handlers (list_employees / get_employee), the cleanup that
+    # runs on workflow delete, and the employee_lifecycle summary builder.
+    import services.employees  # noqa: F401
+
     # Wave 13.8: services/pricing_handlers.py self-registers the 3
     # pricing handlers (get_pricing_config / save_pricing_config /
     # get_api_usage_summary). Flat module (sibling to services/pricing.py)
@@ -416,20 +421,6 @@ async def lifespan(app: FastAPI):
             pass
     _startup_log("Lifespan shutdown: temporal lifecycle task cancelled")
 
-    # Stop tenant namespace workers first (pools then managers), then the
-    # default-namespace workers.
-    for tenant_pool in getattr(app.state, "temporal_tenant_pools", None) or []:
-        try:
-            await tenant_pool.stop()
-        except Exception as exc:
-            logger.warning(f"Tenant worker pool stop raised: {exc}")
-
-    for tenant_manager in getattr(app.state, "temporal_tenant_worker_managers", None) or []:
-        try:
-            await tenant_manager.stop()
-        except Exception as exc:
-            logger.warning(f"Tenant worker manager stop raised: {exc}")
-
     # Stop the per-queue worker pool first (activity-only workers), then
     # the manager worker that also hosts workflows.
     pool = getattr(app.state, "temporal_pool", None)
@@ -451,13 +442,6 @@ async def lifespan(app: FastAPI):
 
     # Disconnect Temporal client.
     if settings.temporal_enabled:
-        # Tenant namespace clients first (registry), then the default client.
-        try:
-            from services.temporal.client_registry import disconnect_all as _disconnect_tenants
-
-            await _disconnect_tenants()
-        except Exception:
-            pass
         try:
             temporal_client_wrapper = container.temporal_client()
             if temporal_client_wrapper is not None:

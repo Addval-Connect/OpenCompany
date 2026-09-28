@@ -36,9 +36,18 @@ client/src/contexts/ThemeContext.tsx
 ├── ThemeName = 'light' | 'dark' | 'renaissance' | 'greek' | 'edo' | 'steampunk'
 │             | 'atomic' | 'cyber' | 'wasteland' | 'rot' | 'plague' | 'surveillance'
 ├── DARK_FAMILY = {dark, cyber, wasteland, rot, surveillance, steampunk}
-├── persists to localStorage['opencompany-theme']
+├── persists the CHOSEN theme to localStorage['opencompany-theme']
 ├── migrates legacy 'darkMode' boolean on first load
-└── sets <html data-theme="..."> + .dark class (only for DARK_FAMILY themes)
+├── sets <html data-theme="..."> + .dark class (only for DARK_FAMILY themes)
+└── baseOnly prop: a chosen stylized theme shows as its family's base
+    (familyBaseTheme: dark family -> dark, else light); `theme` is what is on
+    the page, `chosenTheme` what the user picked
+
+client/src/app/ShellThemeProvider.tsx — sets baseOnly while Home (Normal mode)
+                                        is showing: Home is designed for light and
+                                        dark only, so the stylized themes apply in
+                                        Dev mode (the editor). index.html's
+                                        pre-paint script applies the same rule.
 
 client/src/hooks/useAppTheme.ts        — 10-way Colors overlay (canvas + maps)
 client/src/lib/sound.ts                — WebAudio engine, 10 packs × 9 events
@@ -116,6 +125,47 @@ Six tokens for canvas identity: `agent / model / skill / tool / trigger / workfl
 `--code-*` — the per-theme syntax palette for the code editor, console/output JSON viewers, and chat code blocks. Each theme defines its own `--code-*` block in its own CSS file (`client/src/themes/<theme>.css`): editor chrome (`--code-bg`, `--code-gutter-bg`, `--code-gutter-fg`, `--code-caret`, `--code-border`, `--code-line-active`, `--code-selection`) + syntax roles (`--code-text`, `--code-comment`, `--code-keyword`, `--code-string`, `--code-number`, `--code-boolean`, `--code-function`, `--code-property`, `--code-operator`, `--code-punctuation`, `--code-tag`). The per-theme `--code-*` blocks in `client/src/themes/*.css` are the only home of this tier (the vendored bundle ships no `tokens/code.css` — the tier postdates it); the skins derive syntax from their own role hues — **keyword→trigger, string→success, number→agent, function→model, tag→tool, comment→faint, punctuation→muted** — on an adaptive dark/light code surface (`color-mix(#000 45%, --bg-panel)` dark, `color-mix(#000 5%, --surface-card)` light).
 
 Consumed as `var(--code-*)` in [index.css](../client/src/index.css) (`.code-editor-container`, `.console-json-output`, the `.chat-markdown` dark overrides) and exposed as Tailwind utilities (`text-code-tag`, `bg-code-bg`, …) via the `@theme inline` bridge; the `OutputPanel` `@uiw/react-json-view` viewer reads the same vars. This **replaced the old global dracula-hardcoded `--prism-*` block and the dead `getPrismTokenCSS()` helper** — code/JSON now paints in each theme's palette instead of one dracula scheme everywhere. (`prismjs` is still the tokenizer; only the colours moved to `--code-*`.)
+
+### Home (Normal mode) tokens
+
+Normal mode ([normal_mode.md](./normal_mode.md)) adds its own steps, all in
+[base.css](../client/src/themes/base.css) unless noted, and bridged in
+`index.css` where a Tailwind utility needs them (the layout and duration
+tokens are used directly, as `w-(--w-home-sidebar)` or `duration-(--dur-slow)`):
+
+- **Motion**: `--ease-spring | overshoot | reveal` and the choreography
+  durations (`--dur-intro`, `--dur-view-swap`, `--dur-panel-in/-out`,
+  `--dur-toast-in/-hold/-out`, `--dur-mode-in/-out`, `--dur-theme-reveal`,
+  `--dur-glow`, `--dur-pip-loop`, `--dur-dock-in` for the Workspace dock,
+  …). Web Animations read them through
+  [lib/motion.ts](../client/src/lib/motion.ts), whose fallbacks mirror
+  base.css.
+- **Radii**: `--radius-row | card | panel | draft | composer`, multiples of each
+  theme's `--radius-lg`, so square themes stay square.
+- **Type and layout**: `--text-meta | row | lead | title | hero` (with
+  `--tracking-hero`, `--leading-hero`), and the Home layout constants
+  (`--w-home-sidebar`, `--h-home-header`, `--w-composer`, the orb slot sizes,
+  the Settings dialog size).
+- **Status**: `--status-{working,ready,paused,attention,waiting}-{dot,fill,border,ink}`
+  for the employee pills and dots. The dot is the raw role colour; light.css
+  keeps the paused dot at the design's mid grey.
+- **Per family** (light.css / dark.css): `--shadow-float | popover | dialog |
+  dock` (`dock` is the Workspace's left shadow when it lies over the page),
+  the logo palette `--lg-*`, the node-role `-fill / -edge / -hover / -ink`
+  variants, and Home's glows: `--glow-connect | hire | hire-settle | refine |
+  refine-out | task` plus the working pip's `--tint-pip-ring`. Dark keeps the
+  neon; light swaps each neon for its ink at .75 of the alpha and .6 of the
+  blur, the design's rule for white surfaces. The Web Animations that play
+  them name the token (`boxShadow: 'var(--glow-hire)'`), so the colour follows
+  the theme with no script. dark.css restates each one, because light.css's
+  bare `:root` also matches the dark family.
+
+Home shows only the two base themes: `ThemeProvider`'s `baseOnly` (set by
+`app/ShellThemeProvider.tsx` while Home is showing) renders a chosen stylized
+theme as its family's base, and the pre-paint script in `index.html` applies
+the same rule to the first frame. `setTheme(next, { reveal: true, origin })`
+grows the new theme as a circle from `origin` (View Transitions), falls back
+to a short colour fade, and is instant under reduced motion.
 
 ## Migration recipe
 

@@ -26,7 +26,7 @@ Download the app for your computer and install it (these links always point at t
 - **macOS, Intel**: [OpenCompany-macos-x64.dmg](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-macos-x64.dmg)
 - **Linux**: [OpenCompany-linux-x86_64.AppImage](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-linux-x86_64.AppImage), or [OpenCompany-linux-amd64.deb](https://github.com/zeenie-ai/OpenCompany/releases/latest/download/OpenCompany-linux-amd64.deb) on Debian and Ubuntu
 
-Nothing else to install. On first launch the app sets itself up (a one-time download, a minute or two) and opens the canvas. Click the key icon in the toolbar to connect your first AI provider. Three example employees are already on the canvas; open one to see how it is put together.
+Nothing else to install. On first launch the app sets itself up (a one-time download, a minute or two) and opens Home. Describe a job to hire your first employee; if no AI provider is connected yet, Home asks you to connect one, or you can add it yourself in Settings > Connectors. Switch to Dev mode for the workflow editor, where three example employees are listed in the workflow sidebar; open one to see how it is put together.
 
 The builds are not code-signed yet, so macOS asks you to allow the app under System Settings > Privacy & Security, and Windows SmartScreen needs "More info > Run anyway".
 
@@ -40,6 +40,19 @@ company start
 ```
 
 The script installs bun, Python and uv when they are missing, then the `@zeenie-ai/opencompany` package. Open http://localhost:5678. Data lives in `~/.opencompany`, shared with the desktop app. See [SETUP.md](docs-internal/SETUP.md).
+
+</details>
+
+<details>
+<summary><b>Docker (self-hosting)</b></summary>
+
+```bash
+git clone https://github.com/zeenie-ai/OpenCompany.git
+cd OpenCompany
+docker compose up -d --build
+```
+
+Builds the image from source and starts one container, with all data in the `opencompany-selfhost_data` volume. Open http://localhost:5678 and register the owner account. The port is published on this machine only. See [docker.md](docs-internal/docker.md).
 
 </details>
 
@@ -75,10 +88,10 @@ https://github.com/user-attachments/assets/3d25e9a3-f7b9-4760-8b9a-6de1e5a19cad
 
 [![How OpenCompany Works](docs/diagrams/how-it-works.svg)](https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/docs/diagrams/how-it-works.svg)
 
-1. **Hire.** Drop an AI Employee onto the canvas. That is the lead.
-2. **Build the team.** Connect a few specialist agents to it and give each one the tools for its part of the job: email, browser, code, messaging, payments, and so on.
-3. **Start.** The team runs in the background and wakes up when something happens: a new email, a customer message, a scheduled time.
-4. **Review.** Watch it work on the canvas, read what it remembers, and change how it does things by editing its skills in plain text.
+1. **Hire.** Describe the job in plain words on the Home screen, or start from a ready-made bundle in Settings > Plugins. OpenCompany drafts the new employee's setup (the apps it uses, when it works, what it checks with you first); adjust it and press Hire. Or switch to Dev mode and drop an AI Employee onto the canvas.
+2. **Build the team.** In Dev mode, connect a few specialist agents to it and give each one the tools for its part of the job: email, browser, code, messaging, payments, and so on.
+3. **Start.** The team runs in the background and wakes up when something happens: a new email, a customer message, a scheduled time. If you ask it to, it shows you each reply to approve before it goes out.
+4. **Review.** Watch it work from its card on Home or on the canvas, open its Workspace to see the things it has made, read what it remembers, and change how it does things by editing its skills in plain text.
 
 [![Default workflows that ship with OpenCompany](docs/diagrams/default-workflows.svg)](https://raw.githubusercontent.com/zeenie-ai/OpenCompany/main/docs/diagrams/default-workflows.svg)
 
@@ -110,17 +123,18 @@ Runs payment operations through Stripe and reacts the moment a payment event hap
 - **They pick up where they left off.** Every new message, task, or scheduled run continues the same conversation instead of starting from zero. When the conversation gets long, the employee writes itself a summary and carries on from it.
 - **They add tools when they need them.** Mid-task, an employee can look at its own team, add a tool, attach a skill, or bring in another specialist, and the change stays.
 - **They check their own work.** The lead reviews every result from the team and sends it back if it is not right, before it ever reaches you.
-- **You coach them.** Skills are short plain-text playbooks. Edit one and the employee follows it on its next turn.
+- **You coach them.** Skills are short plain-text playbooks. Edit one and the employee follows it on its next turn. Settings > Skills keeps your library of them, and every new hire starts with the ones you have switched on.
 
 Nothing here is a black box. What an employee learns lives in its memory, its notes, its skills, and the pieces on its canvas, and you can read or change all of it. OpenCompany never retrains a model.
 
 ## What Is in the Box
 
-- **Connections** to Gmail, Google Calendar, Drive, Sheets, Tasks, Contacts, Microsoft 365, any email account, WhatsApp, WhatsApp Business, Telegram, Discord, X, Stripe, GitHub, Vercel, Cloudflare, Google Cloud, your Android phone, a browser, web search, scrapers, and a knowledge base: 148 tools in all.
-- **Models** from OpenAI, Anthropic, Google, xAI, DeepSeek, Kimi, Mistral, Groq, Cerebras, Sarvam, and OpenRouter, or run local models with Ollama and LM Studio for free.
+- **Connections** to Gmail, Google Calendar, Drive, Sheets, Tasks, Contacts, Microsoft 365, any email account, WhatsApp, WhatsApp Business, Telegram, Discord, X, Stripe, GitHub, Vercel, Cloudflare, Google Cloud, your Android phone, a browser, web search, scrapers, and a knowledge base: 140+ tools in all.
+- **Models** from OpenAI, Anthropic, Google, xAI, DeepSeek, Kimi, Mistral, Groq, Cerebras, Sarvam, and OpenRouter, or run local models for free with Ollama, LM Studio, or any OpenAI-compatible server such as llama.cpp or vLLM.
+- **A live browser workspace** in Home and Dev mode: watch an employee browse, take control to sign in or help, then hand control back. It opens your installed Chrome, Edge or Chromium in a dedicated OpenCompany profile, keeping sessions between tasks without using your personal profile. [Browser runtime](docs-internal/browser.md) | [Workspace interface](docs-internal/browser_workspace.md).
 - **Speech and translation**, so employees can listen, talk, and work in other languages.
 - **78 skills** that ship ready to use, and a place to drop your own.
-- **Built to keep running.** Employees survive restarts, pause and resume from the canvas, and catch up on missed schedules. Your API keys are stored encrypted on your machine. Add a login for shared or cloud use; one command deploys to Google Cloud.
+- **Built to keep running.** Employees survive restarts, pause and resume from Home or the canvas, and catch up on missed schedules. Your API keys are stored encrypted on your machine. Add a login for shared or cloud use; one command deploys to Google Cloud.
 - **A canvas you will want to look at**, with 12 visual themes.
 
 ## For Developers
@@ -138,7 +152,7 @@ Adding a tool, a model provider, a skill, or an integration is one plugin folder
 
 Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the fork/branch/PR workflow, the repository map, and recipes for adding a node, LLM provider, or skill.
 
-One note on scope: connector and provider lists are kept deliberately narrow. The Apify node runs any actor through its `custom` option, the TikHub node calls any of its endpoints through `call`, and agents reach any OpenAI-compatible endpoint through the existing provider path — so a new first-class preset needs a reason beyond "my service could be in the dropdown too."
+One note on scope: connector and provider lists are kept deliberately narrow. The Apify node runs any actor through its `custom` option, the TikHub node calls any of its endpoints through `call`, and agents reach any OpenAI-compatible server once it is saved as a named endpoint under Credentials — so a new first-class preset needs a reason beyond "my service could be in the dropdown too."
 
 ## Community
 

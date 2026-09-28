@@ -11,7 +11,8 @@ Post-migration (2026-04-14). Single source of truth for the current frontend.
 - **shadcn/ui** via the canonical CLI (`bun x shadcn@latest add` — bun's `npx` equivalent; npm is not part of the toolchain). All primitives live under [client/src/components/ui/](../client/src/components/ui/) as first-class repo files we can edit.
 - **Radix UI** is the primitive engine shadcn uses (Dialog, Accordion, Select, Switch, Tabs, Tooltip, Popover, Dropdown, AlertDialog, Collapsible, Progress, Slider, Label, Checkbox).
 - **Forms**: react-hook-form + zod via shadcn's `Form` composition. Per-form schemas live colocated with the form (e.g. `credentials/panels/schemas/email.ts`); tiny forms use inline zod.
-- **Toasts**: `sonner` imported directly at call-sites. The shadcn `<Toaster />` wrapper (at [components/ui/sonner.tsx](../client/src/components/ui/sonner.tsx)) is patched to read our `ThemeContext` instead of `next-themes`.
+- **Toasts**: `sonner` imported directly at call-sites. The shadcn `<Toaster />` wrapper (at [components/ui/sonner.tsx](../client/src/components/ui/sonner.tsx)) is patched to read our `ThemeContext` instead of `next-themes`. Normal mode has a second toaster, one bottom-centre pill at a time (`pillToast()` in [features/home/ui/pillToast.tsx](../client/src/features/home/ui/pillToast.tsx)).
+- **Two screens**: Normal mode (Home, [features/home/](../client/src/features/home/)) and Dev mode (the workflow editor, `Dashboard.tsx`), both lazy chunks switched by the app shell in [app/](../client/src/app/). See [Normal Mode](./normal_mode.md).
 - **State**: TanStack Query for server state, Zustand for UI-only state, plain `useState`/`useReducer` for local. No global redux store.
 - **WebSocket realtime** via `WebSocketContext`; chat/node/workflow events are push-based, never polled.
 - **antd is gone.** `styled-components` is gone. `@ant-design/icons` is gone. Icons come from `lucide-react`.
@@ -50,10 +51,25 @@ Not present (intentionally): antd, `@ant-design/icons`, styled-components, emoti
 
 ```
 client/src/
-├── App.tsx                  # Root: syncs ThemeContext -> <html data-theme>/class, mounts Toaster
-├── main.tsx                 # Providers (QueryClient, Theme, Auth, WebSocket) + renders <App/>
-├── Dashboard.tsx            # Canvas workspace (React Flow + top-level panels)
+├── App.tsx                  # Root: SVG filter defs, ProtectedRoute -> AppShell, both Toasters
+├── main.tsx                 # Providers (QueryClient, ShellThemeProvider, Auth, WebSocket) + renders <App/>
+├── Dashboard.tsx            # Dev mode: canvas workspace (React Flow + top-level panels), a lazy chunk
 ├── ParameterPanel.tsx       # Per-node inspector (Phase 6 will schema-drive this)
+│
+├── app/                     # The shell around both screens
+│   ├── AppShell.tsx         # .app-frame, boot effects, Settings / Credentials dialogs
+│   ├── ShellModeSwitch.tsx  # Lazy Home / editor screens + preloadHome / preloadEditor
+│   ├── ShellThemeProvider.tsx # ThemeProvider with baseOnly while Home shows
+│   ├── useShellActions.ts   # enterNormal / enterDev (the only way to switch)
+│   ├── shellTransition.ts   # The fade-out / swap choreography
+│   └── useModeShortcut.ts / useCurrentWorkflowSync.ts / usePageActivitySync.ts / useUIDefaultsOnce.ts
+│
+├── features/home/           # Normal mode (see docs-internal/normal_mode.md)
+│   ├── HomeShell.tsx        # Sidebar + header + current view + Workspace dock + Settings + orb stage
+│   ├── sidebar/ header/ hire/ employee/ settings/ approvals/ data/ state/ ui/
+│   ├── workspace/           # Home Workspace dock; shared live Browser tab, lazy Canvas tab
+│   ├── genui/               # Setup-screen pipeline; only its index.ts is importable (ESLint)
+│   └── orb/                 # orb.ts (state + lifecycle), orbEngine.ts (three.js, own chunk)
 │
 ├── index.css                # Tailwind v4 @import + @theme inline tokens + RF/scrollbar chrome
 │
@@ -88,10 +104,12 @@ client/src/
 │   │   ├── types.ts                # ProviderConfig, FieldDef, PanelKind, etc.
 │   │   ├── useCredentialPanel.ts   # State hook (useState + form shim)
 │   │   ├── panels/
-│   │   │   ├── ApiKeyPanel.tsx           # Generic api-key providers
+│   │   │   ├── ApiKeyPanel.tsx           # Generic api-key providers (+ the add form for a provider that holds several endpoints)
+│   │   │   ├── EndpointList.tsx          # Saved named OpenAI-compatible endpoints: rows + Refresh / Remove (stateless)
 │   │   │   ├── OAuthPanel.tsx            # Twitter / Google / Telegram
 │   │   │   ├── QrPairingPanel.tsx        # WhatsApp / Android
 │   │   │   ├── EmailPanel.tsx            # IMAP/SMTP (RHF + zod)
+│   │   │   ├── BrowserProfilesPanel.tsx  # Web browser login profiles: list / add / delete, session-file import
 │   │   │   └── schemas/email.ts          # Email zod schema w/ superRefine
 │   │   ├── sections/
 │   │   │   ├── ApiUsageSection.tsx       # Per-service usage/cost
@@ -123,13 +141,15 @@ client/src/
 │   │   └── steps/                  # WelcomeStep / HowItWorksStep / ConnectAIStep / TryItStep
 │   │
 │   ├── icons/                      # AI provider icons (SVG data URIs)
+│   ├── brand/Logo.tsx              # OcMark / OcWordmark / OcLogo (inline SVG, --lg-* palette, intro + pulse)
+│   ├── shell/ModeToggle.tsx        # The Normal / Dev switch (editor toolbar + Home header)
 │   ├── auth/                       # Login page + protected route
 │   ├── SquareNode.tsx, StartNode.tsx, TriggerNode.tsx, AIAgentNode.tsx, ToolkitNode.tsx, TeamMonitorNode.tsx
 │   │                               # React Flow nodes with lucide icons
 │   └── APIKeyValidator.tsx         # Shadcn Input + Button + Tooltip composition
 │
 ├── contexts/
-│   ├── ThemeContext.tsx            # isDarkMode + toggleTheme
+│   ├── ThemeContext.tsx            # theme (on the page) / chosenTheme, setTheme with the circular reveal, baseOnly
 │   ├── AuthContext.tsx             # JWT user state
 │   └── WebSocketContext.tsx        # Single source of truth for WS state + handlers
 │
@@ -145,10 +165,12 @@ client/src/
 │   ├── useOnboarding.ts            # Reads via useUserSettingsQuery; writes via mutation
 │   ├── useParameterPanel.ts        # Thin orchestrator over useNodeParamsQuery + save mutation
 │   ├── useWhatsApp.ts             # WS-based WhatsApp ops (Android ops go via useWebSocket directly)
+│   ├── useUserSkills.ts / useFolderSkills.ts # Skill library + skill-folder queries (Home Skills, Master Skill editor)
+│   ├── useCanvasBoard.ts           # One Canvas board's query + remove / clear (every Canvas host)
 │   └── useCopyPaste.ts / useRename.ts
 │
 ├── store/
-│   ├── useAppStore.ts              # UI state (sidebar, palette, pro mode, persisted)
+│   ├── useAppStore.ts              # UI state (sidebar, palette, shellMode, pro mode, persisted)
 │   └── useCredentialRegistry.ts    # UI-only: selectedId + paletteOpen + query
 │
 ├── styles/
@@ -180,12 +202,21 @@ client/src/
 │   ├── connectionConfig.ts         # WS reconnect + auth-bootstrap backoff constants
 │   ├── workflowOps.ts              # applyOperations for backend workflow-ops batches
 │   ├── canvasLock.ts               # Server-owned can_edit capability -> canvas lock
+│   ├── credentialProviderId.ts     # Which catalogue provider a canvas node's status dot reads (plugin credential ids pass through; legacy names mapped)
+│   ├── dynamicOptions.ts           # nextDynamicOptionValue: move a loadOptionsDependsOn field when its parent changes
 │   ├── sound.ts                    # WebAudio sound engine (10 packs)
+│   ├── motion.ts                   # The one place Web Animations start: --dur-* / --ease-* tokens,
+│   │                               # 1 ms under reduced motion or a hidden page, no loops then
+│   ├── pageActivity.ts / useReducedMotion.ts # Whether anyone can see the page; the motion preference
+│   ├── debouncedInvalidate.ts      # Trailing-edge query invalidation (broadcast bursts)
 │   └── utils.ts                    # cn() = clsx + tailwind-merge (shadcn convention)
 ├── schemas/workflowSchema.ts       # Structural pre-flight for workflow export (backend is the schema authority)
 ├── stores/
 │   ├── nodeStatusStore.ts          # Per-workflow node statuses (slice-subscribed Zustand)
-│   └── canvasDockStore.ts          # Docked Canvas sidebar state
+│   ├── canvasDockStore.ts          # Docked Canvas sidebar state
+│   ├── workflowControlStore.ts     # Mirror of workflow control statuses for Home (written from WebSocketContext)
+│   ├── shellDialogsStore.ts        # Settings / Credentials dialog flags (lifted out of Dashboard)
+│   └── workflowSettingsStore.ts    # Editor settings (auto-save etc.) read by the shell
 ├── test/                           # Vitest setup.ts, builders.ts, providers.tsx, README.md
 ├── themes/                         # base.css + animations.css + 12 per-theme CSS files
 ├── types/                          # INodeProperties, NodeTypes, etc.
@@ -352,7 +383,7 @@ components/credentials/catalogueAdapter.ts  (hydrate JSON -> ProviderConfig)
             ▼
 components/credentials/CredentialsModal.tsx
    ├─ CredentialsPalette.tsx   (cmdk + fuzzysort + GroupedVirtuoso)
-   └─ PanelRenderer.tsx        (lazy: ApiKey/OAuth/QrPairing/Email)
+   └─ PanelRenderer.tsx        (lazy: ApiKey/OAuth/QrPairing/Email/BrowserProfiles)
 ```
 
 **State rules:**
@@ -468,6 +499,14 @@ See [media_transport.md](./media_transport.md).
   (archived; it describes the retired pre-RFC-0002 markdown memory model).
 - **`currentWorkflowId` lives in `useAppStore` only.** Non-React listeners (WS handlers) read it via `useAppStore.getState().currentWorkflow?.id` -- the documented Zustand escape hatch (https://github.com/pmndrs/zustand#read-state-without-subscription). The previous `currentWorkflowIdRef` mirror inside WebSocketContext was a one-render-late copy that misrouted broadcasts during workflow switches. The push to `nodeStatusStore.setCurrentWorkflowId` is driven from a single `useEffect` in `Dashboard.tsx`.
 
+## Browser workspace live view
+
+Home and Dev share [WorkspaceTabs](../client/src/components/workspace/WorkspaceTabs.tsx) and [BrowserWorkspace](../client/src/components/browser/BrowserWorkspace.tsx). Browser nodes are discovered through the backend `isBrowserPanel` capability; viewing attaches to a saved workflow/node without launching Chrome. The runtime defaults to installed Chrome/Edge/Chromium with a dedicated profile rendered headless inside the workspace; a separate desktop window and testing-browser mode are explicit server settings. The Browser tab supports server-authorized Take control / Hand back for navigation, mouse, keyboard, paste and login. The Browser node's parameter panel shows the same viewer above its settings. When an agent in the open workflow calls `request_user`, the `browser_updated` case in `WebSocketContext` opens the Dev dock on its Browser tab (`canvasDockStore.showBrowser`); Home shows Needs you from the employee summary's `browser_request`. Canvas retains its renderer; Android remains an explanatory placeholder.
+
+The viewer uses a separate authenticated same-origin `/ws/browser` socket, not the general `WebSocketContext` frame stream. Binary JPEG envelopes are decoded sequentially with a two-frame local bound; consumed/skipped frames are acknowledged. Canvas dimensions change only when image dimensions change, and input coordinates use the metadata of the frame actually painted. Hidden, disposed or obsolete frames cannot restore a stale picture. Blur, pointer cancellation, hiding and unmount release user control; the server owns the release barrier and lease checks.
+
+`?browserStreamDebug=1` enables numeric first-frame/decode/draw summaries without recording page or input payloads. The [Browser workspace contract](./browser_workspace.md) describes identity, visibility and interaction; [Browser](./browser.md) owns runtime installation, profiles, security and capture/control internals. Tests live under `components/browser/__tests__`, with Home and Dev dock integration tests beside their hosts.
+
 ## Ownership boundary: TanStack Query vs Zustand vs WebSocketContext
 
 This is the rule that keeps the data layer schema-driven instead of imperatively glued together.
@@ -475,7 +514,7 @@ This is the rule that keeps the data layer schema-driven instead of imperatively
 | Owns | What goes here | Examples |
 |---|---|---|
 | **TanStack Query** | Anything the server has authoritative state for. List / single-record / settings reads. Mutations that change server state. | `useWorkflowsQuery`, `useNodeParamsQuery`, `useUserSettingsQuery`, `useCatalogueQuery`, `useSaveWorkflowMutation`, `useSaveNodeParamsMutation`, `useSaveUserSettingsMutation` |
-| **Zustand** | UI-only state that survives navigation. The active edit buffer for the current workflow. Sidebar/panel visibility flags. | `useAppStore.currentWorkflow` (mutable buffer), `sidebarVisible`, `proMode`, `renamingNodeId`, `useCredentialRegistry.selectedId` |
+| **Zustand** | UI-only state that survives navigation. The active edit buffer for the current workflow. Sidebar/panel visibility flags. | `useAppStore.currentWorkflow` (mutable buffer), `sidebarVisible`, `shellMode`, `proMode`, `renamingNodeId`, `useCredentialRegistry.selectedId`, Home's `useHomeStore` |
 | **`useState` / `useReducer`** | Per-component transient state. Form-field drafts. Hover/focus. | text-input drafts, dropdown-open, inline-edit toggles |
 | **`WebSocketContext`** | Raw WS connection, `sendRequest`, push-only broadcast slices (workflow progress, android/whatsapp/twitter status, console/terminal logs). The provider value is `useMemo`'d so unrelated state changes do not re-render every consumer. Exposes `isConnected` (socket open) and `isReady` (open + pending-send queue drained); gate catalogue/spec queries on `isReady`. `drainPendingSends(ws)` runs synchronously, then `setIsReady(true)` fires immediately; terminal/chat/console history restore is fire-and-forget in the background (Wave 32 removed the init-burst gate and the hardcoded `probeApiKey` loop). Catalogue invalidation routes through `invalidateCatalogue(queryClient)` ([`hooks/useCatalogueQuery.ts`](../client/src/hooks/useCatalogueQuery.ts)) which debounces the refetch on a 300 ms trailing edge, so an oauth burst or multi-service reconnect collapses to one refetch instead of N. | `androidStatus`, `consoleLogs`, broadcast streams |
 | **`stores/nodeStatusStore.ts`** (Zustand) | Per-workflow node-execution statuses -- moved out of WebSocketContext so a status tick does not cascade through the React tree. `useNodeStatus(id)` is a slice selector; only the affected node's consumers re-render. Mirror this pattern for any new high-frequency push state. | `allStatuses[workflowId][nodeId]`, `currentWorkflowId` |
@@ -516,6 +555,7 @@ Defined on `INodeTypeDescription.uiHints` ([client/src/types/INodeProperties.ts]
 | `isProcessManagerPanel` | `MiddleSection` | Render live managed-process inspection and controls |
 | `isGalleryPanel` | `MiddleSection` | Render the workspace file browser (breadcrumbs, grid/list, search, preview, upload, drag-to-parameter) instead of the plain params list. Declared by `gallery`, which pairs it with `hideInputSection` but **keeps** the Output section — unlike `processManager` it produces output worth seeing and dragging. The panel writes back to the node's own `path` / `selection` params, so what you browse is what the node emits. |
 | `isCanvasPanel` | `MiddleSection`, `CanvasDock` | Render the pushed-content Canvas board instead of the plain params list. Declared by `canvas`. Double duty: the docked canvas sidebar also uses this flag to FIND Canvas nodes in the graph (`resolveNodeDescription(type)?.uiHints?.isCanvasPanel`) — never the type string. Pairs with an explicit `isConfigNode: False` because the `tool` group would auto-derive `True` while the node's `input-main` is real dataflow. See [canvas_node.md](./canvas_node.md). |
+| `isBrowserPanel` | `MiddleSection`, `CanvasDock` (also the server's `graph_index`) | Show the node's live browser (`BrowserWorkspace`) above its parameters. Declared by `browser`. The Dev dock and Home's employee summary also use it to FIND Browser nodes in a graph, never the type string. See [browser_workspace.md](./browser_workspace.md). |
 | `showLocationPanel` | `LocationParameterPanel` | Special-case panel for nodes with map preview |
 | `isChatTrigger` | `ConsolePanel` | This node is a chat-message target |
 | `isConsoleSink` | `ConsolePanel` | This node consumes console output (filter source) |

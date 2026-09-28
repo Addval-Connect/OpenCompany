@@ -172,11 +172,18 @@ The backend spawns exactly one JavaScript runtime, bun, and resolves it in one
 place: `core/js_runtime.py` (`OPENCOMPANY_BUN_BIN`, else `bun` on PATH). `uv`
 is resolved through `OPENCOMPANY_UV_BIN` / `shutil.which`. So the bundled
 runtime dirs prepended to PATH (plus the two overrides) satisfy the JS
-executor sidecar (`nodes/code/_runtime.py`, `[bun, dist/index.js]`), the five
+executor sidecar (`nodes/code/_runtime.py`, `[bun, dist/index.js]`), the
 plugin installers that `bun add` into the shared `<DATA_DIR>/packages/` tree
-(claude-code, edgymeow, agent-browser, cf, vercel — `core.js_runtime.add_package`),
+(claude-code, edgymeow, cf, vercel — `core.js_runtime.add_package`),
 the codex provider (`bun x @openai/codex` when no system `codex` exists), and
-`uv tool install browser-harness`. `BUN_INSTALL` / `BUN_INSTALL_CACHE_DIR`
+the Browser runtime's pinned `uv tool install browser-use==<pin>` installation.
+The Browser installer respects `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR`; otherwise it
+uses `<DATA_DIR>/packages/browser-use/{tools,bin}`. OpenCompany supervises installed Chrome/Edge/Chromium in a dedicated profile,
+rendering headless inside the workspace by default. `BROWSER_FAMILY=chrome` selects
+Chrome by name through dynamic discovery; `BROWSER_CHROME_PATH` is an optional override;
+`BROWSER_HEADLESS=false` additionally opens a desktop window. Chrome for Testing is downloaded only with
+`BROWSER_RUNTIME=testing`, never as a fallback when no installed browser exists. See [browser.md](./browser.md) and
+[browser_workspace.md](./browser_workspace.md). `BUN_INSTALL` / `BUN_INSTALL_CACHE_DIR`
 keep bun's own cache and global state under the app's data dir rather than a
 dev install's `~/.bun`. There is no Node in the bundle and nothing looks for
 one — `tests/core_config/test_js_runtime.py::test_backend_never_spawns_node_or_npm`

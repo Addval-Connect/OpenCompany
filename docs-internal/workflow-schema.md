@@ -68,7 +68,7 @@ A workflow JSON document contains:
 
 ## Supported Node Types
 
-> Authoritative count = the plugin registry: one self-contained folder (or file) per node under `server/nodes/<group>/` — 148 node types at time of writing (live total: `len(services.node_registry.NODE_METADATA)` after `import nodes`, or `uv run pytest --collect-only`); 34 palette groups registered in `server/nodes/groups.py`. A bare `server/nodes/**/__init__.py` glob overcounts because it also matches the group packages. The breakdown below is illustrative and grouped by category; do not rely on a hand-maintained total.
+> Authoritative count = the plugin registry: one self-contained folder (or file) per node under `server/nodes/<group>/` — 140+ node types (live total: `len(services.node_registry.NODE_METADATA)` after `import nodes`, or `uv run pytest --collect-only`); 34 palette groups registered in `server/nodes/groups.py`. A bare `server/nodes/**/__init__.py` glob overcounts because it also matches the group packages. The breakdown below is illustrative and grouped by category; do not rely on a hand-maintained total.
 
 > The canonical list of nodes lives in the backend plugin tree at `server/nodes/<category>/<node>/__init__.py`; this section is a human-readable index.
 
@@ -84,18 +84,20 @@ A workflow JSON document contains:
 - `timer` - Delay/wait before continuing (seconds, minutes, hours)
 - `cronScheduler` - Recurring scheduled execution (seconds to months, timezone support)
 
-### AI Chat Model Nodes (11 nodes)
+### AI Chat Model Nodes (13 nodes)
 - `openaiChatModel` - OpenAI GPT 4.x/5.x + reasoning models (o1/o3/o4 series)
 - `anthropicChatModel` - Anthropic Claude 4.x with extended thinking
 - `geminiChatModel` - Google Gemini 2.5/3 with thinking support
 - `openrouterChatModel` - OpenRouter unified API (200+ models)
 - `groqChatModel` - Groq ultra-fast inference (Llama, Qwen3, GPT-OSS)
 - `cerebrasChatModel` - Cerebras custom AI hardware (Llama, Qwen)
-- `deepseekChatModel` - DeepSeek V4.1 (deepseek-flash / deepseek-v4.1-flash / deepseek-v4-pro; deepseek-v4-flash is a retired alias served by V4.1-Flash, chat/reasoner discontinued)
-- `kimiChatModel` - Moonshot Kimi K2.6 / K2.5 / K2.7-code
+- `deepseekChatModel` - DeepSeek V4 (deepseek-v4.1-flash, the default / deepseek-v4-pro / deepseek-v4-flash)
+- `kimiChatModel` - Moonshot Kimi K3 (the default) / K2.6 / K2.7-code
 - `mistralChatModel` - Mistral Large / Small / Codestral
 - `ollamaChatModel` - Local Ollama server (OpenAI-compat via `{provider}_proxy` URL)
 - `lmstudioChatModel` - Local LM Studio server (OpenAI-compat via `{provider}_proxy` URL)
+- `sarvamChatModel` - Sarvam AI, Indic-first (OpenAI-compat; ships no model-list route, so `supports_model_listing: false`)
+- `openaiCompatibleChatModel` - Any OpenAI-compatible server saved as a named endpoint (llama.cpp, vLLM, a LiteLLM proxy); its `endpoint` field picks one (RFC-0003)
 
 ### AI Agents and Memory (3 nodes)
 - `aiAgent` - Tool-calling agent loop

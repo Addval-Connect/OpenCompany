@@ -37,11 +37,12 @@ import CanvasPanel from './CanvasPanel';
 import ContextPanel from './ContextPanel';
 import MemoryToolPanel from './MemoryToolPanel';
 import DataPanel from './DataPanel';
+import BrowserWorkspace from '../browser/BrowserWorkspace';
 import { useAppStore } from '../../store/useAppStore';
 import { useNodeStatus, useWebSocket, CompactionStats } from '../../contexts/WebSocketContext';
 import { useUserSettingsQuery } from '../../hooks/useUserSettingsQuery';
 import { nodeParamsQueryKey, type NodeParametersResponse } from '../../hooks/useNodeParamsQuery';
-import { folderSkillsQueryKey, type AvailableSkill } from '../../hooks/useFolderSkills';
+import { fetchFolderSkills, folderSkillsQueryKey, type AvailableSkill } from '../../hooks/useFolderSkills';
 import { queryKeys, STALE_TIME } from '../../lib/queryConfig';
 import { INodeTypeDescription, INodeProperties } from '../../types/INodeProperties';
 import { NodeIcon } from '../../assets/icons';
@@ -213,6 +214,7 @@ const MiddleSection: React.FC<MiddleSectionProps> = ({
   const isProcessManagerNode = hints.isProcessManagerPanel === true;
   const isGalleryNode = hints.isGalleryPanel === true;
   const isCanvasNode = hints.isCanvasPanel === true;
+  const isBrowserNode = hints.isBrowserPanel === true;
   const isAgentWithSkills = hints.hasSkills === true;
 
   const { data: userSettings } = useUserSettingsQuery();
@@ -367,28 +369,12 @@ const MiddleSection: React.FC<MiddleSectionProps> = ({
     return Array.from(folders);
   }, [masterSkillEdgeSources, masterSkillParams]);
 
+  // The same fetcher as useFolderSkills: one query function per cache key,
+  // so the editor and this list never disagree on a folder's shape.
   const folderSkillsQueries = useQueries({
     queries: masterSkillFolders.map((folder) => ({
       queryKey: folderSkillsQueryKey(folder),
-      queryFn: async (): Promise<AvailableSkill[]> => {
-        const response = await sendRequest<{
-          success: boolean;
-          skills?: Array<{
-            name: string;
-            description: string;
-            metadata?: Record<string, any>;
-          }>;
-        }>('scan_skill_folder', { folder });
-        if (!response?.success || !response.skills) return [];
-        return response.skills.map((s) => ({
-          type: s.name,
-          skillName: s.name,
-          displayName: s.name,
-          icon: s.metadata?.icon ?? '',
-          color: s.metadata?.color ?? 'var(--node-agent)',
-          description: s.description ?? '',
-        }));
-      },
+      queryFn: (): Promise<AvailableSkill[]> => fetchFolderSkills(sendRequest, folder),
       staleTime: STALE_TIME.MEDIUM,
       enabled: !!folder,
     })),
@@ -632,6 +618,12 @@ const MiddleSection: React.FC<MiddleSectionProps> = ({
               : 'block flex-1 overflow-y-auto',
           )}
         >
+          {/* The node's live browser, above its settings. */}
+          {isBrowserNode && (
+            <div className="mb-4 h-90 overflow-hidden rounded-md border border-border-default">
+              <BrowserWorkspace workflowId={currentWorkflow?.id} nodes={[{ node_id: nodeId, label: 'Browser' }]} />
+            </div>
+          )}
           {/* Parameters Container */}
           <div
             className={cn(

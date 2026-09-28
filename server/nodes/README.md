@@ -145,7 +145,7 @@ tool/        — calculatorTool / currentTimeTool / writeTodos / taskManager
 utility/     — console / httpRequest / webhookResponse / processManager / team_monitor
 workflow/    — start
 skill/       — simpleMemory / masterSkill
-browser/     — browser (agent-browser CLI)
+browser/     — browser (installed Chrome/Edge/Chromium + browser-use CLI; Chrome for Testing opt-in, profiles, live view and user takeover)
 stripe/      — Stripe (CLI passthrough action + signed-webhook trigger)
 vercel/      — Vercel (CLI deploy / inspect / list / custom passthrough)
 github/      — GitHub (gh CLI: clone / PRs / issues / custom; palette group "vcs")
@@ -162,6 +162,8 @@ translate/   — Provider-abstracted translate / transliterate / detect_language
 ```
 
 ---
+
+For Browser plugin runtime, profile and takeover contracts, see [Browser](../../docs-internal/browser.md). The shared Home/Dev interface is documented in [Browser workspace](../../docs-internal/browser_workspace.md).
 
 ## Shared helpers (one per domain)
 
@@ -447,7 +449,7 @@ Full reference: [docs-internal/plugin_system.md → "Self-contained plugin folde
   types to `Output` instead.
 - **Never name a Params field `model` or `api_key` on a node that also has
   a `provider` field.** An effect in
-  [`ParameterRenderer.tsx:866`](../../client/src/components/ParameterRenderer.tsx#L866)
+  [`ParameterRenderer.tsx:898`](../../client/src/components/ParameterRenderer.tsx#L898)
   keys on those two literal names: when a sibling `provider` field is
   present it overwrites `model` with the *chat-model* list and clears
   `api_key`. It never checks that the provider is an LLM provider, so

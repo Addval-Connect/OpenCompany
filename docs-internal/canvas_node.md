@@ -3,10 +3,16 @@
 The `canvas` node is the platform's viewing surface — the Claude/ChatGPT-Canvas
 analog. Agents and workflow runs push content onto a per-node **board**
 (workspace file references, external URLs, small markdown notes), and the
-board renders in two hosts that share one renderer: the node's full-height
-parameter panel, and a **docked, resizable right-side sidebar** that stays
+board renders in three hosts that share one renderer: the node's full-height
+parameter panel, a **docked, resizable right-side sidebar** that stays
 open while working on the graph, auto-opens when content is pushed, and
-doubles as the click-to-preview surface for workspace files.
+doubles as the click-to-preview surface for workspace files, and the Canvas
+tab of Home's Workspace dock.
+
+The Dev dock now shares Home's Browser / Canvas / Android workspace tabs.
+Canvas retains its board and file-preview behavior; live Chrome sessions use
+the separate [Browser workspace](./browser_workspace.md) surface. URL items
+on a Canvas still render as sandboxed iframe previews, not browser sessions.
 
 Everything here composes existing patterns; the doc records which one each
 piece copies and the few places where a *new* decision had to be made (the
@@ -229,7 +235,7 @@ Client-side types + query keys live in
 `canvasBoardQueryKey(workflowId ?? 'unsaved', nodeId)` (todoQuery shape),
 prefix `['canvasBoard']` for broadcast-driven invalidation.
 
-## Frontend — two hosts, one renderer
+## Frontend — three hosts, one renderer
 
 ### Hosts
 
@@ -253,6 +259,13 @@ prefix `['canvasBoard']` for broadcast-driven invalidation.
   string), ephemeral "Preview" badge + Back, close. TopToolbar carries the
   toggle button (Monitor icon, `aria-pressed`, action-tools tokens),
   reading the dock store directly — the state is not Dashboard's to thread.
+- **[`WorkspaceCanvas.tsx`](../client/src/features/home/workspace/WorkspaceCanvas.tsx)**
+  — the Canvas tab of Normal mode's Workspace dock
+  ([normal_mode.md](./normal_mode.md#the-workspace)). It shows one
+  employee's board, named by the employee summary's `canvas_node_id`,
+  loads lazily so the renderer's viewers stay out of Home's chunk, and
+  passes an owner-facing empty hint. Hires get a Canvas node from the
+  Hire builder.
 
 ### Dock state — [`stores/canvasDockStore.ts`](../client/src/stores/canvasDockStore.ts)
 
@@ -287,11 +300,13 @@ back; navigating onto the last item resumes following). Arrow/Home/End keys
 work on the focused `role="group"` only — no document-level listeners,
 which would fight React Flow node nudging.
 
-**Follow-latest** (the browser-automation live view): when the active item
+**Follow-latest** (workspace image polling): when the active item
 is a workspace image, a Switch enables a visibility-gated 5 s poll of the
 existing `list_workspace_files` handler on the image's folder, rendering the
 newest image entry in place — zero new backend. Persisted as the dock's
-`followMode` pref.
+`followMode` pref. This is separate from the native Chrome stream in the
+[Browser workspace](./browser_workspace.md), which supports live input and
+explicit takeover without polling screenshot files.
 
 Renderer dispatch is a pure function
 ([`canvasKinds.ts`](../client/src/components/parameterPanel/canvas/canvasKinds.ts)),
@@ -356,14 +371,14 @@ truncation), `browserHarness` an absolute path under
 The shared helper lands the bytes in the workflow workspace via
 `write_media(kind="image")` so a screenshot becomes a ~400 B `FileRef`:
 
-- `persist_screenshot_from_payload(data, ctx, fmt)` (the `browser` node's
-  `screenshot` op): probes the known inline-base64 keys (only `"base64"` is
-  evidenced in-repo; the rest are tolerated probes) then saved-file-path
-  keys, returns `(ref, consumed_key)` so the caller drops exactly the bulky
-  field from the payload.
-- `persist_screenshot_file(path, ctx, contained_under)` (the harness
-  `screenshot` op): reads **only** files contained under the harness runtime
-  dir — printed process output is not a licence to read arbitrary files.
+- `persist_screenshot_file(path, ctx, contained_under)` is the current native
+  `browser` screenshot path. The CLI writes a temporary PNG in its profile's
+  temporary directory; the node copies it into the workspace, returns it in
+  `BrowserOutput.screenshot`, then removes the temporary file. Reads must stay
+  within that supplied directory.
+- `persist_screenshot_from_payload(data, ctx, fmt)` remains a legacy payload
+  helper with tests for inline-base64 and saved-file-path shapes. It is not
+  the current native node's screenshot dispatch path.
 
 **Tolerance is the contract**: an unrecognized payload shape, a missing
 workspace, or a write failure logs one warning and returns `None`; the
@@ -379,7 +394,7 @@ browser operation itself never breaks over persistence. Sanity bounds
 | `server/config/node_allowlist.json` | `"canvas"` in `enabled_nodes` | Normal-mode palette visibility (positive list) |
 | `server/tests/test_node_spec.py` | `"isCanvasPanel"` in the uiHints `known` set | The test's own failure message instructs this |
 | `server/services/media/preview.py` + `server/tests/routers/test_workspace.py` | `INLINE_EXACT` / `"pdf"` | The PDF surface; `NEVER_INLINE` untouched |
-| `server/nodes/browser/{browser,browser_harness}/__init__.py` | screenshot post-process | Plugin-folder edits of the browser plugins |
+| `server/nodes/browser/browser/__init__.py` | screenshot post-process | Current native Browser plugin; the separate harness plugin is retired |
 | `client/src/{types/INodeProperties.ts, types/workspaceFiles.ts, components/parameterPanel/MiddleSection.tsx, contexts/WebSocketContext.tsx, Dashboard.tsx, components/ui/TopToolbar.tsx, components/ui/ConsolePanel.tsx, components/parameterPanel/gallery/FilePreviewDialog.tsx}` | hint type, `'pdf'` PreviewKind, panel dispatch, `canvas_updated` case, dock mount, toggle, `usePanelResize` extraction, click-to-preview | The standard new-panel checklist + the dock integration |
 
 Notably **not** edited: `routers/websocket.py`, `main.py`,

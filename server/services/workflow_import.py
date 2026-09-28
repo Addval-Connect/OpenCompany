@@ -37,9 +37,9 @@ from core.logging import get_logger
 from services.node_registry import get_node_class
 from services.workflow_migrations import (
     normalize_legacy_android_toolkit,
+    normalize_legacy_browser_nodes,
     normalize_workflow_graph,
 )
-from services.workflow_naming import next_available_slug
 from services.workflow_validator import validate_workflow
 
 logger = get_logger(__name__)
@@ -180,17 +180,13 @@ async def cross_check_credentials(requirements: Dict[str, Any], auth_service) ->
     return missing
 
 
-async def check_name_conflict(name: str, database, namespace: Optional[str] = None) -> Dict[str, Any]:
+async def check_name_conflict(name: str, database) -> Dict[str, Any]:
     """Returns ``{has_conflict, suggested_name}`` for a proposed workflow
     name. Suggestion format: ``"<name> (imported)"`` with a numeric suffix
     if that itself collides — mirrors the conflict-resolution pattern in
     ``client/src/utils/workflow.ts`` callers.
-
-    When ``namespace`` is provided, conflict is only checked within that
-    namespace so that importing "IAuditor" into a different namespace
-    from where it already exists is not a conflict.
     """
-    existing = await database.get_all_workflows(namespace=namespace)
+    existing = await database.get_all_workflows()
     existing_names = {(getattr(w, "name", "") or "").lower() for w in existing}
     has_conflict = (name or "").lower() in existing_names
     suggested: Optional[str] = None
@@ -217,8 +213,6 @@ async def import_workflow(
     force_credentials: bool = False,
     auth_service,
     database,
-    namespace: Optional[str] = None,
-    owner_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Orchestrate the full import: validate -> cross-check -> name check
     -> (preview if confirmations needed) -> remap -> save.
@@ -271,6 +265,8 @@ async def import_workflow(
     nodes, edges, node_parameters, migration_warnings = normalize_legacy_android_toolkit(
         nodes, edges, node_parameters
     )
+    nodes, edges, node_parameters, browser_warnings = normalize_legacy_browser_nodes(nodes, edges, node_parameters)
+    migration_warnings = [*migration_warnings, *browser_warnings]
     # Validation sees the exact V2 topology, but preview does not allocate a
     # workflow identity or write state. Keep the pre-Context source so the
     # commit pass can generate canonical import receipts after ID allocation.
@@ -316,9 +312,8 @@ async def import_workflow(
     # 3. Cross-check stored credentials.
     missing_credentials = await cross_check_credentials(requirements, auth_service)
 
-    # 4. Name conflict check — scoped to the target namespace so a workflow
-    #    with the same name in another namespace is not a false conflict.
-    name_check = await check_name_conflict(proposed_name, database, namespace=namespace)
+    # 4. Name conflict check.
+    name_check = await check_name_conflict(proposed_name, database)
 
     # 5. If anything needs user confirmation, return preview without saving.
     needs_preview = (bool(missing_credentials) and not force_credentials) or name_check["has_conflict"]
@@ -341,88 +336,31 @@ async def import_workflow(
         migration_source_params,
     )
 
-    # 7. Save. Incremental system identity + name-derived slug for
-    #    human-visible surfaces (folder names, Temporal Web UI).
+    # 7-9. Save: incremental system identity, name-derived slug for
+    #    human-visible surfaces (folder names, Temporal Web UI), per-node
+    #    configuration, and the ``workflow.imported`` broadcast other tabs
+    #    refresh on. Legacy transcript/provider fields stay in the node
+    #    parameters: ``SimpleMemoryParams`` ignores them, while stripping
+    #    them would also remove same-named fields other node types declare.
+    from services.workflow_storage.persist import PersistError, persist_new_workflow
+
     workflow_id = await database.allocate_workflow_id()
-    normalization = normalize_workflow_graph(
-        workflow_id,
-        remapped_nodes,
-        remapped_edges,
-        remapped_params,
-    )
-    remapped_nodes = normalization.nodes
-    remapped_edges = normalization.edges
-    remapped_params = normalization.node_parameters
-    from services.workflow_context_migration import (
-        import_legacy_context_receipts,
-    )
-
-    imported = await import_legacy_context_receipts(
-        database,
-        normalization.state_imports,
-    )
-    if imported != len(normalization.state_imports):
-        return {
-            "success": False,
-            "error": "context_state_import_failed",
-            "report": report,
-        }
-    slug = await next_available_slug(proposed_name, database)
-    from services.workflow_sanitizer import sanitize_workflow_graph
-
-    normalized_data = sanitize_workflow_graph(
-        {
-            "graphVersion": normalization.graph_version,
-            "nodes": remapped_nodes,
-            "edges": remapped_edges,
-        }
-    )
-    saved = await database.save_workflow(
-        workflow_id=workflow_id,
-        name=proposed_name,
-        slug=slug,
-        description=workflow.get("description"),
-        data=normalized_data,
-        namespace=namespace or "default",
-        owner_user_id=owner_user_id,
-    )
-    if not saved:
-        return {"success": False, "error": "save_failed", "report": report}
-
-    # 8. Per-node configuration saves. Legacy transcript/provider fields are
-    # preserved as immutable Context artifacts above; they are left in place
-    # here because ``SimpleMemoryParams`` ignores them, while stripping them
-    # would also have removed same-named fields that other node types really
-    # declare.
-    from services.workflow_context_migration import persist_parameter_aliases
-
-    await persist_parameter_aliases(
-        database,
-        aliases=normalization.aliases,
-        parameters=remapped_params,
-    )
-    saved_params = sum(bool(params) for params in remapped_params.values())
-
-    # 9. CloudEvents broadcast — ``workflow.imported`` envelope. Other
-    #    connected clients (browser tabs) listen for this and invalidate
-    #    their workflows query so the sidebar picks up the new entry
-    #    without a manual refresh. Broadcast failure must never fail the
-    #    import — the workflow IS saved either way.
     try:
-        from services.status_broadcaster import get_status_broadcaster
-
-        await get_status_broadcaster().broadcast_workflow_lifecycle(
-            "imported",
+        persisted = await persist_new_workflow(
+            database,
             workflow_id=workflow_id,
             name=proposed_name,
-            node_count=len(remapped_nodes),
-            edge_count=len(remapped_edges),
+            nodes=remapped_nodes,
+            edges=remapped_edges,
+            parameters=remapped_params,
+            description=workflow.get("description"),
+            lifecycle_stage="imported",
         )
-    except Exception:
-        logger.debug(
-            "[workflow_import] broadcast_workflow_lifecycle failed",
-            exc_info=True,
-        )
+    except PersistError as exc:
+        return {"success": False, "error": exc.code, "report": report}
+    remapped_nodes = persisted.nodes
+    remapped_edges = persisted.edges
+    saved_params = sum(bool(params) for params in persisted.parameters.values())
 
     return {
         "success": True,

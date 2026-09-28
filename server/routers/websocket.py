@@ -177,13 +177,17 @@ async def handle_get_all_node_parameters(data: Dict[str, Any], websocket: WebSoc
         workflow_id = str(data.get("workflow_id") or "")
         if not workflow_id:
             raise ValueError("workflow_id is required for export")
-        from services.authz.ws_surface import execution_principal as _ep
-
-        authenticated_owner = _ep({}, websocket)
-        workflow = await database.get_workflow(workflow_id, owner_user_id=authenticated_owner)
+        workflow = await database.get_workflow(workflow_id)
         if workflow is None:
             raise ValueError("Workflow not found")
         graph = workflow.data if isinstance(workflow.data, dict) else {}
+        authenticated_owner = str(
+            getattr(getattr(websocket, "state", None), "user_id", None)
+            or "owner"
+        )
+        stored_owner = str(graph.get("owner_id") or "")
+        if stored_owner and stored_owner != authenticated_owner:
+            raise ValueError("Workflow access denied")
         workflow_node_ids = {
             str(node.get("id"))
             for node in graph.get("nodes", [])
@@ -348,10 +352,15 @@ async def handle_load_options(data: Dict[str, Any], websocket: WebSocket) -> Dic
 
     Body: ``{"method": "...", "params": {...}}``
     Response: ``{"options": [{"value": ..., "label": ...}]}``
+
+    The caller's identity comes from the socket (an empty payload goes to
+    ``execution_principal`` so a client-sent ``user_id`` is never trusted).
     """
     from services.ws_handler_registry import dispatch_load_options
 
-    options = await dispatch_load_options(data["method"], data.get("params", {}))
+    options = await dispatch_load_options(
+        data["method"], data.get("params", {}), principal=execution_principal({}, websocket)
+    )
     return {"method": data["method"], "options": options}
 
 
@@ -388,73 +397,28 @@ async def handle_get_credential_catalogue(data: Dict[str, Any], websocket: WebSo
     encrypted credentials database. The frontend renders this directly — no
     client-side credential checks needed.
     """
-    from services.credential_registry import get_credential_registry
-    from services.plugin.credential import CREDENTIAL_REGISTRY
+    from services.credential_registry import get_credential_registry, provider_connection_state
 
     registry = get_credential_registry()
     since = data.get("since")
-    version = registry.get_version()
+    # Includes live pairing state, which changes without a credential
+    # mutation (see CredentialRegistry.get_live_version).
+    version = registry.get_live_version()
     if since and since == version:
         return {"unchanged": True, "version": version}
 
     catalogue = registry.get_catalogue()
+    catalogue["version"] = version
 
-    # Enrich each provider with live stored-key status from AuthService.
-    # This keeps credential state as a backend concern — the frontend is
-    # purely a renderer with zero business logic about key existence.
+    # Enrich each provider with live credential state from AuthService
+    # (``stored`` / ``connected`` / ``account_label`` plus any plugin
+    # extras). Credential state stays a backend concern: the frontend
+    # renders these flags and never checks key existence itself. The rules
+    # live in services.credential_registry.provider_connection_state, which
+    # the Normal-mode employee summaries share.
     auth_service = container.auth_service()
     for provider in catalogue.get("providers", []):
-        pid = provider.get("id", "")
-        kind = provider.get("kind", "")
-        status_hook = provider.get("status_hook")
-
-        tokens = None
-        # Declarative per-provider override for the "stored" check.
-        # Lets Telegram (kind=oauth + status_hook but actual storage
-        # is api_key for the bot token) signal that "stored" should
-        # be ``has_valid_key("telegram")`` rather than the default
-        # ``get_oauth_tokens(status_hook)`` lookup. Other providers
-        # don't declare ``stored_check`` and keep the original
-        # kind/status_hook-based logic untouched -- so Google's saved
-        # client_secret (password field) does NOT flip the connected
-        # dot before the user actually completes the OAuth flow.
-        stored_check = provider.get("stored_check")
-        if stored_check and stored_check.get("type") == "api_key":
-            provider["stored"] = await auth_service.has_valid_key(stored_check.get("key", pid))
-        elif status_hook:
-            # Status-hook providers (whatsapp, android, twitter, google,
-            # claude_code, codex_cli) use OAuth tokens for the runtime
-            # connection state.
-            tokens = await auth_service.get_oauth_tokens(status_hook)
-            provider["stored"] = tokens is not None
-        elif kind == "apiKey":
-            # API key providers — check encrypted credentials DB.
-            provider["stored"] = await auth_service.has_valid_key(pid)
-        elif kind == "oauth":
-            # OAuth providers without a status_hook — check token storage.
-            tokens = await auth_service.get_oauth_tokens(pid)
-            provider["stored"] = tokens is not None
-        else:
-            provider["stored"] = False
-
-        # Surface the connected account identifier (email > display name)
-        # so the modal can render "Connected as foo@bar.com" without a
-        # per-provider status hook. Twitter / Google / Stripe / Claude
-        # all populate `email` / `name` via `auth_service.store_oauth_tokens`.
-        if tokens:
-            provider["account_label"] = tokens.get("email") or tokens.get("name")
-        else:
-            provider["account_label"] = None
-
-        # A credential whose state is not one row per provider id (e.g.
-        # several named OpenAI-compatible endpoints) contributes its own
-        # fields, and may replace ``stored``. Declared on the plugin's
-        # Credential class, so this handler names no provider.
-        cred_cls = CREDENTIAL_REGISTRY.get(pid)
-        if cred_cls is not None:
-            extras = await cred_cls.catalogue_extras()
-            if extras:
-                provider.update(extras)
+        provider.update(await provider_connection_state(provider, auth_service))
 
     return catalogue
 
@@ -516,7 +480,6 @@ async def handle_execute_node(data: Dict[str, Any], websocket: WebSocket) -> Dic
             outputs=data.get("outputs", {}),  # Upstream node outputs for data flow
             extras=invocation_extras or None,
             user_id=user_id,
-            credential_customer_id=getattr(websocket.state, "active_namespace", "default"),
         )
 
         if result.get("success"):
@@ -1450,34 +1413,6 @@ async def handle_refresh_model_registry(data: Dict[str, Any], websocket: WebSock
         return {"success": False, "error": str(e)}
 
 
-@ws_handler()
-async def handle_get_user_namespaces(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
-    """List namespaces the current user can access."""
-    database = container.database()
-    user_id = getattr(websocket.state, "user_id", None)
-    namespaces = await database.list_user_namespaces(str(user_id) if user_id else "")
-    active = getattr(websocket.state, "active_namespace", "default")
-    return {"namespaces": namespaces, "active": active}
-
-
-@ws_handler("namespace")
-async def handle_switch_namespace(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
-    """Signal the client to reload with a new namespace.
-
-    The actual JWT re-issue happens via POST /api/auth/switch-namespace;
-    this handler validates the assignment and returns a reload signal.
-    """
-    namespace = (data.get("namespace") or "").strip()
-    if not namespace:
-        return {"ok": False, "error": "namespace required"}
-    database = container.database()
-    user_id = getattr(websocket.state, "user_id", None)
-    ok = await database.is_user_in_namespace(str(user_id) if user_id else "", namespace)
-    if not ok:
-        return {"ok": False, "error": "not_assigned"}
-    return {"ok": True, "namespace": namespace, "requires_reload": True}
-
-
 # ============================================================================
 # Message Router
 # ============================================================================
@@ -1489,7 +1424,12 @@ async def handle_switch_namespace(data: Dict[str, Any], websocket: WebSocket) ->
 from services.ws_handler_registry import get_ws_handlers
 
 
-from services.authz import execution_principal, resolve_internal_handler  # noqa: E402
+from services.authz import (  # noqa: E402
+    admit_internal_ws,
+    authenticate_ws,
+    execution_principal,
+    resolve_internal_handler,
+)
 
 
 def _resolve_handler(msg_type: str):
@@ -1652,41 +1592,18 @@ async def websocket_status_endpoint(websocket: WebSocket):
     The server responds with the same request_id for request/response matching.
     Broadcasts (without request_id) are sent to all connected clients.
     """
-    # Authenticate via cookie before accepting connection
-    settings = container.settings()
-
-    # Check if auth is disabled (VITE_AUTH_ENABLED=false)
-    auth_disabled = settings.vite_auth_enabled and settings.vite_auth_enabled.lower() == "false"
-
-    authenticated_user_id = "owner"
-    if not auth_disabled:
-        # Auth enabled - verify token
-        from core.auth_cookies import get_session_token
-
-        token = get_session_token(websocket.cookies, settings)
-
-        if not token:
-            await websocket.close(code=4001, reason="Not authenticated")
-            return
-
-        user_auth = container.user_auth_service()
-        payload = user_auth.verify_token(token)
-
-        if not payload:
-            await websocket.close(code=4001, reason="Invalid or expired session")
-            return
-
-        authenticated_user_id = str(payload.get("sub") or "")
-        if not authenticated_user_id:
-            await websocket.close(code=4001, reason="Invalid session subject")
-            return
+    # Origin, then the session cookie (unless login is off), before accepting.
+    authenticated_user_id = await authenticate_ws(
+        websocket,
+        settings=container.settings(),
+        user_auth_service=container.user_auth_service,
+    )
+    if authenticated_user_id is None:
+        return
 
     # Plugin-owned handlers resolve namespace ownership from trusted
     # connection state. Client payloads cannot choose a Memory/Context owner.
     websocket.state.user_id = authenticated_user_id
-    websocket.state.active_namespace = (
-        payload.get("active_namespace", "default") if not auth_disabled else "default"
-    )
 
     broadcaster = get_status_broadcaster()
     await broadcaster.connect(websocket)
@@ -1781,11 +1698,14 @@ async def websocket_status_endpoint(websocket: WebSocket):
 async def websocket_internal_endpoint(websocket: WebSocket):
     """Internal WebSocket endpoint for Temporal workers.
 
-    This endpoint bypasses authentication and is intended for internal
-    service-to-service communication (e.g., Temporal activity -> OpenCompany).
-
-    Security: Should only be exposed on localhost/internal network.
+    Service-to-service only (Temporal activity -> OpenCompany). It bypasses
+    the cookie gate, so the worker must present the ``SECRET_KEY``-derived
+    token (``services.authz.internal_socket_token``) before the handshake is
+    accepted, and even then it reaches only ``INTERNAL_SOCKET_HANDLERS``.
     """
+    if not await admit_internal_ws(websocket, settings=container.settings()):
+        return
+
     get_status_broadcaster()
     await websocket.accept()
 

@@ -96,17 +96,6 @@ class Workflow(SQLModel, table=True):
     slug: str = Field(default="", max_length=64, unique=True, index=True)
     description: Optional[str] = Field(default=None, max_length=1000)
     data: Dict[str, Any] = Field(sa_column=Column(JSON))
-    # The tenancy principal who owns this workflow.  Literal "owner"
-    # matches OWNER_PRINCIPAL_ID — the string literal avoids a circular
-    # import at SQLModel class-definition time.  All existing rows are
-    # backfilled by _migrate_workflow_owner(); new rows receive the
-    # save_workflow caller's principal.  Never empty after the migration.
-    owner_user_id: str = Field(default="owner", max_length=255, index=True)
-    # Namespace this workflow belongs to. Existing rows default to "default"
-    # (backfilled by _migrate_workflow_namespace). New workflows inherit the
-    # active_namespace from the caller's JWT so switching namespaces shows
-    # only that namespace's workflows.
-    namespace: str = Field(default="default", max_length=255, index=True)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
@@ -332,7 +321,16 @@ class UserSettings(SQLModel, table=True):
     auto_rebind_tools_after_canvas_change: bool = Field(
         default=True
     )  # After agentBuilder mutates the canvas mid-run, refresh the LLM's bound tools so the new wiring is callable in the same execution
-    active_namespace: str = Field(default="default", max_length=255)
+    # Owner profile (Normal mode, Settings > Profile). Hired employees read it
+    # into their instructions and the Home greeting uses the call name.
+    # Normalized on save by services.settings.profile.normalize_profile_patch.
+    profile_full_name: Optional[str] = Field(default=None, max_length=100)
+    profile_call_name: Optional[str] = Field(default=None, max_length=60)
+    profile_role: Optional[str] = Field(default=None, max_length=100)
+    profile_preferences: Optional[str] = Field(default=None, max_length=2000)
+    profile_timezone: Optional[str] = Field(default=None, max_length=64)  # IANA name, sent from the browser's Intl on save
+    memory_across_chats: bool = Field(default=True)  # New hires get the Context + Memory nodes
+    prefer_local_ai: bool = Field(default=True)  # Employee setup prefers a configured local model
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
@@ -526,12 +524,6 @@ class WorkflowControlExecution(SQLModel, table=True):
     controller_workflow_id: Optional[str] = Field(default=None, max_length=500)
     controller_run_id: Optional[str] = Field(default=None, max_length=255)
     session_id: str = Field(default="default", max_length=255)
-    # Which Temporal namespace this generation's controller lives in.
-    # Recorded at begin_generation time from resolve_tenant_namespace so the
-    # boot-time reconciler can group controls by namespace and use the
-    # correct client for each group.  Literal "default" matches
-    # Settings.temporal_namespace's default — circular import safe.
-    temporal_namespace: str = Field(default="default", max_length=255, index=True)
     graph_hash: str = Field(max_length=64)
     graph_snapshot: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     resource_manifest: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
@@ -539,6 +531,12 @@ class WorkflowControlExecution(SQLModel, table=True):
     revision: int = Field(default=0)
     idempotency_key: str = Field(index=True, max_length=255)
     terminal_reason: Optional[str] = Field(default=None, max_length=2000)
+    # Why the generation paused when nobody pressed Pause: "failures" (the
+    # circuit breaker), "recovery" (an unclean shutdown), or
+    # "controller_missing". ``pause_detail`` says it in words for the owner.
+    # Cleared when the generation runs again; None for a manual pause.
+    pause_reason: Optional[str] = Field(default=None, max_length=50)
+    pause_detail: Optional[str] = Field(default=None, max_length=500)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = Field(default=None)
@@ -559,77 +557,6 @@ class IdentitySequence(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), onupdate=func.now()),
     )
-
-
-class TenantNamespace(SQLModel, table=True):
-    """Which Temporal namespace one login account executes in.
-
-    ``user_id`` is the tenancy principal — ``str(User.id)`` (the JWT ``sub``
-    claim) or ``OWNER_PRINCIPAL_ID`` when authentication is disabled. It is
-    NOT the credential ``customer_id``; see ``constants.py``.
-
-    Rows are written only by the operator CLI (``scripts/manage_users.py
-    namespace``); there is no auto-provisioning on registration by design.
-    Accounts without a row fall back to ``Settings.temporal_namespace``, so
-    an empty table is exactly today's single-namespace behaviour.
-
-    Unrelated to :class:`IdentitySequence.namespace`, which is a counter
-    bucket name and has nothing to do with Temporal.
-    """
-
-    __tablename__ = "tenant_namespaces"
-
-    user_id: str = Field(primary_key=True, max_length=255)
-    # UNIQUE: two accounts sharing a namespace would defeat the isolation
-    # the whole feature exists to provide.
-    namespace: str = Field(unique=True, index=True, max_length=255)
-    # provisioning | ready | disabled. Only ``ready`` routes traffic; the
-    # other two resolve to the default namespace so a half-provisioned or
-    # revoked tenant degrades to shared behaviour instead of pointing at a
-    # namespace no worker polls.
-    status: str = Field(default="provisioning", max_length=32)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class Namespace(SQLModel, table=True):
-    """Registry of all Temporal namespaces managed by this instance.
-
-    This is the authoritative list of provisioned namespaces. The
-    ``TenantNamespace`` table (1:1 user→namespace) is kept for backward
-    compatibility; ``UserNamespace`` is the new many-to-many join.
-    """
-
-    __tablename__ = "namespaces"
-
-    namespace: str = Field(primary_key=True, max_length=255)
-    display_name: str = Field(default="", max_length=255)
-    # provisioning | ready | disabled
-    status: str = Field(default="provisioning", max_length=32)
-    temporal_provisioned: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class UserNamespace(SQLModel, table=True):
-    """Many-to-many: which namespaces a user can access.
-
-    A user may hold rows in multiple namespaces. ``active_namespace`` in
-    ``UserSettings`` (and the JWT ``active_namespace`` claim) determines
-    which row is active for the current session.
-    """
-
-    __tablename__ = "user_namespaces"
-    __table_args__ = (
-        UniqueConstraint("user_id", "namespace", name="uq_user_namespace"),
-    )
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: str = Field(index=True, max_length=255)
-    namespace: str = Field(index=True, max_length=255)
-    # owner | member
-    role: str = Field(default="member", max_length=32)
-    assigned_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowRunDataScope(SQLModel, table=True):

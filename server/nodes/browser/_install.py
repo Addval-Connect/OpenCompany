@@ -1,59 +1,39 @@
-"""``agent-browser`` local install — landed in the shared OpenCompany
-packages tree at :func:`core.paths.packages_dir` (``<DATA_DIR>/packages/``).
+"""Install the Browser node's runtime ahead of first use.
 
-All OpenCompany-managed npm packages (``agent-browser``,
-``@anthropic-ai/claude-code``, ``edgymeow``, ``cf``, ``vercel``) live
-under a single ``<packages_dir>/node_modules/`` managed by bun through
-one ``package.json`` + ``bun.lock`` rather than us carving out
-per-service install trees. :func:`core.js_runtime.add_package`
-(``bun add --cwd <packages_dir> <spec>``) extends the shared tree
-idempotently and the bin shim runs on the bun runtime; no Node or npm
-is involved. agent-browser's postinstall is trusted so its platform
-binary lands the way the package expects.
+Normally the installed browser is selected and the browser-use CLI is fetched
+the first time a Browser node runs. This entry point validates that browser
+and installs the CLI ahead of time. With explicit ``BROWSER_RUNTIME=testing``,
+it also downloads the pinned Chrome for Testing build::
+
+    uv run python -m nodes.browser._install        # from server/
 """
 
 from __future__ import annotations
 
-import subprocess
-from typing import Optional
-
-from core.js_runtime import add_package, bun_binary, shared_tree_bin
-from core.logging import get_logger
-
-logger = get_logger(__name__)
-
-_NPM_SPEC = "agent-browser@latest"
+import asyncio
+import sys
+from typing import Any, Dict
 
 
-def agent_browser_binary_path() -> Optional[str]:
-    """Return path to the agent-browser CLI, installing on miss."""
-    bin_path = shared_tree_bin("agent-browser")
+async def ensure_browser_runtime(*, wait: float) -> Dict[str, Any]:
+    from ._install_bu import get_browser_use_installer
+    from ._install_chrome import get_chrome_installer
 
-    if bin_path.exists():
-        return str(bin_path)
-
-    if bun_binary() is None:
-        logger.warning("[browser] bun not available; cannot install %s", _NPM_SPEC)
-        return None
-
-    logger.info("[browser] installing %s into the shared packages tree", _NPM_SPEC)
-    result = add_package(_NPM_SPEC, trust=True)
-    if result.returncode != 0 or not bin_path.exists():
-        logger.error("[browser] bun add %s failed: %s", _NPM_SPEC, result.stderr.strip())
-        return None
-
-    # Fetch the Chrome-for-Testing runtime (agent-browser's documented
-    # post-install step — downloads ~150MB chromium on first use).
-    runtime = subprocess.run(
-        [str(bin_path), "install"],
-        capture_output=True,
-        text=True,
-    )
-    if runtime.returncode != 0:
-        logger.warning("[browser] chromium runtime install failed: %s", runtime.stderr.strip())
-
-    logger.info("[browser] agent-browser installed at %s", bin_path)
-    return str(bin_path)
+    chrome = await get_chrome_installer().ensure(wait=wait)
+    cli = await get_browser_use_installer().ensure(wait=wait)
+    return {"chrome": str(chrome), "cli": str(cli["cli"])}
 
 
-__all__ = ["agent_browser_binary_path"]
+def _main() -> int:
+    try:
+        result = asyncio.run(ensure_browser_runtime(wait=3600.0))
+    except Exception as exc:  # noqa: BLE001 - a CLI reports and exits non-zero
+        print(f"browser runtime install failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Chrome: {result['chrome']}")
+    print(f"browser-use: {result['cli']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
