@@ -421,7 +421,8 @@ class AuthService:
             True if stored successfully
         """
         try:
-            cache_key = f"{customer_id}_{provider}"
+            prefix = self._credential_prefix(customer_id)
+            cache_key = f"{prefix}{provider}"
 
             # 1. DB write first (canonical source).
             await self.credentials_db.save_oauth_tokens(
@@ -476,7 +477,8 @@ class AuthService:
             ``None`` if no tokens are stored.
         """
         try:
-            cache_key = f"{customer_id}_{provider}"
+            prefix = self._credential_prefix(customer_id)
+            cache_key = f"{prefix}{provider}"
 
             # Check memory cache first.
             if cache_key in self._oauth_cache:
@@ -626,10 +628,15 @@ class AuthService:
             True if removed successfully
         """
         try:
-            cache_key = f"{customer_id}_{provider}"
+            # Normalize: "owner" and "default" are the same tenant bucket.
+            # Using the prefix ensures the cache key matches what store used.
+            prefix = self._credential_prefix(customer_id)
+            cache_key = f"{prefix}{provider}"
 
             # 1. DB delete first (canonical source).
-            await self.credentials_db.delete_oauth_tokens(provider, customer_id)
+            # Pass the canonical form the DB knows about too.
+            canonical_id = "owner" if not prefix else customer_id
+            await self.credentials_db.delete_oauth_tokens(provider, canonical_id)
 
             # 2. Cache evict after DB succeeds.
             self._oauth_cache.pop(cache_key, None)

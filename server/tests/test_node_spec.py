@@ -950,6 +950,11 @@ class TestNodeSpecContractInvariants:
             "executionTimeoutMs",
             "showLocationPanel",
             "isChatTrigger",
+            # Blueflow receive: marks the node as a workflow trigger (listens
+            # for incoming webhook events from Blue Process).
+            "isTrigger",
+            # Odoo / plugin tool nodes: renders in the tool-panel slot.
+            "isToolPanel",
             "isConsoleSink",
             "hasSkills",
             # Wave 10.A: size hints carried by plugin registrations

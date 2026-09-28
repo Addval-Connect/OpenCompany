@@ -809,3 +809,25 @@ class GoogleConnection(SQLModel, table=True):
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(DateTime(timezone=True), onupdate=func.now())
     )
+
+
+class TenantNamespace(SQLModel, table=True):
+    """Which Temporal namespace one login account executes in.
+
+    ``user_id`` is the tenancy principal — ``str(User.id)`` (the JWT ``sub``
+    claim) or ``OWNER_PRINCIPAL_ID`` when authentication is disabled. It is
+    NOT the credential ``customer_id``; see ``constants.py``.
+
+    Rows are written only by the operator CLI (``scripts/manage_users.py
+    namespace``); there is no auto-provisioning on registration by design.
+    Accounts without a row fall back to ``Settings.temporal_namespace``, so
+    an empty table is exactly today's single-namespace behaviour.
+    """
+
+    __tablename__ = "tenant_namespaces"
+
+    user_id: str = Field(primary_key=True, max_length=255)
+    namespace: str = Field(unique=True, index=True, max_length=255)
+    status: str = Field(default="provisioning", max_length=32)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
