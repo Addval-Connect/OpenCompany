@@ -107,14 +107,15 @@ class NamespacedDatabase:
             return getattr(self._owner, name)
         return getattr(self._active_db(), name)
 
-    # Expose engine/async_session of the owner db for startup bootstrapping
+    # Startup bootstrapping uses owner engine; runtime queries use active namespace.
     @property
     def engine(self):
-        return self._owner.engine
+        """Return the active namespace engine (owner for auth, namespace for data)."""
+        return self._pool.get(get_active_namespace()).engine
 
     @property
     def async_session(self):
-        return self._owner.async_session
+        return self._pool.get(get_active_namespace()).async_session
 
     @property
     def settings(self):
