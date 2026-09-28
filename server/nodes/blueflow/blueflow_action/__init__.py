@@ -41,24 +41,74 @@ class BlueflowCredential(ApiKeyCredential):
     id = "blueflow"
     display_name = "Blue Process API Key"
     category = "Productivity"
-    key_location = "bearer"  # injects Authorization: Bearer <key>
-    docs_url = "http://localhost:3000"
+    key_location = "bearer"           # injects Authorization: Bearer <key>
+    extra_fields = ("blueflow_api_url",)   # URL del servidor se guarda junto a la key
+    docs_url = "https://github.com/Addval-Connect/blueprocess"
 
     @classmethod
-    async def _probe(cls, api_key: str) -> ProbeResult:
+    async def validate(cls, data: dict) -> dict:
+        """Sobreescribe para pasar blueflow_api_url al probe y guardarla."""
+        from core.container import container
+        from services.status_broadcaster import get_status_broadcaster
+        import time as _time
+
+        api_key = (data.get("api_key") or "").strip()
+        api_url = (data.get("blueflow_api_url") or "http://localhost:3000").rstrip("/")
+        session_id = data.get("session_id", "default")
+
+        if not api_key:
+            return {"success": False, "valid": False, "error": "blueflow api_key required"}
+
+        try:
+            result = await cls._probe(api_key, api_url=api_url)
+        except Exception as exc:
+            from services.plugin.credential import classify_credential_error
+            result = classify_credential_error(exc, display_name=cls.display_name)
+
+        auth_service = container.auth_service()
+        if result.valid:
+            await auth_service.store_api_key(
+                provider=cls.id, api_key=api_key,
+                session_id=session_id,
+                models=result.models, model_params=result.model_params,
+            )
+            # Guardar la URL como extra field
+            await auth_service.store_api_key(
+                provider="blueflow_api_url", api_key=api_url,
+                session_id=session_id, models=[], model_params={},
+            )
+
+        broadcaster = get_status_broadcaster()
+        await broadcaster.update_api_key_status(
+            provider=cls.id, valid=result.valid,
+            message=result.message, has_key=result.valid, models=result.models,
+        )
+
+        return {
+            "success": True, "provider": cls.id,
+            "valid": result.valid, "message": result.message,
+            "models": result.models, "timestamp": _time.time(),
+            **result.extra,
+        }
+
+    @classmethod
+    async def _probe(cls, api_key: str, api_url: str = "http://localhost:3000") -> ProbeResult:
+        url = api_url.rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get(
-                    "http://localhost:3000/api/v1/processes",
+                    f"{url}/api/v1/processes",
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
             if r.status_code == 200:
-                return ProbeResult(valid=True, message="Conectado")
+                procs = r.json()
+                n = len(procs) if isinstance(procs, list) else "?"
+                return ProbeResult(valid=True, message=f"Conectado — {n} proceso(s)")
             if r.status_code == 401:
-                return ProbeResult(valid=False, message="API Key inválida")
-            return ProbeResult(valid=False, message=f"HTTP {r.status_code}")
+                return ProbeResult(valid=False, message="API Key inválida o expirada")
+            return ProbeResult(valid=False, message=f"Error HTTP {r.status_code}")
         except Exception as exc:
-            return ProbeResult(valid=False, message=f"No se pudo conectar: {exc}")
+            return ProbeResult(valid=False, message=f"No se pudo conectar a {url}: {exc}")
 
 
 # ─── Params & Output ─────────────────────────────────────────────────────────
@@ -157,14 +207,18 @@ class BlueflowActionNode(ActionNode):
     Params = BlueflowActionParams
     Output = BlueflowActionOutput
 
-    def _base(self, params: BlueflowActionParams) -> str:
-        return params.api_url.rstrip("/") + "/api/v1"
+    def _base(self, params: BlueflowActionParams, secrets: Optional[Dict[str, Any]] = None) -> str:
+        # Prefer params.api_url; fall back to the URL saved in Credentials
+        url = params.api_url or (secrets or {}).get("blueflow_api_url") or "http://localhost:3000"
+        return url.rstrip("/") + "/api/v1"
 
     # ── Operation ─────────────────────────────────────────────────────────
 
     @Operation("call")
     async def call(self, ctx: NodeContext, params: BlueflowActionParams) -> BlueflowActionOutput:
-        base = self._base(params)
+        # Resolve secrets to get stored api_url if not overridden in params
+        secrets = await BlueflowCredential.resolve()
+        base = self._base(params, secrets)
         op = params.operation
         body = params.body or {}
 

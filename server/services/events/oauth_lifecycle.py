@@ -134,8 +134,17 @@ def make_oauth_lifecycle_handlers(
     """
 
     def _active_ns(websocket: WebSocket) -> str:
-        """Active namespace from WS state; falls back to 'default'."""
-        return getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
+        """Active namespace from WS state; falls back to 'owner'.
+
+        'owner' matches the default customer_id used by store_oauth_tokens()
+        so tokens stored in single-tenant mode (or before multi-tenancy was
+        enabled) are found by login/logout/status lookups without migration.
+        'default' was an incorrect fallback: it maps to the same empty prefix
+        as 'owner' for api_keys, but the OAuth token table stores customer_id
+        as a raw column — 'default' != 'owner' there, causing disconnect to
+        look for tokens under the wrong key.
+        """
+        return getattr(getattr(websocket, "state", None), "active_namespace", None) or "owner"
 
     async def login(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
         from core.container import container
