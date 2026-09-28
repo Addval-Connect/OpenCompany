@@ -21,6 +21,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services.status_broadcaster import get_status_broadcaster
 from core.container import container
 from core.logging import get_logger
+from constants import normalize_credential_ns
 
 
 def get_auth_service():
@@ -516,7 +517,7 @@ async def handle_execute_node(data: Dict[str, Any], websocket: WebSocket) -> Dic
             outputs=data.get("outputs", {}),  # Upstream node outputs for data flow
             extras=invocation_extras or None,
             user_id=user_id,
-            credential_customer_id=getattr(websocket.state, "active_namespace", "default"),
+            credential_customer_id=normalize_credential_ns(getattr(websocket.state, "active_namespace", None)),
         )
 
         if result.get("success"):

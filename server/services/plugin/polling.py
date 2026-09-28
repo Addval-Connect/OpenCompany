@@ -77,6 +77,12 @@ class PollingTriggerNode(TriggerNode, abstract=True):
 
     mode: ClassVar[str] = "polling"
 
+    # Credential bucket used by Temporal polling activities. Set to the
+    # deploying user's active namespace (normalized) by _poll_cycle_activity
+    # before calling fetch_ids / fetch_detail / post_emit. Defaults to
+    # "owner" so subclass hooks can always read self.credential_customer_id.
+    credential_customer_id: str = "owner"
+
     # (min_seconds, max_seconds) for the user-supplied poll_interval.
     poll_interval_clamp: ClassVar[Tuple[int, int]] = (10, 3600)
 
@@ -211,6 +217,7 @@ class PollingTriggerNode(TriggerNode, abstract=True):
             baseline_only = bool(payload.get("baseline_only"))
 
             instance = cls()
+            instance.credential_customer_id = payload.get("credential_customer_id", "owner")
             try:
                 service = await instance.setup_service(params)
             except Exception as exc:  # noqa: BLE001

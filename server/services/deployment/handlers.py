@@ -107,6 +107,11 @@ async def handle_deploy_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
     _deploy_namespace = await resolve_tenant_namespace(
         _caller, database=container.database(), settings=container.settings()
     )
+    from constants import normalize_credential_ns
+    _credential_ns = normalize_credential_ns(
+        getattr(getattr(websocket, "state", None), "active_namespace", None)
+        if websocket is not None else data.get("credential_customer_id")
+    )
 
     workflow_id = data.get("workflow_id")
     nodes = data.get("nodes", [])
@@ -262,6 +267,7 @@ async def handle_deploy_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
                 generation=int(data.get("generation") or 0),
                 user_id=_caller,
                 temporal_namespace=_deploy_namespace,
+                credential_customer_id=_credential_ns,
             )
 
             if not result.get("success"):

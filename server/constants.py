@@ -514,3 +514,16 @@ OWNER_PRINCIPAL_ID: str = "owner"
 #: Default ``customer_id`` for stored credentials. Deliberately NOT an
 #: alias of OWNER_PRINCIPAL_ID — see the note above.
 DEFAULT_CREDENTIAL_CUSTOMER_ID: str = "owner"
+
+
+def normalize_credential_ns(ns: str | None) -> str:
+    """Map an active_namespace value to the canonical credential customer_id.
+
+    "default" is the Temporal routing namespace name and is NOT the same
+    as the credential bucket named "owner".  Any place that derives a
+    credential customer_id from websocket/JWT state must call this so that
+    the default namespace always resolves to the "owner" credential bucket.
+    """
+    if not ns or ns == "default":
+        return DEFAULT_CREDENTIAL_CUSTOMER_ID
+    return ns

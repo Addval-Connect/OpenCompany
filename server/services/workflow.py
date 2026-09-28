@@ -597,6 +597,7 @@ class WorkflowService:
         generation: int = 0,
         user_id: str = "owner",
         temporal_namespace: str = "default",
+        credential_customer_id: str = "owner",
     ) -> Dict[str, Any]:
         """Deploy workflow in event-driven mode.
 
@@ -609,6 +610,7 @@ class WorkflowService:
             graph_version: Normalized graph contract version
             generation: Durable workflow-control generation
             user_id: Authenticated server-owned user identity
+            credential_customer_id: Credential bucket for Temporal activities
         """
         manager = self._get_deployment_manager()
         if int(graph_version or 0) < 2 or int(generation or 0) <= 0:
@@ -620,6 +622,7 @@ class WorkflowService:
                 workflow_id,
                 user_id=user_id,
                 temporal_namespace=temporal_namespace,
+                credential_customer_id=credential_customer_id,
             )
         return await manager.deploy(
             nodes,
@@ -631,6 +634,7 @@ class WorkflowService:
             generation,
             user_id=user_id,
             temporal_namespace=temporal_namespace,
+            credential_customer_id=credential_customer_id,
         )
 
     async def cancel_deployment(self, workflow_id: Optional[str] = None) -> Dict[str, Any]:

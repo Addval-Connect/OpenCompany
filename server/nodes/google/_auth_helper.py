@@ -65,7 +65,8 @@ async def get_google_credentials(
         # Resolve the namespace: context carries "credential_customer_id" when the
         # node execution was started in a non-default namespace.  Fall back to
         # "default" (= same slot as "owner") for single-namespace deployments.
-        ns = context.get("credential_customer_id") or "default"
+        from constants import normalize_credential_ns
+        ns = normalize_credential_ns(context.get("credential_customer_id"))
         tokens = await auth_service.get_oauth_tokens("google", customer_id=ns)
 
         if not tokens or not tokens.get("access_token"):

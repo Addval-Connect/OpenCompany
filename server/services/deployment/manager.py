@@ -171,6 +171,7 @@ class DeploymentManager:
         generation: int = 0,
         user_id: str = "owner",
         temporal_namespace: str = "default",
+        credential_customer_id: str = "owner",
     ) -> Dict[str, Any]:
         """Deploy workflow in event-driven mode.
 
@@ -183,6 +184,8 @@ class DeploymentManager:
             graph_version: Normalized graph contract version
             generation: Durable workflow-control generation
             user_id: Authenticated server-owned user identity
+            credential_customer_id: Credential bucket for OAuth/API-key lookups
+                in Temporal polling activities. Must be normalized (never "default").
         """
         # Generate workflow_id if not provided
         if not workflow_id:
@@ -237,6 +240,7 @@ class DeploymentManager:
             generation=max(0, int(generation or 0)),
             settings=self._settings.copy(),
             temporal_namespace=str(temporal_namespace or "default"),
+            credential_customer_id=str(credential_customer_id or "owner"),
         )
 
         logger.info("Deployment starting", deployment_id=deployment_id, workflow_id=workflow_id, nodes=len(nodes))
@@ -813,6 +817,7 @@ class DeploymentManager:
             "edges": state.edges,
             "session_id": state.session_id,
             "user_id": state.user_id,
+            "credential_customer_id": state.credential_customer_id,
             **capture_temporal_routing_input(),
         }
         if state.graph_version > 0 and state.generation > 0:

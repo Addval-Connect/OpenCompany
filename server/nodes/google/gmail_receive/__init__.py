@@ -89,7 +89,7 @@ class GmailReceiveNode(PollingTriggerNode):
         return f"label:{label} {query}" if label and label != "all" else query
 
     async def setup_service(self, params: Dict[str, Any]) -> Any:
-        return await build_google_service("gmail", "v1", params, {})
+        return await build_google_service("gmail", "v1", params, {"credential_customer_id": self.credential_customer_id})
 
     async def fetch_ids(self, service: Any, params: Dict[str, Any]) -> Set[str]:
         return await poll_gmail_ids(service, self._build_query(params))
