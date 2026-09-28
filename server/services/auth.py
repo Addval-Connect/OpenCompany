@@ -485,13 +485,6 @@ class AuthService:
             # Fallback to encrypted database. Strip refresh_token before
             # caching so the in-memory copy is short-lived-display-only.
             tokens = await self.credentials_db.get_oauth_tokens(provider, customer_id)
-            # Fall back to org-wide 'owner' bucket when no namespace-specific
-            # token exists. OAuth credentials are org-level — Temporal polling
-            # activities (which always default to "owner") and cross-namespace
-            # tool calls both benefit from this without needing per-namespace
-            # reconnects.
-            if not tokens and customer_id != "owner":
-                tokens = await self.credentials_db.get_oauth_tokens(provider, "owner")
             if tokens:
                 display = {
                     "access_token": tokens.get("access_token"),
@@ -531,8 +524,6 @@ class AuthService:
         """
         try:
             tokens = await self.credentials_db.get_oauth_tokens(provider, customer_id)
-            if not tokens and customer_id != "owner":
-                tokens = await self.credentials_db.get_oauth_tokens(provider, "owner")
             if tokens:
                 return tokens.get("refresh_token")
             return None
