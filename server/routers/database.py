@@ -182,13 +182,14 @@ async def get_workflow(workflow_id: str, request: Request, database: Database = 
 
 
 @router.delete("/workflows/{workflow_id}")
-async def delete_workflow(workflow_id: str, database: Database = Depends(lambda: container.database())):
-    """Delete through the same durable Context lifecycle path as WebSocket."""
+async def delete_workflow(workflow_id: str, request: Request, database: Database = Depends(lambda: container.database())):
+    """Delete a workflow by ID."""
     try:
-        return await delete_workflow_with_context_archival(
-            database,
-            workflow_id,
-        )
+        owner = _request_owner(request)
+        success = await database.delete_workflow(workflow_id, owner_user_id=owner)
+        if success:
+            return {"success": True, "workflow_id": workflow_id}
+        return {"success": False, "error": "Workflow not found or not authorized"}
     except Exception as e:
         logger.error("Failed to delete workflow", error=str(e), exc_info=True)
         return {"success": False, "error": "Failed to delete workflow"}
