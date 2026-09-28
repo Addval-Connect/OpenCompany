@@ -427,7 +427,7 @@ def make_oauth_callback_router(
         auth_service = container.auth_service()
         # Use namespace from state_data if present (set by the login handler),
         # falling back to any customer_id override (customer-mode Google), then "default".
-        ns_from_state = (state_data or {}).get("namespace", "default")
+        ns_from_state = (state_data or {}).get("namespace") or "owner"
         effective_customer = store_overrides.pop("customer_id", ns_from_state)
         await auth_service.store_oauth_tokens(
             provider=provider,
