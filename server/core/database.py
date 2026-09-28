@@ -904,11 +904,9 @@ class Database:
         """
         try:
             async with self.get_session() as session:
+                # Per-namespace DBs: physical DB separation replaces namespace
+                # predicate. All rows in this DB belong to the active namespace.
                 stmt = select(Workflow).where(Workflow.id == workflow_id)
-                if namespace is not None:
-                    stmt = stmt.where(Workflow.namespace == namespace)
-                elif owner_user_id is not None:
-                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalar_one_or_none()
 
@@ -932,14 +930,10 @@ class Database:
         """
         try:
             async with self.get_session() as session:
+                # Per-namespace DBs: the DB file itself is the namespace boundary.
+                # The `namespace` column is no longer used for filtering — all rows
+                # in this DB belong to the active namespace by physical separation.
                 stmt = select(Workflow).order_by(Workflow.updated_at.desc())
-                if namespace is not None:
-                    # Namespace is the ownership boundary: everyone in the
-                    # namespace sees all its workflows regardless of creator.
-                    stmt = stmt.where(Workflow.namespace == namespace)
-                elif owner_user_id is not None:
-                    # Single-namespace fallback: filter by creator.
-                    stmt = stmt.where(Workflow.owner_user_id == owner_user_id)
                 result = await session.execute(stmt)
                 return result.scalars().all()
 
