@@ -72,20 +72,21 @@ async def _service():
     references but touches neither on any path this script calls. The
     server-scoped encryption key belongs to the running backend and is
     deliberately not initialised here.
+
+    Uses the per-namespace pool so the script works with the new
+    {DATA_DIR}/namespaces/owner/workflow.db layout.
     """
     from core.config import Settings
-    from core.database import Database
+    from core.db_pool import DatabasePool
+    from core.namespace_context import set_active_namespace
     from core.logging import configure_logging
     from services.user_auth import UserAuthService
 
     settings = Settings()
-    # Without this the process runs on structlog's default config, which
-    # emits `Database initialized successfully` and friends to stdout at INFO
-    # -- enough to bury a generated password. ``LOG_LEVEL`` was defaulted to
-    # WARNING in ``_bootstrap_path``.
     configure_logging(settings)
-    database = Database(settings)
-    await database.startup()
+    pool = DatabasePool(settings)
+    database = await pool.startup_namespace("owner")
+    set_active_namespace("owner")
     service = UserAuthService(
         database=database,
         settings=settings,
