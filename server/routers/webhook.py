@@ -115,3 +115,69 @@ async def list_info():
         "usage": "Deploy a workflow with webhookTrigger node, then send requests to /webhook/{path}",
         "example": "POST /webhook/my-webhook with JSON body",
     }
+
+
+# ---------------------------------------------------------------------------
+# Namespaced webhook route — multi-tenant path
+# URL: /webhook/{namespace}/{path}  e.g. /webhook/bluedoc/bluetest
+# The namespace segment is passed to dispatch.emit so the Temporal Visibility
+# query targets the correct tenant namespace.  The existing /webhook/{path}
+# route above stays for single-tenant / backward compat (namespace=None).
+# Registered without prefix so it can match before the prefix-mounted router.
+# ---------------------------------------------------------------------------
+
+namespaced_router = APIRouter(tags=["webhook"])
+
+
+@namespaced_router.api_route(
+    "/webhook/{namespace}/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+)
+async def handle_namespaced_webhook(namespace: str, path: str, request: Request):
+    """Handle namespaced webhook requests routed to a specific tenant namespace."""
+    source = WEBHOOK_SOURCES.get(path)
+    if source is not None:
+        try:
+            if request.method == "GET":
+                handshake = await source.handle_get(request)
+                if handshake is not None:
+                    logger.info("[Webhook] GET %s (ns=%s) -> %s handshake", path, namespace, type(source).__name__)
+                    return handshake
+            await source.handle(request)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("[Webhook] %s handler crashed: %s", path, e)
+            raise HTTPException(status_code=500, detail=str(e))
+        logger.info("[Webhook] %s %s (ns=%s) -> %s", request.method, path, namespace, type(source).__name__)
+        return JSONResponse({"status": "received", "path": path, "namespace": namespace}, status_code=200)
+
+    body = await request.body()
+    json_body = None
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type and body:
+        try:
+            json_body = await request.json()
+        except Exception:
+            pass
+
+    webhook_data = {
+        "method": request.method,
+        "path": path,
+        "headers": dict(request.headers),
+        "query": dict(request.query_params),
+        "body": body.decode("utf-8") if isinstance(body, bytes) else (body if body else ""),
+        "json": json_body,
+    }
+
+    logger.info(f"[Webhook] Received: {request.method} /webhook/{namespace}/{path}")
+
+    from nodes.trigger.webhook_trigger._events import broadcast_webhook_received
+
+    await broadcast_webhook_received(webhook_data, namespace=namespace)
+
+    return JSONResponse(
+        content={"status": "received", "path": path, "namespace": namespace, "message": "Webhook received and dispatched to workflow"},
+        status_code=200,
+    )

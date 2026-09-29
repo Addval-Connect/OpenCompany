@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Interactive TUI for managing OpenCompany users and namespaces.
 
-Run from the server/ directory:
+Run from the repo root (recommended):
+    python server/scripts/tui.py
+
+Or from server/:
     python scripts/tui.py
 
-Or with a custom data dir:
-    DATA_DIR=/path/to/.opencompany python scripts/tui.py
+DATA_DIR is resolved via core.paths.project_root() so always pass an
+absolute path or the canonical relative form (.opencompany) — never
+../.opencompany, which resolves one level above the repo root.
+
+Dev mode example (repo-local DB):
+    DATA_DIR=.opencompany python server/scripts/tui.py
 """
 
 from __future__ import annotations
@@ -17,6 +24,13 @@ from pathlib import Path
 
 # Allow running from server/ or repo root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# If DATA_DIR is not set, default to the dev DB so the TUI targets the
+# same database as `python -m cli dev` without requiring the caller to
+# remember the flag.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if "DATA_DIR" not in os.environ and (_REPO_ROOT / ".opencompany").exists():
+    os.environ["DATA_DIR"] = str(_REPO_ROOT / ".opencompany")
 
 from rich.console import Console
 from rich.panel import Panel

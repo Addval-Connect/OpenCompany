@@ -110,7 +110,10 @@ class CredentialsPool:
         return self._encryptions.get(ns, self._master_encryption)
 
     def _creds_path(self, namespace: str) -> str:
-        data_dir = Path(self.settings.data_dir)
+        # Same fix as DatabasePool._db_url: anchor relative DATA_DIR to
+        # project_root() so credentials land in <repo>/.opencompany/ in dev
+        # mode, not in the uvicorn CWD (server/).
+        data_dir = Path(self.settings._resolve_under_data(""))
         ns_dir = data_dir / "namespaces" / namespace
         ns_dir.mkdir(parents=True, exist_ok=True)
         return str(ns_dir / "credentials.db")

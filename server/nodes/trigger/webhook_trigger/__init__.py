@@ -30,7 +30,7 @@ from services.plugin import NodeContext, Operation, TriggerNode, TaskQueue
 class WebhookTriggerParams(BaseModel):
     path: str = Field(
         default="",
-        description="URL path fragment — becomes /webhook/{path}",
+        description="URL path fragment — becomes /webhook/{namespace}/{path}",
     )
     method: Literal["GET", "POST", "PUT", "DELETE", "ALL"] = Field(
         default="POST",

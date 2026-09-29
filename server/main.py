@@ -612,6 +612,7 @@ if _is_desktop_mode():
 # moves to the self-contained pattern (nodes/<plugin>/_router.py +
 # register_router from __init__.py), the corresponding line below is
 # removed. Tracked in the plugin-extraction plan.
+app.include_router(webhook.namespaced_router)
 app.include_router(webhook.router)
 # Twitter, Google, Android, and Maps routers moved (Maps deleted in
 # Wave 11.I milestone N -- all four endpoints were dead, the validate-key
