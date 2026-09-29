@@ -32,7 +32,12 @@ class DatabasePool:
         self._initialized: Dict[str, bool] = {}
 
     def _db_url(self, namespace: str) -> str:
-        data_dir = Path(self.settings.data_dir)
+        # Use _resolve_under_data so that a relative DATA_DIR (e.g. the dev
+        # mode ".opencompany") is anchored to the repo root via project_root(),
+        # not to the CWD of the uvicorn subprocess (server/).  Without this,
+        # namespace DBs land in server/.opencompany/ while everything else
+        # (credentials, workflow.db) lands in <repo>/.opencompany/.
+        data_dir = Path(self.settings._resolve_under_data(""))
         ns_dir = data_dir / "namespaces" / namespace
         ns_dir.mkdir(parents=True, exist_ok=True)
         db_path = ns_dir / "workflow.db"
