@@ -249,6 +249,101 @@ Delete `workflow.db` there to reset all data.
 3. **WebSocket** provides real-time status updates
 4. **Database** persists data between restarts
 
+## Starting the Dev Server (source checkout)
+
+**Always use `python -m cli dev` from the repo root, not the global `company` binary.**
+
+```bash
+# From the repo root:
+python -m cli dev
+```
+
+The global `/usr/sbin/company` binary points to a separately installed package.
+Running it from a source checkout may execute the installed version's code and
+causes port mis-detection (both Vite and uvicorn try port 5678).
+
+### Port layout in dev mode
+
+| Service | Port | Note |
+|---------|------|------|
+| Vite (frontend + proxy) | 5678 | proxies `/api`, `/ws`, `/health`, `/mcp` to backend |
+| uvicorn (Python backend) | 5679 | set by `.env.dev` override |
+| Temporal gRPC | 5681 | backend-managed |
+| Temporal UI | 5680 | |
+| JS Executor sidecar | 5682 | |
+
+`.env.dev` sets `PYTHON_BACKEND_PORT=5679` and `VITE_CLIENT_PORT=5678`. This
+file is loaded **only** by `python -m cli dev` / `company dev`; running Vite or
+uvicorn independently requires passing the same vars explicitly:
+
+```bash
+# backend
+PYTHONUNBUFFERED=1 server/.venv/bin/python -m uvicorn main:app \
+    --host 127.0.0.1 --port 5679 --reload
+
+# frontend (from client/)
+VITE_CLIENT_PORT=5678 PYTHON_BACKEND_PORT=5679 bun run start
+```
+
+> **Note — `strictPort: false`**: Vite auto-increments the port if 5678 is
+> taken (e.g. by a stale process from a previous run). Always kill orphan
+> processes before restarting: `company stop` or kill by PID from `ss -tlnp`.
+
+### Database path in dev mode
+
+`DATA_DIR=.opencompany` (set in `.env.dev`) resolves to `<repo>/.opencompany/`
+via `core.paths.project_root()`. Per-namespace SQLite files live under:
+
+```
+<repo>/.opencompany/
+  namespaces/
+    owner/workflow.db      # auth, users, global namespace registry
+    <namespace>/workflow.db
+  credentials.db
+  temporal.db
+```
+
+## First-time setup (fresh DB)
+
+On a clean checkout or after `company clean`, the DB is empty. Run the dev
+server once so migrations run, then register the first user through the browser
+(http://localhost:5678) or via the TUI:
+
+```bash
+cd server
+DATA_DIR=../.opencompany .venv/bin/python scripts/tui.py
+```
+
+The TUI lets you:
+- **Create users** with email + password
+- **Create namespaces** (registers in Temporal + DB automatically)
+- **Assign users to namespaces**
+
+The first `POST /api/auth/register` (or TUI "Add user") also auto-assigns the
+user to the `default` namespace, so the namespace switcher appears immediately
+after login.
+
+## Multi-tenant namespace management
+
+Namespaces are managed via the TUI (`server/scripts/tui.py`).
+Each namespace gets its own Temporal namespace (workers, search attributes)
+and its own `workflow.db` under `<DATA_DIR>/namespaces/<slug>/`.
+
+To add a namespace from the CLI:
+
+```bash
+# From server/
+DATA_DIR=../.opencompany .venv/bin/python scripts/tui.py
+# → Namespaces → Create namespace
+```
+
+Or using manage_users.py for scripted/CI use:
+
+```bash
+DATA_DIR=../.opencompany .venv/bin/python scripts/manage_users.py \
+    namespace --email user@example.com --namespace my-org
+```
+
 ## Architecture Notes
 
 - **WebSocket-First**: WS message handlers replace most REST APIs (live set = `MESSAGE_HANDLERS` in `server/routers/websocket.py` + plugin-registered handlers)

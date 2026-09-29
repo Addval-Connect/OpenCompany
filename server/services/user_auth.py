@@ -184,6 +184,18 @@ class UserAuthService:
 
         logger.info(f"User registered: {normalized_email} (owner={is_owner})")
 
+        # Auto-assign the default namespace so the user can log in without
+        # a TUI step.  Failures are non-fatal: the account still works, it
+        # just won't appear in the namespace switcher until assigned manually.
+        try:
+            await self.database.assign_user_namespace(
+                str(user.id),
+                self.settings.temporal_namespace,
+                role="owner" if is_owner else "member",
+            )
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("Could not auto-assign default namespace to %s: %s", normalized_email, _exc)
+
         return user, None
 
     async def provision_user(self, email: str, password: str, display_name: str) -> tuple[Optional[User], Optional[str]]:
