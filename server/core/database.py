@@ -4649,6 +4649,29 @@ class Database:
         settings["active_namespace"] = namespace
         await self.save_user_settings(settings, user_id)
 
+    async def list_namespaces(self, ready_only: bool = True) -> List[Dict[str, Any]]:
+        """Return all namespace registry entries, oldest first.
+
+        When *ready_only* is True (the default) only ``status='ready'`` rows
+        are returned — used by the Temporal lifecycle bootstrap to know which
+        namespaces need a worker.
+        """
+        async with self.get_session() as session:
+            from models.database import Namespace as NamespaceModel
+            q = select(NamespaceModel).order_by(NamespaceModel.created_at)
+            if ready_only:
+                q = q.where(NamespaceModel.status == "ready")
+            result = await session.execute(q)
+            return [
+                {
+                    "namespace": row.namespace,
+                    "display_name": row.display_name,
+                    "status": row.status,
+                    "temporal_provisioned": row.temporal_provisioned,
+                }
+                for row in result.scalars().all()
+            ]
+
     async def upsert_namespace(
         self, namespace: str, display_name: str = "", status: str = "ready"
     ) -> None:

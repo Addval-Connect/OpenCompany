@@ -104,9 +104,22 @@ async def handle_deploy_workflow(data: Dict[str, Any], websocket: WebSocket) -> 
         )
         or OWNER_PRINCIPAL_ID
     )
-    _deploy_namespace = await resolve_tenant_namespace(
-        _caller, database=container.database(), settings=container.settings()
-    )
+    # Prefer the active_namespace JWT claim (set by auth middleware from the
+    # user's selected org) over the legacy TenantNamespace 1:1 lookup.
+    # resolve_tenant_namespace always returns the single namespace assigned to
+    # the user account (e.g. investability), ignoring which org is currently
+    # active — causing every deployment to land in that namespace regardless
+    # of the UI-selected org.
+    from services.tenancy import resolve_namespace_from_state
+    _ws_state = getattr(websocket, "state", None) if websocket is not None else None
+    if getattr(_ws_state, "active_namespace", None):
+        _deploy_namespace = resolve_namespace_from_state(
+            _ws_state, settings=container.settings()
+        )
+    else:
+        _deploy_namespace = await resolve_tenant_namespace(
+            _caller, database=container.database(), settings=container.settings()
+        )
     from constants import normalize_credential_ns
     _credential_ns = normalize_credential_ns(
         getattr(getattr(websocket, "state", None), "active_namespace", None)
@@ -1643,7 +1656,7 @@ async def handle_get_workflow_control_status(data: Dict[str, Any], websocket: We
 async def handle_start_workflow(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
     """Create generation one and retain deploy_workflow wire compatibility."""
     from constants import OWNER_PRINCIPAL_ID
-    from services.tenancy import resolve_tenant_namespace
+    from services.tenancy import resolve_namespace_from_state, resolve_tenant_namespace
 
     workflow_id = data["workflow_id"]
     owner_id = str(
@@ -1651,9 +1664,15 @@ async def handle_start_workflow(data: Dict[str, Any], websocket: WebSocket) -> D
         or OWNER_PRINCIPAL_ID
     )
     from core.container import container as _c
-    tenant_namespace = await resolve_tenant_namespace(
-        owner_id, database=_c.database(), settings=_c.settings()
-    )
+    _ws_state = getattr(websocket, "state", None)
+    if getattr(_ws_state, "active_namespace", None):
+        tenant_namespace = resolve_namespace_from_state(
+            _ws_state, settings=_c.settings()
+        )
+    else:
+        tenant_namespace = await resolve_tenant_namespace(
+            owner_id, database=_c.database(), settings=_c.settings()
+        )
     key = data.get("idempotency_key") or f"start:{workflow_id}:{uuid.uuid4().hex}"
     service = _control_service()
     existing = await service.database.get_workflow_control_by_idempotency_key(

@@ -49,7 +49,7 @@ _AUTH_METHODS: frozenset[str] = frozenset(
         # Namespace management
         "upsert_namespace",
         "get_namespace",
-        "list_namespaces",
+        "list_namespaces",  # authoritative registry (Namespace table)
         "get_active_namespace_for_user",
         "set_active_namespace_for_user",
         "list_user_namespaces",

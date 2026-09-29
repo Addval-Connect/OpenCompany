@@ -331,11 +331,11 @@ async def _bootstrap_tenant_clients(settings: Settings, log: Callable[[str], Non
     """Connect a Temporal client for every ready tenant namespace.
 
     No-op when ``MULTI_TENANT_NAMESPACES=false``.  When true, reads the
-    ``tenant_namespaces`` DB table and calls
-    :func:`services.temporal.client_registry.register` for each row with
-    ``status=ready`` whose namespace differs from the default.  Failures
-    per namespace are logged but do not block the remaining ones — a
-    partially-started multi-tenant deployment is better than no deployment.
+    ``namespaces`` table (the authoritative registry introduced with the
+    many-to-many namespace model) filtered to ``status=ready`` and
+    ``temporal_provisioned=true``.  Falls back to ``tenant_namespaces``
+    when ``list_namespaces`` is unavailable for backward compatibility.
+    Failures per namespace are logged but do not block the remaining ones.
 
     Registered clients share the module-level Runtime in the registry so
     no extra SDK-level threads are spawned.
@@ -350,12 +350,23 @@ async def _bootstrap_tenant_clients(settings: Settings, log: Callable[[str], Non
     database = container.database()
     default_ns = settings.temporal_namespace
     try:
-        rows = await database.list_tenant_namespaces()
+        # Prefer the Namespace registry (many-to-many model); fall back to
+        # the legacy TenantNamespace 1:1 table for older deployments.
+        if hasattr(database, "list_namespaces"):
+            all_rows = await database.list_namespaces(ready_only=True)
+            rows = [
+                {"namespace": r["namespace"]}
+                for r in all_rows
+                if r.get("temporal_provisioned") and r["namespace"] != default_ns
+            ]
+        else:
+            legacy = await database.list_tenant_namespaces()
+            rows = [r for r in legacy if r.get("status") == STATUS_READY and r.get("namespace") != default_ns]
     except Exception as exc:  # noqa: BLE001 — non-fatal; single-namespace fallback still works
         logger.warning("Failed to list tenant namespaces for Temporal bootstrap", error=str(exc))
         return
 
-    ready_rows = [r for r in rows if r.get("status") == STATUS_READY and r.get("namespace") != default_ns]
+    ready_rows = rows
     if not ready_rows:
         return
 
