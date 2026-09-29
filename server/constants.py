@@ -419,6 +419,7 @@ WORKFLOW_TRIGGER_TYPES: FrozenSet[str] = frozenset(
         "telegramReceive",
         "emailReceive",
         "msMailReceive",
+        "blueflowReceive",
     ]
 )
 

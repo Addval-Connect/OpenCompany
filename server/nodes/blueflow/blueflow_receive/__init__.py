@@ -23,9 +23,9 @@ from services.plugin import NodeContext, Operation, TriggerNode, TaskQueue
 class BlueflowReceiveParams(BaseModel):
     path: str = Field(
         default="",
-        description="Fragmento de URL — el webhook llega a /webhook/{path}",
+        description="Fragmento de URL — el webhook llega a /webhook/{namespace}/{path}",
     )
-    filter: str = Field(
+    filter: Optional[str] = Field(
         default="",
         title="Filtro webhookName",
         description=(
@@ -102,7 +102,7 @@ class BlueflowReceiveNode(TriggerNode):
     def build_filter(self, params: BlueflowReceiveParams) -> Callable[[Dict[str, Any]], bool]:
         """Filtra por path y, opcionalmente, por webhookName en el JSON body."""
         expected_path = params.path or ""
-        webhook_name_filter = params.filter.strip()
+        webhook_name_filter = (params.filter or "").strip()
 
         def matches(event: Dict[str, Any]) -> bool:
             # Path check (same logic as webhookTrigger)
