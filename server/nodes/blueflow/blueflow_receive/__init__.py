@@ -1,87 +1,79 @@
-"""Blue Process — Webhook Trigger node.
+"""Blue Process — Recibir evento (Webhook Trigger clone).
 
-Receives events dispatched by Blue Process (record.created, node.completed, …)
-and fires a workflow execution for each one.
+Clon de webhookTrigger con un campo adicional `filter` que restringe
+la ejecución a eventos cuyo campo `webhookName` (dentro del JSON body)
+coincida con el valor configurado.
 
-Blue Process signs every delivery with HMAC-SHA256:
-  X-Blueflow-Signature: sha256=<hex>
-This node verifies the signature when a secret is configured so the workflow
-only fires for genuine events.
+Formato del evento esperado (Blue Process):
+  POST /webhook/<path>
+  Body JSON: { "webhookName": "BluedocOrg", "event": "node.rejected", ... }
+
+Si `filter` está vacío se aceptan todos los webhooks que lleguen al path.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from services.plugin import (
-    NodeContext,
-    TriggerNode,
-    Operation,
-    TaskQueue,
-)
-from services.event_waiter import register_filter_builder
 from services.deployment.canary_registry import register_canary_trigger_type
-
-
-BLUEFLOW_EVENTS = [
-    "record.created",
-    "node.activated",
-    "node.completed",
-    "node.rejected",
-    "node.commented",
-    "blue.evaluated",
-    "record.completed",
-    "record.rejected",
-]
-
-EVENT_LABELS = {
-    "record.created":   "Expediente creado",
-    "node.activated":   "Etapa activada",
-    "node.completed":   "Etapa completada",
-    "node.rejected":    "Etapa rechazada",
-    "node.commented":   "Comentario / archivo adjunto",
-    "blue.evaluated":   "Blue evaluó criterios",
-    "record.completed": "Expediente completado (éxito)",
-    "record.rejected":  "Expediente rechazado (fallo)",
-}
+from services.plugin import NodeContext, Operation, TriggerNode, TaskQueue
 
 
 class BlueflowReceiveParams(BaseModel):
-    events: List[str] = Field(
-        default_factory=lambda: ["record.created"],
-        title="Eventos a escuchar",
+    path: str = Field(
+        default="",
+        description="Fragmento de URL — el webhook llega a /webhook/{path}",
+    )
+    filter: str = Field(
+        default="",
+        title="Filtro webhookName",
         description=(
-            "Selecciona los eventos de Blue Process que disparan este workflow. "
-            "Deja vacío para recibir todos."
+            "Texto exacto a comparar con el campo `webhookName` del JSON body. "
+            "Si se deja vacío se aceptan todos los eventos del path configurado."
         ),
+    )
+    method: Literal["GET", "POST", "PUT", "DELETE", "ALL"] = Field(
+        default="POST",
+        description="Método HTTP a aceptar. ALL acepta cualquier método.",
+    )
+    response_mode: Literal["immediate", "responseNode"] = Field(
+        default="immediate",
+        description=(
+            "immediate: responde 200 OK de inmediato. "
+            "responseNode: espera un nodo webhookResponse aguas abajo."
+        ),
+    )
+    authentication: Literal["none", "header"] = Field(
+        default="none",
+        description="none: sin autenticación. header: requiere un header específico.",
+    )
+    header_name: str = Field(
+        default="X-API-Key",
+        description="Nombre del header cuando authentication=header.",
+        json_schema_extra={"displayOptions": {"show": {"authentication": ["header"]}}},
+    )
+    header_value: str = Field(
+        default="",
+        description="Valor esperado del header cuando authentication=header.",
         json_schema_extra={
-            "multiselect": True,
-            "options": [{"value": k, "label": v} for k, v in EVENT_LABELS.items()],
+            "password": True,
+            "displayOptions": {"show": {"authentication": ["header"]}},
         },
     )
-    secret: str = Field(
-        default="",
-        title="Webhook Secret",
-        description=(
-            "Secreto configurado en Blue Process al registrar el webhook. "
-            "Cuando está presente, se verifica la firma HMAC-SHA256 de cada entrega. "
-            "Deja vacío para omitir la verificación (no recomendado en producción)."
-        ),
-        json_schema_extra={"secret": True, "password": True},
-    )
+
+    model_config = ConfigDict(extra="ignore")
 
 
 class BlueflowReceiveOutput(BaseModel):
-    event: str = Field(description="Tipo de evento (record.created, node.completed, …)")
-    record_id: Optional[str] = Field(default=None, description="ID del expediente")
-    record_name: Optional[str] = Field(default=None, description="Nombre del expediente")
-    node_id: Optional[str] = Field(default=None, description="ID del nodo de flujo")
-    node_name: Optional[str] = Field(default=None, description="Nombre de la etapa")
-    actor: Optional[str] = Field(default=None, description="Actor que disparó el evento")
-    organization_id: Optional[str] = Field(default=None, description="ID de la organización")
-    timestamp: Optional[str] = Field(default=None, description="Timestamp ISO del evento")
-    payload: Dict[str, Any] = Field(default_factory=dict, description="Payload completo del webhook")
+    method: Optional[str] = None
+    path: Optional[str] = None
+    headers: Optional[dict] = None
+    query: Optional[dict] = None
+    body: Optional[str] = None
+    json_: Optional[dict] = Field(default=None)
+
+    model_config = ConfigDict(extra="allow")
 
 
 class BlueflowReceiveNode(TriggerNode):
@@ -90,76 +82,55 @@ class BlueflowReceiveNode(TriggerNode):
     subtitle = "Webhook de Blue Process"
     group = ("trigger",)
     description = (
-        "Se activa cuando Blue Process dispara un webhook. "
-        "Recibe eventos como 'expediente creado', 'etapa completada', etc. "
-        "y pasa el payload al flujo."
+        "Se activa cuando Blue Process envía un webhook al path configurado. "
+        "El campo Filtro restringe la ejecución a eventos cuyo `webhookName` "
+        "coincida exactamente con el valor indicado."
     )
+    component_kind = "trigger"
     task_queue = TaskQueue.TRIGGERS_EVENT
+    mode = "event"
+    event_type = "webhook_received"
 
     Params = BlueflowReceiveParams
     Output = BlueflowReceiveOutput
 
     handles = (
-        {
-            "name": "output-main",
-            "kind": "output",
-            "position": "right",
-            "label": "Evento",
-        },
+        {"name": "output-main", "kind": "output", "position": "right", "label": "Evento", "role": "main"},
     )
     ui_hints = {"isTrigger": True}
 
-    @Operation("trigger")
-    async def trigger(self, ctx: NodeContext, params: BlueflowReceiveParams) -> BlueflowReceiveOutput:
-        payload: Dict[str, Any] = ctx.raw.get("_trigger_payload", {})
-        return BlueflowReceiveOutput(
-            event=payload.get("event", ""),
-            record_id=payload.get("recordId"),
-            record_name=payload.get("recordName"),
-            node_id=payload.get("nodeId"),
-            node_name=payload.get("nodeName"),
-            actor=payload.get("actor"),
-            organization_id=payload.get("organizationId"),
-            timestamp=payload.get("timestamp"),
-            payload=payload,
-        )
+    def build_filter(self, params: BlueflowReceiveParams) -> Callable[[Dict[str, Any]], bool]:
+        """Filtra por path y, opcionalmente, por webhookName en el JSON body."""
+        expected_path = params.path or ""
+        webhook_name_filter = params.filter.strip()
 
-
-# ─── Webhook intake ──────────────────────────────────────────────────────────
-# Blue Process delivers to the generic /webhook/<path> route.
-# The path format is: /webhook/blueflow/<nodeId>
-# The webhook verifier and filter are registered below.
-
-def _build_blueflow_filter(params: Dict[str, Any]):
-    """Build filter function for blueflowReceive node parameters."""
-    import hmac
-    import hashlib
-
-    allowed_events: List[str] = params.get("events") or []
-    secret: str = params.get("secret", "").strip()
-
-    def _filter(data: Dict[str, Any]) -> bool:
-        # Verify HMAC signature when a secret is configured
-        if secret:
-            sig_header: str = data.get("_headers", {}).get("x-blueflow-signature", "")
-            raw_body: bytes = data.get("_raw_body", b"")
-            expected = "sha256=" + hmac.new(
-                secret.encode(), raw_body, hashlib.sha256
-            ).hexdigest()
-            if not hmac.compare_digest(sig_header, expected):
+        def matches(event: Dict[str, Any]) -> bool:
+            # Path check (same logic as webhookTrigger)
+            if expected_path and event.get("path") != expected_path:
                 return False
 
-        # Event type filter (empty = accept all)
-        event: str = data.get("event", "")
-        if allowed_events and event not in allowed_events:
-            return False
-        return True
+            # webhookName filter — reads from the parsed JSON body
+            if webhook_name_filter:
+                json_body: Dict[str, Any] = event.get("json") or {}
+                if json_body.get("webhookName", "") != webhook_name_filter:
+                    return False
 
-    return _filter
+            # Header auth check
+            if params.authentication == "header" and params.header_value:
+                headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+                if headers.get(params.header_name.lower(), "") != params.header_value:
+                    return False
+
+            return True
+
+        return matches
+
+    @Operation("wait")
+    async def wait(self, ctx: NodeContext, params: BlueflowReceiveParams) -> BlueflowReceiveOutput:
+        raise NotImplementedError("Event triggers return via TriggerNode.execute, not the op body")
 
 
-register_canary_trigger_type("blueflowReceive", "com.blueflow.webhook.received")
-register_filter_builder("blueflowReceive", _build_blueflow_filter)
+register_canary_trigger_type(BlueflowReceiveNode.type, "com.opencompany.webhook.received")
 
 
 __all__ = ["BlueflowReceiveNode"]
