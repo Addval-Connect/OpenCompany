@@ -81,9 +81,18 @@ async def _resolve_connection_namespace(websocket: Any) -> str:
         if not getattr(settings, "multi_tenant_namespaces", False):
             return default_ns
 
-        user_id = str(
-            getattr(getattr(websocket, "state", None), "user_id", None) or ""
-        )
+        # Prefer the session-scoped active_namespace from the JWT (set by
+        # the auth middleware from the switch-namespace endpoint).  This
+        # reflects the user's CURRENT namespace selection and is correct
+        # even when the legacy tenant_namespaces table has a different
+        # 1:1 mapping or no entry at all.
+        state = getattr(websocket, "state", None)
+        active_ns = getattr(state, "active_namespace", None)
+        if active_ns and active_ns not in ("default", "owner", ""):
+            from constants import normalize_credential_ns
+            return normalize_credential_ns(active_ns)
+
+        user_id = str(getattr(state, "user_id", None) or "")
         return await resolve_tenant_namespace(
             user_id or None,
             database=container.database(),
@@ -192,7 +201,35 @@ class StatusBroadcaster:
         logger.info(f"[StatusBroadcaster] Client connected. Total: {len(self._connections)}")
 
         try:
-            await websocket.send_json({"type": "initial_status", "data": self._status})
+            # Build a namespace-scoped initial_status so stale state from other
+            # namespaces never contaminates a new client:
+            #
+            # workflow_lock — global singleton; always reset to unlocked.
+            #   The real lock arrives via workflow_control_status broadcasts.
+            #
+            # nodes — filter to only workflow_ids that are running in this
+            #   tenant's namespace.  Without this, a waiting chatTrigger from
+            #   namespace A (workflow_id=1) makes namespace B's newly-added
+            #   chatTrigger (also workflow_id=1) appear armed/pulsing.
+            try:
+                from core.container import container
+                dm = container.workflow_service()._get_deployment_manager()
+                running_for_ns = set(dm.get_deployed_workflows(namespace=tenant_namespace))
+            except Exception:
+                running_for_ns = set()
+
+            nodes_for_ns = {
+                node_id: status
+                for node_id, status in self._status["nodes"].items()
+                if str(status.get("workflow_id") or "") in running_for_ns
+            }
+
+            initial_data = {
+                **self._status,
+                "workflow_lock": {"locked": False, "workflow_id": None, "locked_at": None, "reason": None},
+                "nodes": nodes_for_ns,
+            }
+            await websocket.send_json({"type": "initial_status", "data": initial_data})
         except Exception as e:
             logger.error(f"[StatusBroadcaster] Failed to send initial status: {e}")
 
@@ -203,13 +240,17 @@ class StatusBroadcaster:
         # gets cleared. CloudEvents-shaped envelope; empty list is
         # meaningful and triggers FE-side reset.
         try:
-            await self._send_deployment_snapshot(websocket)
+            await self._send_deployment_snapshot(websocket, tenant_namespace=tenant_namespace)
         except Exception as e:
             logger.error(f"[StatusBroadcaster] Failed to send deployment snapshot: {e}")
 
-    async def _send_deployment_snapshot(self, websocket: WebSocket) -> None:
+    async def _send_deployment_snapshot(
+        self, websocket: WebSocket, *, tenant_namespace: Optional[str] = None
+    ) -> None:
         """Build + send a CloudEvents deployment_snapshot to one client.
 
+        Scoped to ``tenant_namespace`` so a deployment in namespace A never
+        locks the canvas in namespace B (both may share workflow_id=1).
         Lazy container resolution because the broadcaster is constructed
         before WorkflowService and we do not want a circular dependency
         at module-load time.
@@ -220,8 +261,8 @@ class StatusBroadcaster:
 
             workflow_service = container.workflow_service()
             dm = workflow_service._get_deployment_manager()
-            running_ids = dm.get_deployed_workflows()
-            paused_ids = dm.get_paused_workflows()
+            running_ids = dm.get_deployed_workflows(namespace=tenant_namespace)
+            paused_ids = dm.get_paused_workflows(namespace=tenant_namespace)
         except Exception as e:
             # Backend startup race or DI not wired yet -- skip the snapshot
             # rather than fail the connect entirely. The empty-list path

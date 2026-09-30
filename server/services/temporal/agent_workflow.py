@@ -630,6 +630,11 @@ class AgentWorkflow:
             start_to_close_timeout=PERSIST_TURN_TIMEOUT * 2,  # 60s default
             retry_policy=AGENT_ACTIVITY_RETRY,
         )
+        # Carry credential_customer_id from context into payload so all
+        # downstream activities (execute_llm_step, store_output, etc.) can
+        # call set_active_namespace for per-tenant DB/credential routing.
+        if "credential_customer_id" not in payload and context.get("credential_customer_id"):
+            payload = {**payload, "credential_customer_id": context["credential_customer_id"]}
         # Stable per-run execution id, forwarded into every tool-call
         # activity so session-keyed nodes (browser) reuse one instance
         # across iterations instead of minting a fresh uuid per call
@@ -833,6 +838,7 @@ class AgentWorkflow:
                 "node_id": payload["node_id"],
                 "provider": payload["provider"],
                 "model": payload["model"],
+                "credential_customer_id": payload.get("credential_customer_id"),
                 "messages": messages,
                 "tools": [
                     t["definition"]
@@ -2181,6 +2187,7 @@ class AgentWorkflow:
                     "messages": compact_source,
                     "provider": payload["provider"],
                     "model": payload["model"],
+                    "credential_customer_id": payload.get("credential_customer_id"),
                 }
                 await self._wait_until_resumed()
                 try:
@@ -2420,6 +2427,7 @@ class AgentWorkflow:
                     "node_id": agent_node_id,
                     "session_id": payload.get("session_id", "default"),
                     "result": result_payload,
+                    "credential_customer_id": payload.get("credential_customer_id"),
                 }
             ],
             activity_id="store-output",
@@ -2543,6 +2551,7 @@ class AgentWorkflow:
                     "human_text": human_text,
                     "assistant_text": assistant_text,
                     "window_size": int(payload.get("memory_window_size") or 10),
+                    "credential_customer_id": payload.get("credential_customer_id"),
                 }
             ],
             start_to_close_timeout=PERSIST_TURN_TIMEOUT,

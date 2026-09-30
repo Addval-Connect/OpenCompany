@@ -96,11 +96,14 @@ class DeploymentManager:
         state = self._deployments.get(workflow_id)
         return state is not None and state.is_running
 
-    def get_deployed_workflows(self) -> List[str]:
-        """Get list of deployed workflow IDs."""
-        return [wid for wid, state in self._deployments.items() if state.is_running]
+    def get_deployed_workflows(self, namespace: Optional[str] = None) -> List[str]:
+        """Get list of deployed workflow IDs, optionally scoped to a Temporal namespace."""
+        return [
+            wid for wid, state in self._deployments.items()
+            if state.is_running and (namespace is None or state.temporal_namespace == namespace)
+        ]
 
-    def get_paused_workflows(self) -> List[str]:
+    def get_paused_workflows(self, namespace: Optional[str] = None) -> List[str]:
         """Deployed workflow IDs whose admission is cooperatively paused.
 
         A paused deployment stays in ``get_deployed_workflows`` (it is
@@ -108,7 +111,8 @@ class DeploymentManager:
         avoid animating a paused workflow as running (the deployment
         snapshot carries both).
         """
-        return [wid for wid in self._paused_workflows if self.is_workflow_deployed(wid)]
+        deployed = set(self.get_deployed_workflows(namespace=namespace))
+        return [wid for wid in self._paused_workflows if wid in deployed]
 
     def pause(self, workflow_id: str) -> bool:
         """Cooperatively stop admitting new runs for a deployment."""

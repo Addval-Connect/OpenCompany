@@ -30,6 +30,8 @@ const THEME_LABEL: Record<ThemeName, string> = {
   rot:          'ROT',
   plague:       'PLAGUE',
   surveillance: 'SURVEILLANCE',
+  blueprocess:         'BLUE PROCESS',
+  'blueprocess-light': 'BLUE PROCESS LIGHT',
 };
 
 interface StatusBarProps {

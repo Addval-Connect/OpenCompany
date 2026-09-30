@@ -22,6 +22,8 @@ import './themes/wasteland.css'
 import './themes/rot.css'
 import './themes/plague.css'
 import './themes/surveillance.css'
+import './themes/blueprocess.css'
+import './themes/blueprocess-light.css'
 // Animation system — pulse-keyframe tokens, trigger armed/listening motion,
 // .opencompany-* helpers. Loaded after the themes so its keyframes + per-theme
 // --pulse-* tokens are authoritative.

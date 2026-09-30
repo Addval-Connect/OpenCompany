@@ -1637,6 +1637,31 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             }
             return next;
           });
+
+          // Clear any stale legacy workflow_lock for the active workflow if the
+          // backend's namespace-scoped snapshot says it is not running.
+          // Prevents cross-namespace workflow_id collisions from locking the canvas.
+          if (currentId && !runningSet.has(currentId)) {
+            setWorkflowLock(prev =>
+              prev.locked && prev.workflow_id === currentId
+                ? { locked: false, workflow_id: null, locked_at: null, reason: null }
+                : prev
+            );
+          }
+
+          // Clear node statuses for every workflow that the namespace-scoped
+          // snapshot says is not running. This prevents pulsing/waiting node
+          // animations from another namespace bleeding through when two
+          // namespaces share the same workflow_id.
+          {
+            const nsStore = useNodeStatusStore.getState();
+            const storedWorkflowIds = Object.keys(nsStore.allStatuses);
+            for (const wid of storedWorkflowIds) {
+              if (!runningSet.has(wid)) {
+                nsStore.clearWorkflow(wid);
+              }
+            }
+          }
           break;
         }
 

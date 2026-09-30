@@ -355,7 +355,7 @@ class TriggerListenerWorkflow:
             try:
                 latest = await workflow.execute_activity(
                     "load_persisted_workflow_graph_activity",
-                    {"workflow_id": workflow_id},
+                    {"workflow_id": workflow_id, "credential_customer_id": listener_data.get("credential_customer_id")},
                     start_to_close_timeout=timedelta(seconds=10),
                 )
                 if latest.get("found"):
@@ -376,7 +376,9 @@ class TriggerListenerWorkflow:
         # F2-renamed). Pre-computed at deploy time so the workflow
         # sandbox doesn't have to slugify.
         trigger_label = listener_data.get("trigger_label") or trigger_node_id
-        tenant_id = listener_data.get("tenant_id")
+        # credential_customer_id is the canonical field set by DeploymentManager;
+        # tenant_id is the older alias used in some paths.
+        tenant_id = listener_data.get("tenant_id") or listener_data.get("credential_customer_id")
 
         # event.data is the producer-supplied payload (webhook body /
         # message details / etc.). The full envelope (specversion, type,
@@ -442,6 +444,7 @@ class TriggerListenerWorkflow:
             "workflow_id": workflow_id,
             "workflow_slug": workflow_slug,
             "tenant_id": tenant_id,
+            "credential_customer_id": tenant_id,
             "execution_id": listener_data.get("execution_id"),
             "root_execution_id": listener_data.get("root_execution_id"),
             "data_scope_id": listener_data.get("data_scope_id"),

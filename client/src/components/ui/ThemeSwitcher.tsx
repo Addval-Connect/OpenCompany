@@ -42,6 +42,8 @@ const THEME_META: Record<ThemeName, ThemeMeta> = {
   rot:          { label: 'Necromantic Rot',blurb: 'Moss-overgrown crypt' },
   plague:       { label: 'Plague City',    blurb: 'Quarantine notices' },
   surveillance: { label: 'Surveillance',   blurb: 'Institutional CCTV' },
+  blueprocess:        { label: 'Blue Process',       blurb: 'Operational clarity — dark' },
+  'blueprocess-light': { label: 'Blue Process Light', blurb: 'Operational clarity — light' },
 };
 
 interface ThemeGroup {
@@ -55,6 +57,7 @@ const THEME_GROUPS: readonly ThemeGroup[] = [
   { heading: 'System',    themes: ['light', 'dark'] },
   { heading: 'Utopian',   themes: ['renaissance', 'greek', 'edo', 'steampunk', 'atomic'] },
   { heading: 'Dystopian', themes: ['cyber', 'wasteland', 'rot', 'plague', 'surveillance'] },
+  { heading: 'Brand',     themes: ['blueprocess', 'blueprocess-light'] },
 ];
 
 export const ThemeSwitcher: React.FC<{ className?: string }> = ({ className }) => {
