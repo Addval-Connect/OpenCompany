@@ -20,7 +20,9 @@ import { BRAND_STORAGE_KEYS, readAndMigrateStorageValue } from '../lib/brandStor
 export type ThemeName =
   | 'light' | 'dark'
   | 'renaissance' | 'greek' | 'edo' | 'steampunk' | 'atomic'
-  | 'cyber' | 'wasteland' | 'rot' | 'plague' | 'surveillance';
+  | 'cyber' | 'wasteland' | 'rot' | 'plague' | 'surveillance'
+  | 'blueprocess'
+  | 'blueprocess-light';
 
 /** Order matters — drives the ThemeSwitcher menu and keyboard rotation.
  *  Utopian set first (light + dark + 5 utopian), dystopian set after. */
@@ -28,6 +30,7 @@ export const AVAILABLE_THEMES: readonly ThemeName[] = [
   'light', 'dark',
   'renaissance', 'greek', 'edo', 'steampunk', 'atomic',
   'cyber', 'wasteland', 'rot', 'plague', 'surveillance',
+  'blueprocess', 'blueprocess-light',
 ];
 
 const THEME_STORAGE_KEYS = BRAND_STORAGE_KEYS.theme;
@@ -36,7 +39,7 @@ const LEGACY_DARK_MODE_KEY = 'darkMode';
 /** Themes whose backgrounds are dark — also flip the legacy `.dark`
  *  Tailwind variant so existing `dark:` utilities resolve correctly. */
 const DARK_FAMILY: ReadonlySet<ThemeName> = new Set([
-  'dark', 'cyber', 'wasteland', 'rot', 'surveillance', 'steampunk',
+  'dark', 'cyber', 'wasteland', 'rot', 'surveillance', 'steampunk', 'blueprocess',
 ]);
 
 interface ThemeContextType {

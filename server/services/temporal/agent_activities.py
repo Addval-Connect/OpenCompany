@@ -469,6 +469,11 @@ async def execute_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     ``heartbeat_timeout``.
     """
 
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
+
     activity.logger.info(
         f"Agent LLM step: provider={payload.get('provider')} " f"model={payload.get('model')} messages={len(payload.get('messages', []))}"
     )
@@ -508,6 +513,11 @@ async def persist_agent_turn(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     from core.container import container
     from services.memory.runtime import append_memory_turns_atomic
+
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
 
     database = container.database()
     mutation_id = payload.get("mutation_id")
@@ -703,6 +713,11 @@ async def store_agent_output(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     from core.container import container
 
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
+
     workflow_service = container.workflow_service()
     node_id = payload["node_id"]
     session_id = payload.get("session_id", "default")
@@ -787,6 +802,17 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
     node_type = context["node_type"]
     workflow_id = context.get("workflow_id")
     session_id = context.get("session_id", "default")
+
+    # Temporal activities run outside the HTTP request lifecycle — the ContextVar
+    # set by the auth middleware is never populated and defaults to "owner".
+    # Both node parameters and credentials are stored per-tenant namespace, so
+    # we set the namespace from credential_customer_id before any DB or auth
+    # access. NamespacedDatabase and NamespacedCredentialsDatabase read
+    # get_active_namespace() at call time, so this single set covers both.
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(context.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
 
     database = container.database()
     auth = container.auth_service()
@@ -2026,6 +2052,11 @@ async def compact_context(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     from services.compaction import get_compaction_service
     from services.llm.protocol import message_from_wire
+
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
 
     activity.heartbeat("Compacting agent context")
     svc = get_compaction_service()

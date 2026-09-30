@@ -1158,10 +1158,15 @@ async def handle_send_chat_message(data: Dict[str, Any], websocket: WebSocket) -
     # dispatch — the plugin factory only carries the field.
     workflow_scope = session_id if session_id and session_id != "default" else None
 
+    # Resolve the Temporal namespace for this client so the Visibility query
+    # in dispatch.emit targets the correct tenant namespace.
+    from services.status_broadcaster import _resolve_connection_namespace
+    tenant_ns = await _resolve_connection_namespace(websocket)
+
     # Dispatch via canary CloudEvents path — Visibility-query Signal
     # fan-out to running TriggerListenerWorkflow consumers + in-process
     # WS broadcast on ``chat_message_received``.
-    await dispatch_chat_message_received(event_data, workflow_id=workflow_scope)
+    await dispatch_chat_message_received(event_data, workflow_id=workflow_scope, namespace=tenant_ns)
 
     logger.info(f"[ChatMessage] Dispatched canary event for session={session_id}")
 

@@ -432,6 +432,11 @@ async def load_persisted_workflow_graph_activity(payload: Dict[str, Any]) -> Dic
         normalize_legacy_android_toolkit,
     )
 
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
+
     workflow_id = str(payload.get("workflow_id") or "")
     if not workflow_id:
         return {"found": False, "nodes": [], "edges": []}
@@ -477,6 +482,11 @@ async def store_node_output_activity(payload: Dict[str, Any]) -> None:
         }
     """
     from core.container import container
+
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
 
     workflow_service = container.workflow_service()
     node_id = payload["node_id"]
@@ -592,6 +602,11 @@ async def pause_workflow_on_failure_activity(payload: Dict[str, Any]) -> Dict[st
         }
     """
     from services.deployment.handlers import pause_generation_on_failure
+
+    from constants import normalize_credential_ns
+    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
+    from core.namespace_context import set_active_namespace
+    set_active_namespace(tenant_ns)
 
     try:
         return await pause_generation_on_failure(

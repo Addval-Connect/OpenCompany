@@ -69,6 +69,8 @@ const THEME_LABEL: Record<ThemeName, string> = {
   rot:          'Necromantic Rot',
   plague:       'Plague City',
   surveillance: 'Surveillance',
+  blueprocess:         'Blue Process',
+  'blueprocess-light': 'Blue Process Light',
 };
 
 interface Props {

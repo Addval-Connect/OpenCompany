@@ -1,0 +1,144 @@
+/* ============================================================================
+ * themes/blueprocess.css — Blue Process brand theme.
+ *
+ * Palette derived from the Blue Process UX Design System (ux-design.md §4.1):
+ * background #31333A, surface #393B41, primary #59A7C6 (steel blue),
+ * success #55A078, warning #FF9F43, danger #EA5455, danger-dark #951E1E.
+ * Foreground #D0D4F1 (cool lavender white).
+ *
+ * Dark-family theme: sets `.dark` class so Tailwind `dark:` variants resolve.
+ * ============================================================================ */
+
+:root[data-theme="blueprocess"],
+.blueprocess {
+  /* Surfaces — Blue Process dark */
+  --bg-app:       #31333A;   /* base background */
+  --bg-panel:     #393B41;   /* sidebar / toolbar / palette */
+  --bg-canvas:    #2b2d33;   /* canvas slightly deeper */
+  --bg-elevated:  #42444B;   /* cards, inputs-on-panel */
+  --bg-input:     #393B41;
+  --bg-hover:     rgba(208, 212, 241, 0.06);
+  --bg-active:    rgba(208, 212, 241, 0.10);
+  --bg-overlay:   rgba(20, 21, 26, 0.75);
+
+  /* Borders */
+  --border-default: rgba(208, 212, 241, 0.16);
+  --border-strong:  rgba(208, 212, 241, 0.28);
+  --border-focus:   #59A7C6;
+  --ornament-frame: none;
+
+  /* Foreground — cool lavender-white */
+  --fg-default:    #D0D4F1;
+  --fg-muted:      #AAB3DE;
+  --fg-faint:      #5E6692;
+  --fg-on-accent:  #ffffff;
+  --fg-on-success: #ffffff;
+  --fg-on-danger:  #ffffff;
+  --fg-on-warning: #1a0f00;
+
+  /* Typography */
+  --font-display: 'Geist Variable', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-body:    'Geist Variable', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --type-scale-base:       14px;
+  --type-tracking-display: 0;
+  --type-uppercase:        none;
+
+  /* Geometry */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   8px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --dur-fast:    90ms;
+  --dur-default: 180ms;
+  --dur-slow:    320ms;
+  --ease-default:  cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-emphasis: cubic-bezier(0.6, -0.05, 0.3, 1.4);
+  --motion-style:  smooth;
+  --sound-pack:    digital;
+
+  /* Cursor + scrollbar */
+  --cursor-default: auto;
+  --cursor-pointer: pointer;
+  --scrollbar-track: #31333A;
+  --scrollbar-thumb: #5A5D66;
+
+  /* ── shadcn semantic tokens ────────────────────────────────────────── */
+  --background:           #31333A;
+  --foreground:           #D0D4F1;
+  --card:                 #42444B;
+  --card-foreground:      #D0D4F1;
+  --popover:              #42444B;
+  --popover-foreground:   #D0D4F1;
+  --surface-card:         #42444B;
+  --primary:              #59A7C6;   /* Blue Process steel blue */
+  --primary-foreground:   #ffffff;
+  --secondary:            #42444B;
+  --secondary-foreground: #D0D4F1;
+  --muted:                #393B41;
+  --muted-foreground:     #AAB3DE;
+  --accent:               #59A7C6;
+  --accent-foreground:    #ffffff;
+  --destructive:          #EA5455;
+  --destructive-foreground: #ffffff;
+  --success:              #55A078;
+  --warning:              #FF9F43;
+  --info:                 #59A7C6;
+  --border:               rgba(208, 212, 241, 0.16);
+  --input:                rgba(208, 212, 241, 0.16);
+  --ring:                 #59A7C6;
+
+  /* ── Action ink tokens ─────────────────────────────────────────────── */
+  --action-run-ink:    #55A078;   /* success green */
+  --action-stop-ink:   #EA5455;   /* danger red */
+  --action-save-ink:   #59A7C6;   /* primary blue */
+  --action-config-ink: #FF9F43;   /* warning orange */
+  --action-secret-ink: #D0D4F1;   /* foreground */
+  --action-tools-ink:  #AAB3DE;   /* muted */
+
+  /* ── Node pulse ────────────────────────────────────────────────────── */
+  --node-pulse-color: #59A7C6;
+
+  /* ── Canvas grid ───────────────────────────────────────────────────── */
+  --canvas-grid: rgba(208, 212, 241, 0.06);
+
+  /* ── Shadows ───────────────────────────────────────────────────────── */
+  --shadow-card:       0 4px 12px rgba(0, 0, 0, 0.40);
+  --shadow-card-hover: 0 6px 18px rgba(0, 0, 0, 0.50);
+  --shadow-modal:      0 16px 48px rgba(0, 0, 0, 0.60);
+
+  color-scheme: dark;
+}
+
+/* Code & syntax tokens */
+:root[data-theme="blueprocess"],
+.blueprocess {
+  --code-bg:          #2b2d33;
+  --code-gutter-bg:   #31333A;
+  --code-gutter-fg:   #5E6692;
+  --code-line-active: rgba(89, 167, 198, 0.08);
+  --code-selection:   rgba(89, 167, 198, 0.20);
+  --code-caret:       #59A7C6;
+  --code-border:      var(--border-default);
+
+  /* Syntax palette — blue process accents */
+  --code-text:        #D0D4F1;
+  --code-comment:     #5E6692;
+  --code-keyword:     #59A7C6;   /* primary blue — keywords */
+  --code-string:      #55A078;   /* success green — strings */
+  --code-number:      #FF9F43;   /* warning orange — numbers */
+  --code-boolean:     #FF9F43;
+  --code-function:    #AAB3DE;   /* muted — functions */
+  --code-property:    #D0D4F1;   /* foreground — properties */
+  --code-operator:    #59A7C6;
+  --code-punctuation: #AAB3DE;
+  --code-tag:         #59A7C6;
+}
+
+/* Scrollbar */
+:root[data-theme="blueprocess"] ::-webkit-scrollbar { width: 6px; height: 6px; }
+:root[data-theme="blueprocess"] ::-webkit-scrollbar-track { background: #31333A; }
+:root[data-theme="blueprocess"] ::-webkit-scrollbar-thumb { background: #5A5D66; border-radius: 3px; }
+:root[data-theme="blueprocess"] ::-webkit-scrollbar-thumb:hover { background: #59A7C6; }

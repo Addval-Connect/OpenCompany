@@ -247,6 +247,7 @@ class MachinaWorkflow:
                 {
                     "workflow_id": workflow_id,
                     "reason": str((errors[0] or {}).get("error", "run_failed"))[:500],
+                    "credential_customer_id": workflow_data.get("credential_customer_id"),
                 },
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=QUICK_ACTIVITY_RETRY,
@@ -433,6 +434,7 @@ class MachinaWorkflow:
                             "node_id": node_id,
                             "session_id": session_id,
                             "result": trigger_output,
+                            "credential_customer_id": workflow_data.get("credential_customer_id"),
                         },
                         start_to_close_timeout=timedelta(seconds=10),
                     )

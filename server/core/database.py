@@ -174,8 +174,17 @@ class Database:
         raise RuntimeError("identity_allocation_conflict")
 
     async def allocate_workflow_id(self) -> str:
-        """Return the next canonical workflow ID: ``1``, ``2``, ..."""
-        return str(await self.allocate_identity("workflow"))
+        """Return a globally-unique workflow ID (32-hex UUID).
+
+        Previously returned a per-namespace sequential integer (``1``, ``2``,
+        …).  With multi-tenant support each namespace DB has its own
+        auto-increment sequence, so two namespaces would both produce ``1``
+        causing cross-namespace conflicts in DeploymentManager, nodeStatusStore,
+        and Temporal workflow IDs.  UUIDs are collision-free across all
+        namespace DBs without coordination.
+        """
+        import uuid
+        return uuid.uuid4().hex
 
     async def allocate_execution_id(self, workflow_id: str) -> str:
         """Return a workflow-scoped application execution identity.
