@@ -12,13 +12,20 @@ method:
    ``reassign_task``, which requires the Task Manager tool. An earlier
    version stripped every tool here "so the agent reports instead of
    re-delegating" — that made the lead unable to accept or reassign
-   anything, which read as the lead forgetting its plan.
+   anything, which read as the lead forgetting its plan. The firing
+   runs in a fresh execution, so the tool-facing context is re-scoped
+   to the OWNING execution id carried by the task payload (the Temporal
+   runtime's ``team_execution_id`` equivalent).
 3. Auto-prompt fallback when the ``prompt`` field is empty and a
    connected upstream node produced output.
 
 For team-lead agents (``orchestrator_agent`` / ``ai_employee``),
 teammate agents connected via ``input-teammates`` become delegation
-tools (appended to ``tool_data``).
+tools (appended to ``tool_data``), and the durable execution team is
+persisted up front (mirroring the Temporal runtime's
+``prepare_agent_payload``) so the lead's first ``task_manager`` call
+resolves its scope; completion-review firings are excluded — they
+re-scope instead of minting a second empty team.
 
 :func:`prepare_agent_call` returns the fully-prepared kwargs to pass
 to ``ai_service.execute_agent(...)`` or ``ai_service.execute_chat_agent(...)``.
@@ -80,6 +87,16 @@ async def prepare_agent_call(
             f"{log_prefix} Task context injected for task_id={task_data.get('task_id')}",
         )
 
+        # A taskTrigger completion review runs in a FRESH execution, but
+        # the durable team it reviews belongs to the execution that
+        # assigned the work. Re-scope the run context to the owning
+        # execution (the Temporal runtime does the same via
+        # ``team_execution_id``) so task_manager resolves that team
+        # instead of raising "No team exists for this lead execution".
+        owning_execution_id = str(task_data.get("execution_id") or "")
+        if owning_execution_id:
+            context = {**context, "execution_id": owning_execution_id}
+
     # Step 2: auto-prompt fallback.
     if not parameters.get("prompt") and input_data:
         prompt = (
@@ -111,6 +128,38 @@ async def prepare_agent_call(
                     }
                 )
             logger.info(f"[Teams] Added {len(teammates)} teammates as delegation tools")
+
+            # Persist the execution team up front, mirroring the Temporal
+            # runtime (agent_activities.prepare_agent_payload). The lead's
+            # system prompt forbids direct delegate_to_* calls once a Task
+            # Manager is bound, so the lazy creation inside
+            # _execute_delegated_agent never fires in this runtime — the
+            # first task_manager assign_task then failed with "No team
+            # exists for this lead execution".
+            # A taskTrigger completion review (task_data present) runs in a
+            # separate execution and must NOT mint a second empty team for
+            # the same lead; it re-scopes to the owning execution above.
+            workflow_id = str(context.get("workflow_id") or "")
+            execution_id = str(context.get("execution_id") or "")
+            if workflow_id and execution_id and not task_data:
+                from services.agent_team import get_agent_team_service
+
+                lead_node = next(
+                    (n for n in (context.get("nodes") or []) if n.get("id") == node_id),
+                    {},
+                )
+                team = await get_agent_team_service().get_or_create_execution_team(
+                    team_lead_node_id=node_id,
+                    teammates=teammates,
+                    workflow_id=workflow_id,
+                    execution_id=execution_id,
+                    root_execution_id=str(context.get("root_execution_id") or execution_id),
+                    team_lead_type=node_type,
+                    team_lead_label=(lead_node.get("data") or {}).get("label") or node_type,
+                    config={"mode": "parallel"},
+                )
+                if not team:
+                    raise RuntimeError("Failed to persist agent execution team")
 
     from services.status_broadcaster import get_status_broadcaster
 
