@@ -2900,7 +2900,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         workflow_id: workflowId,
         // Every bounded attempt has its own idempotency identity. In
         // particular, a conflict retry must not replay the rejected request.
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36)),
       }, WORKFLOW_CONTROL_REQUEST_TIMEOUT);
 
       // A success:false response can still be the newest authoritative
