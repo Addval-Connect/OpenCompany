@@ -677,7 +677,13 @@ async def _execute_delegated_agent(
                         workflow_id=workflow_id,
                         error=error_msg,
                         event_id=f"{task_id}:{persisted_status}",
-                        lifecycle_data={"team_id": team_id, "root_execution_id": root_execution_id},
+                        lifecycle_data={
+                            "team_id": team_id,
+                            # Owning lead execution — a downstream
+                            # taskTrigger review run re-scopes to it.
+                            "execution_id": str(config.get("execution_id") or ""),
+                            "root_execution_id": root_execution_id,
+                        },
                     )
 
                 return result
@@ -736,7 +742,13 @@ async def _execute_delegated_agent(
                 workflow_id=workflow_id,
                 result=response_text,
                 event_id=f"{task_id}:{persisted_status}",
-                lifecycle_data={"team_id": team_id, "root_execution_id": root_execution_id},
+                lifecycle_data={
+                    "team_id": team_id,
+                    # Owning lead execution — a downstream taskTrigger
+                    # review run re-scopes to it.
+                    "execution_id": str(config.get("execution_id") or ""),
+                    "root_execution_id": root_execution_id,
+                },
             )
 
             return result
@@ -784,7 +796,13 @@ async def _execute_delegated_agent(
                     workflow_id=workflow_id,
                     error=str(e),
                     event_id=f"{task_id}:{persisted_status}",
-                    lifecycle_data={"team_id": team_id, "root_execution_id": root_execution_id},
+                    lifecycle_data={
+                        "team_id": team_id,
+                        # Owning lead execution — a downstream taskTrigger
+                        # review run re-scopes to it.
+                        "execution_id": str(config.get("execution_id") or ""),
+                        "root_execution_id": root_execution_id,
+                    },
                 )
 
             return {"success": False, "error": str(e)}
