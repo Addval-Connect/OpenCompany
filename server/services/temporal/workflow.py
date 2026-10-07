@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Set
 from temporalio import workflow
 
 from ._retry_policies import DEFAULT_ACTIVITY_RETRY, QUICK_ACTIVITY_RETRY
-from services.workflow_naming import node_label_slug
 
 # ``conditions`` is pure -- ``re`` + comparisons, no IO, no clock, no
 # randomness -- so it is safe to evaluate inside a workflow.

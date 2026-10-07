@@ -7,7 +7,6 @@ router is the unit under test, not ``main``.
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import sys
 from pathlib import Path

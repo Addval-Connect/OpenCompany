@@ -1087,7 +1087,6 @@ class TestEmptyPromptGuard:
     failures: ``ApplicationError(..., non_retryable=True)``."""
 
     def test_raises_non_retryable_on_system_only_list(self):
-        import pytest
         from temporalio.exceptions import ApplicationError
 
         from services.llm.protocol import Message
@@ -1099,7 +1098,6 @@ class TestEmptyPromptGuard:
         assert excinfo.value.type == "EmptyAgentPrompt"
 
     def test_raises_on_empty_list(self):
-        import pytest
         from temporalio.exceptions import ApplicationError
 
         from services.temporal.agent_activities import _ensure_llm_contents

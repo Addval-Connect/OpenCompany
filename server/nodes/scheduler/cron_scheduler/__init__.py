@@ -23,7 +23,6 @@ Self-registration on import (Wave 12 C3 — Temporal Schedules canary):
 from __future__ import annotations
 
 import asyncio
-import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Literal, Optional
 
@@ -267,7 +266,6 @@ class CronSchedulerNode(ActionNode):
     async def trigger(self, ctx: NodeContext, params: CronSchedulerParams) -> CronSchedulerOutput:
         from services.status_broadcaster import get_status_broadcaster
 
-        start_time = time.time()
         p = params.model_dump(by_alias=False)
         frequency = p.get("frequency", "minutes")
         timezone = p.get("timezone", "UTC")

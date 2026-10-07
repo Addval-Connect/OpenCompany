@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 
 from temporalio import workflow
 from temporalio.common import SearchAttributeKey, SearchAttributePair

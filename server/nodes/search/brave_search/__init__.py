@@ -15,7 +15,7 @@ api-key fetch + 30 LOC of try/except boilerplate.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import List, Literal
 
 from pydantic import BaseModel, Field
 

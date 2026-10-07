@@ -43,6 +43,10 @@ register_output_schema("stripeAction", StripeActionOutput)
 __all__ = [
     "StripeCredential",
     "StripeListenSource",
+    "StripeReceiveNode",
+    "StripeReceiveOutput",
+    "StripeActionNode",
+    "StripeActionOutput",
     "StripeWebhookSource",
     "WS_HANDLERS",
     "get_listen_source",

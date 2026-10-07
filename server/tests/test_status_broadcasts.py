@@ -390,8 +390,6 @@ class TestStatusBroadcastsAlsoEmitTypedEnvelope:
             f"{module_path} must emit a typed CloudEvents envelope on " f"``plugin_connection_status`` (the cross-plugin typed channel)."
         )
         # Negative: legacy raw wire key retired in D4.
-        legacy_double = f'"{retired_legacy_key}"'
-        legacy_single = f"'{retired_legacy_key}'"
         # Allow mentions inside docstrings / comments — narrow the
         # negative assertion to lines that look like an actual emit
         # (``broadcaster.broadcast({"type": "<legacy_key>"`` pattern).

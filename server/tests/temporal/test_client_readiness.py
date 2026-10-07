@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 import services.temporal.client as client_mod
 from services.temporal.client import (

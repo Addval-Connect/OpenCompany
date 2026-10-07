@@ -21,7 +21,7 @@ Supported operations (mirrors /api/v1/*):
 from __future__ import annotations
 
 import httpx
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 

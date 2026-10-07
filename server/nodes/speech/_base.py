@@ -7,7 +7,7 @@ parts both nodes need and neither should own.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from core.logging import get_logger
 from services.media import coerce_file_param, read_media_bytes, resolve_media

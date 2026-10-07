@@ -20,7 +20,7 @@ only discriminator that actually works there.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Mapping
 
 from services.events.envelope import WorkflowEvent
 

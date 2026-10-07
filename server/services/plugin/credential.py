@@ -28,9 +28,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Dict, List, Literal, Optional, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Sequence
 
 import httpx
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +207,7 @@ class Credential:
     # 3. ``None`` — no backend icon; frontend falls back to ``cls.icon``.
 
     @classmethod
-    def get_icon_path(cls) -> Optional["Path"]:
+    def get_icon_path(cls) -> Optional[Path]:
         """Return the on-disk path to this credential's icon SVG, or None.
 
         Lazy import of ``inspect`` + ``pathlib`` keeps the credential
@@ -471,10 +474,10 @@ class ApiKeyCredential(Credential):
             err.auth = cls.auth  # "api_key"
             raise err
         secrets: Dict[str, Any] = {"api_key": api_key}
-        for field in cls.extra_fields:
-            value = await auth_service.get_api_key(field)
+        for secret_field in cls.extra_fields:
+            value = await auth_service.get_api_key(secret_field)
             if value:
-                secrets[field] = value
+                secrets[secret_field] = value
         return secrets
 
     @classmethod

@@ -28,10 +28,6 @@ from temporalio.worker import PollerBehaviorAutoscaling, Worker
 
 from core.logging import get_logger
 from ._interceptors import ObservabilityWorkerInterceptor
-from .workflow import MachinaWorkflow
-from .trigger_listener_workflow import TriggerListenerWorkflow
-from .polling_trigger_workflow import PollingTriggerWorkflow
-from .workflow_control_workflow import WorkflowControlWorkflow
 from .plugin_registry import temporal_plugins
 from .activities import (
     NodeExecutionActivities,
@@ -730,10 +726,6 @@ async def run_standalone_worker(
         store_node_output_activity,
     )
     from services.temporal.agent_activities import collect_agent_activities
-    from services.temporal.agent_workflow import (
-        AgentWorkflow,
-        DelegatedTaskWorkflow,
-    )
     from services.temporal.plugin_activities import (
         collect_plugin_activities,
     )
@@ -809,10 +801,6 @@ async def create_worker(
         store_node_output_activity,
     )
     from services.temporal.agent_activities import collect_agent_activities
-    from services.temporal.agent_workflow import (
-        AgentWorkflow,
-        DelegatedTaskWorkflow,
-    )
     from services.temporal.plugin_activities import (
         collect_plugin_activities,
     )

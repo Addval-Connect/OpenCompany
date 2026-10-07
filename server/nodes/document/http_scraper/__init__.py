@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 from urllib.parse import urljoin
 
 import httpx

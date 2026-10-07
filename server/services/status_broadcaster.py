@@ -6,7 +6,7 @@ Supports all node types, variable updates, and workflow state changes.
 
 import asyncio
 import orjson
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 from opentelemetry import trace
