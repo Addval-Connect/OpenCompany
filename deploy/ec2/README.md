@@ -262,6 +262,21 @@ without losing state. In order:
    the move: `SECRET_KEY`, `JWT_SECRET_KEY`, and above all
    `API_KEY_ENCRYPTION_KEY` — a freshly generated key makes an existing
    `credentials.db` undecryptable and there is no re-encryption path.
+
+   **`API_KEY_ENCRYPTION_KEY` can exist in BOTH places and differ.** With
+   `EnvironmentFile=` carrying its own key, pydantic-settings resolves
+   `os.environ` ahead of the `.env` file — so the process encrypted
+   credentials with the unit's key, not the tree's, and carrying the tree's
+   key forward (the obvious move) silently strands every stored credential.
+   The same test that finds this also certifies the fix: after the deploy,
+   derive the Fernet key the way `core/encryption.py` does (PBKDF2-HMAC
+   SHA256, 600 000 iterations, salt from the `encryption_salt` row of the
+   namespace's `credentials_metadata` table) and attempt to decrypt the
+   `gAAA…` blobs. `core/encryption.py` is the derivation; don't hand-roll
+   another one. A count of "decrypted == total" is the pass condition —
+   if the unit's key wins, append the correct
+   `API_KEY_ENCRYPTION_KEY=` at the end of `/opt/opencompany/.env` (last
+   assignment wins) and restart; no credential re-entry is needed.
 2. **Stop the old process** — and find out what *owns* it first. A bare
    `pkill -f uvicorn` against a process that something respawns (a systemd
    unit running `python -m cli serve` is the common case) buys you a few
@@ -320,6 +335,10 @@ without losing state. In order:
    hand-managed vhosts" under [Runtime shape](#runtime-shape).
 6. **Verify** (`--health`, `--logs`, the public URL), then retire the old
    tree at leisure. Nothing references it once the supervisor program runs.
+   For credentials specifically, "verify" means the decrypt test from step
+   1 — a healthy `/health` says nothing about whether
+   `API_KEY_ENCRYPTION_KEY` matches what actually encrypted the stored
+   tokens; that mismatch surfaces only when a node reaches for a key.
 
 ## Adding users
 
