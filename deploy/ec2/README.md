@@ -250,10 +250,18 @@ the login user, the tree somewhere like `/opt/opencompany/app`, state in that
 user's home, hand-written nginx vhosts — can be brought under this deploy
 without losing state. In order:
 
-1. **Inventory the existing `.env`.** What must survive the move:
-   `SECRET_KEY`, `JWT_SECRET_KEY`, and above all `API_KEY_ENCRYPTION_KEY` —
-   a freshly generated key makes an existing `credentials.db` undecryptable
-   and there is no re-encryption path. Note the old `DATA_DIR` too.
+1. **Inventory the existing `.env` — and the environment the process
+   *actually* runs with.** A systemd unit's `EnvironmentFile=` or
+   `Environment=` lines override whatever `.env` you found in the app tree;
+   `systemctl cat opencompany` shows both. The data root in effect is the
+   unit's `DATA_DIR`, not the file's — one real adoption migrated
+   `~ubuntu/.opencompany` because the tree's `.env` said so, while the unit
+   pinned `DATA_DIR=/var/lib/opencompany`, and the move "succeeded" with the
+   live databases left behind. The symptom arrives one login later:
+   `Login rejected: no such account` for every account. What must survive
+   the move: `SECRET_KEY`, `JWT_SECRET_KEY`, and above all
+   `API_KEY_ENCRYPTION_KEY` — a freshly generated key makes an existing
+   `credentials.db` undecryptable and there is no re-encryption path.
 2. **Stop the old process** — and find out what *owns* it first. A bare
    `pkill -f uvicorn` against a process that something respawns (a systemd
    unit running `python -m cli serve` is the common case) buys you a few
@@ -285,9 +293,16 @@ without losing state. In order:
    `sudo useradd --system --create-home --shell /bin/bash oc-app-user`), then
    `sudo mv ~ubuntu/.opencompany /home/oc-app-user/.opencompany` and
    `sudo chown -R oc-app-user:oc-app-user /home/oc-app-user/.opencompany`.
-   Do **not** instead point the new `.env` at the old home: a `DATA_DIR`
-   under another account's home is exactly what bootstrap's step-3b write
-   probe exists to refuse, and it fails the deploy.
+   With `MULTI_TENANT_NAMESPACES=true` the live databases are the
+   **per-namespace tree** — `namespaces/<ns>/workflow.db` +
+   `credentials.db`, and auth *always* reads `namespaces/owner/workflow.db`
+   specifically; a top-level `workflow.db` is pre-namespaces leftover that
+   nothing in multi-tenant mode opens. Migrate the `namespaces/` tree
+   wholesale (its per-namespace `workspaces/` come along) and archive the
+   top-level file rather than merging it. Do **not** instead point the new
+   `.env` at the old home: a `DATA_DIR` under another account's home is
+   exactly what bootstrap's step-3b write probe exists to refuse, and it
+   fails the deploy.
 4. **Pre-write `/opt/opencompany/.env`** carrying the old secrets plus the
    production values (absolute `DATA_DIR=/home/oc-app-user/.opencompany`,
    `HOST=127.0.0.1`, `CORS_ORIGINS=["https://<domain>"]`,
@@ -350,7 +365,15 @@ plus no gate on who signs up — see
 
 Everything stateful is under `DATA_DIR`, which defaults to
 **`/home/oc-app-user/.opencompany`** — the service account's own home, read from
-`passwd` rather than assumed:
+`passwd` rather than assumed. The convention is absolute in both directions:
+**a production `.env` always points `DATA_DIR` at this persistent home,
+surviving every deploy, never at a path inside the app tree** — and a dev
+machine's repo-local `server/.opencompany/` (created when the backend runs
+with a relative `DATA_DIR`) is machine-local state that must **never reach
+git** (covered by `.gitignore`) **nor a deploy artifact** (excluded from the
+`deploy.sh` tarball). Dev state on a host overwrites nothing by itself, but
+it seeds a second, plausible-looking database tree — the exact confusion the
+adoption section above untangles:
 
 ```
 workflow.db        workflows, settings, executions
