@@ -952,6 +952,26 @@ class BaseNode:
             from core.container import container
             from services.status_broadcaster import get_status_broadcaster
 
+            # Namespace context first — every DB/credential read below
+            # (workflow_service.execute_node and the plugin body) routes by
+            # this ContextVar. Every other activity that touches namespaced
+            # state (prepare_payload, execute_llm_step, finalize_team,
+            # store_node_output, the workflow-control activities) sets it
+            # from ``credential_customer_id`` with this exact idiom; this
+            # wrapper was the one miss, and a tool node touching
+            # namespace-scoped state (task_manager's team resolution) then
+            # silently read the OWNER namespace DB — the team the prepare
+            # activity had just created in the tenant DB did not exist
+            # there ("No team exists for this lead execution").
+            from constants import normalize_credential_ns
+            from core.namespace_context import set_active_namespace
+
+            set_active_namespace(
+                normalize_credential_ns(
+                    context.get("credential_customer_id") or "owner"
+                )
+            )
+
             node_id = context["node_id"]
             workflow_id = context.get("workflow_id")
             execution_id = context.get("execution_id")

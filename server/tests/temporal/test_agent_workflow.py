@@ -93,6 +93,57 @@ class TestDurableTeamDelegationContract:
         assert '"team_id": payload.get("team_id") or context.get("team_id")' in source
         assert '"execution_id": context.get("execution_id")' in source
 
+    def test_tool_activities_carry_namespace_context(self):
+        """Per-type node activities route every DB/credential read by the
+        active-namespace ContextVar. The tool-call payload must carry
+        ``credential_customer_id`` and ``_node_activity`` must set it
+        before executing — without that, task_manager's team resolution
+        read the OWNER namespace DB and every assign_task failed with
+        "No team exists for this lead execution" even though prepare had
+        just created the team in the tenant DB."""
+        import inspect
+
+        from services.plugin.base import BaseNode
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        activity_source = inspect.getsource(BaseNode.as_activity)
+        assert "set_active_namespace(" in activity_source
+        assert "credential_customer_id" in activity_source
+
+        run_source = inspect.getsource(AgentWorkflow.run)
+        # tool_payload forwards the namespace context into node.* activities
+        assert '"credential_customer_id": payload.get("credential_customer_id")' in run_source
+        # ...as do the task_manager preflight payload, the delegation
+        # lifecycle (queue/begin/cancel/finish/register + DelegatedTaskWorkflow)
+        # and the finalize payload.
+        assert 'preflight_payload' in run_source
+        assert run_source.count('"credential_customer_id": payload.get("credential_customer_id")') >= 3
+        import services.temporal.agent_workflow as aw
+
+        assert "credential_customer_id" in aw._INHERITED_SCOPE_KEYS
+
+    def test_team_activities_set_namespace_context(self):
+        """Every activity touching team/permit tables routes by
+        credential_customer_id — finalize read the OWNER DB (empty) and
+        then failed its status update there ("Failed to finalize team as
+        completed") while the team lived in the tenant DB."""
+        import inspect
+
+        from services.temporal import agent_activities
+
+        for fn in (
+            "finalize_agent_team",
+            "register_task_execution",
+            "queue_agent_delegation",
+            "begin_agent_delegation",
+            "cancel_agent_delegation",
+            "finish_agent_delegation",
+        ):
+            source = inspect.getsource(getattr(agent_activities, fn))
+            assert "_set_payload_namespace(payload)" in source, (
+                f"{fn} must set the namespace context"
+            )
+
 
 class TestConversationIdentity:
     """Every firing continues one conversation and saves each turn once."""
