@@ -146,7 +146,19 @@ async def _broadcast_task_event(
     # delivered immediately before a worker failure/retry.
     if event_id:
         envelope.id = event_id
-    await emit(envelope, wire_routing_key=_WIRE_ROUTING_KEY)
+    # Namespace-scoped delivery — the webhook #16 lesson. emit queries the
+    # DEFAULT namespace for running consumers when no namespace is passed,
+    # so a tenant's taskTrigger listeners were never signaled: the event
+    # fired into the wrong namespace and the review leg silently never ran.
+    # The calling context's active namespace IS the tenant (activities set
+    # it from credential_customer_id; the legacy HTTP path from auth
+    # middleware); "owner" (the ContextVar default) means the single-
+    # namespace deployment, whose consumers live in default.
+    from core.namespace_context import get_active_namespace
+
+    active_ns = get_active_namespace() or "owner"
+    tenant_ns = None if active_ns in ("default", "owner") else active_ns
+    await emit(envelope, wire_routing_key=_WIRE_ROUTING_KEY, namespace=tenant_ns)
 
 
 __all__ = [
