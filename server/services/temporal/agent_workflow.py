@@ -221,6 +221,10 @@ _INHERITED_SCOPE_KEYS = (
     "context_execution_id",
     "context_session_id",
     "user_id",
+    # Namespace scope — the child's every activity routes its DB reads by
+    # this key (prepare/llm-step/finalize read it from its payload). Without
+    # inheritance a delegated child ran against the OWNER namespace.
+    "credential_customer_id",
     "workspace_dir",
     "temporal_worker_pool_enabled",
 )
@@ -1002,7 +1006,10 @@ class AgentWorkflow:
                     # start the separately scoped review invocation.
                     await workflow.execute_activity(
                         "agent.finalize_team",
-                        args=[{"team_id": team_id}],
+                        args=[{
+                            "team_id": team_id,
+                            "credential_customer_id": payload.get("credential_customer_id"),
+                        }],
                         activity_id="finalize-agent-team",
                         start_to_close_timeout=PERSIST_TURN_TIMEOUT,
                         retry_policy=AGENT_ACTIVITY_RETRY,
@@ -1403,6 +1410,10 @@ class AgentWorkflow:
                         or "agent"
                     ),
                     "workflow_id": payload.get("workflow_id"),
+                    # Namespace context — every delegation/team activity
+                    # (queue/begin/cancel/finish/register) routes its DB
+                    # reads by this key. See _set_payload_namespace.
+                    "credential_customer_id": payload.get("credential_customer_id"),
                     "parent_agent_workflow_id": workflow.info().workflow_id,
                     "parent_workflow_id": workflow.info().workflow_id,
                     "parent_run_id": workflow.info().run_id,
@@ -1497,6 +1508,10 @@ class AgentWorkflow:
                         "workflow_id": payload.get("workflow_id"),
                         "session_id": payload.get("session_id", "default"),
                         "execution_id": task_scope_execution_id,
+                        # Namespace context — same idiom as tool_payload;
+                        # without it the preflight ran against the OWNER
+                        # namespace DB and could not see the execution team.
+                        "credential_customer_id": payload.get("credential_customer_id"),
                         "root_execution_id": root_execution_id,
                         "parent_node_id": agent_node_id,
                         "team_lead_node_id": agent_node_id,
@@ -1714,6 +1729,14 @@ class AgentWorkflow:
                     "workflow_id": payload.get("workflow_id"),
                     "session_id": payload.get("session_id", "default"),
                     "execution_id": task_scope_execution_id,
+                    # Namespace context — _node_activity routes every DB and
+                    # credential read by this key (same idiom as prepare /
+                    # llm-step / finalize). Without it the tool activity ran
+                    # against the OWNER namespace: task_manager's
+                    # resolve_lead_scope could not see the team prepare had
+                    # created in the tenant DB, and credential-scoped tools
+                    # read the owner's credentials.db.
+                    "credential_customer_id": payload.get("credential_customer_id"),
                     "parent_node_id": agent_node_id,
                     "team_lead_node_id": agent_node_id,
                     "team_id": payload.get("team_id") or context.get("team_id"),

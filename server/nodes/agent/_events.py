@@ -102,6 +102,14 @@ async def _broadcast_task_event(
     (b) direct in-process WS broadcast on the ``task_completed`` wire
     key so any FE consumers receive the envelope. Payload shape in
     ``data`` is exactly what the taskTrigger filter reads.
+
+    A third leg serves the CANVAS-Run path: a taskTrigger node inside a
+    running MachinaWorkflow blocks on an in-process ``event_waiter``
+    waiter, which only :func:`event_waiter.dispatch` resolves — the
+    same two-paths pattern every other push producer follows
+    (twitter / whatsapp_business). Without it the canvas review leg
+    never fired: the lead finished, its delegated children submitted,
+    and nothing resumed the run to review them.
     """
     from services.events.dispatch import emit
     from services.events.envelope import WorkflowEvent
@@ -120,6 +128,13 @@ async def _broadcast_task_event(
     elif status == "error" and error is not None:
         payload["error"] = error
 
+    # Canvas-Run waiters first: in-process future resolution, no network.
+    # The producers persist the durable task state BEFORE emitting, so an
+    # immediate wake is safe — the review run reads authoritative state.
+    from services import event_waiter
+
+    event_waiter.dispatch("task_completed", payload)
+
     envelope = WorkflowEvent.task_completed(
         task_id=task_id,
         status="completed" if status == "completed" else "error",
@@ -131,7 +146,19 @@ async def _broadcast_task_event(
     # delivered immediately before a worker failure/retry.
     if event_id:
         envelope.id = event_id
-    await emit(envelope, wire_routing_key=_WIRE_ROUTING_KEY)
+    # Namespace-scoped delivery — the webhook #16 lesson. emit queries the
+    # DEFAULT namespace for running consumers when no namespace is passed,
+    # so a tenant's taskTrigger listeners were never signaled: the event
+    # fired into the wrong namespace and the review leg silently never ran.
+    # The calling context's active namespace IS the tenant (activities set
+    # it from credential_customer_id; the legacy HTTP path from auth
+    # middleware); "owner" (the ContextVar default) means the single-
+    # namespace deployment, whose consumers live in default.
+    from core.namespace_context import get_active_namespace
+
+    active_ns = get_active_namespace() or "owner"
+    tenant_ns = None if active_ns in ("default", "owner") else active_ns
+    await emit(envelope, wire_routing_key=_WIRE_ROUTING_KEY, namespace=tenant_ns)
 
 
 __all__ = [
