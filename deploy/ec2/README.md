@@ -52,7 +52,7 @@ Terraform. What the scripts assume:
 | AMI | **Ubuntu 24.04 LTS** (`bootstrap.sh` uses `apt-get` and NodeSource; 22.04 also works, but its standard support ends April 2027) |
 | Size | **t4g.medium (2 vCPU / 4 GB, Graviton)** — see [Sizing](#sizing) for the measurements behind that, and for when to pick x86 instead |
 | Disk | **30 GB gp3.** 20 GB boots and runs, but the venv is ~570 MB, the `temporal` CLI is 171 MB extracted, supervisor logs cap at 200 MB, and `workspaces/` grows with use |
-| Security group | inbound **80** and **443** from anywhere; **22** from your address or via Instance Connect's [service prefix list](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-connect-setup.html) |
+| Security group | inbound **80** and **443** from anywhere; **22** from your address or via Instance Connect's [service prefix list](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-connect-setup.html). **Nothing else** — uvicorn binds loopback, so a world-open backend port (5678) bypasses nginx *and* TLS entirely; if it was opened for debugging, close it again |
 | SSH | no key pair needed at launch — EC2 Instance Connect pushes an ephemeral key per command. See [A plain SSH key for ops](#a-plain-ssh-key-for-ops) if you also want `ssh -i` to work without an AWS session |
 | IAM | no instance profile needed — every provider credential, Bedrock's included, is a key stored in the app |
 
@@ -213,20 +213,113 @@ duplicate-certificate rate limit for nothing.
   CPython rather than using the system one — so the distro's Python version is not
   a constraint on the AMI choice (22.04 ships 3.10, 24.04 ships 3.12; neither is
   what runs).
-- **Dependencies are `uv sync --no-dev`, without `--frozen`.** `server/uv.lock` is
-  intentionally not committed, so a clean clone has no lockfile and `--frozen`
-  would fail outright — and, worse, a stale lock that happened to ride along in
-  the tarball would install yesterday's dependency set silently, because
-  `--frozen` does not check the lock against `pyproject.toml` (that is `--locked`).
-  Resolving on the host matches what CI does per run. **149 packages**; `--no-dev`
-  drops ruff and the pytest plugins, but not `pytest` itself, which `rlms`
-  declares as a runtime dependency. No extras are requested, so
-  `local-embeddings` (and its torch stack) stays off the box — the embedding and
-  long-term-memory paths detect its absence and say so.
+- **Dependencies are `uv sync --no-dev`, without `--frozen`.** `server/uv.lock`
+  is committed and ships inside the tarball, so the host installs the
+  dependency set CI validated. `--frozen` is still deliberately not used: it
+  does not check the lock against `pyproject.toml` (that is `--locked`), so a
+  lock that drifted from the manifest would install yesterday's dependency set
+  silently — and failing the deploy outright on drift is worse than
+  re-resolving on the host, which is what CI does per run. **149 packages**;
+  `--no-dev` drops ruff and the pytest plugins, but not `pytest` itself, which
+  `rlms` declares as a runtime dependency. No extras are requested, so
+  `local-embeddings` (and its torch stack) stays off the box — the embedding
+  and long-term-memory paths detect its absence and say so.
+- **Adopting a host with hand-managed vhosts.** `bootstrap.sh` installs its
+  vhost only when `/etc/nginx/sites-available/opencompany` is absent — and the
+  one it installs claims `listen 80 default_server`. So does any hand-written
+  vhost (a `default-redirect`, say), and two `default_server` blocks is an
+  `nginx -t` **error** that aborts the deploy mid-run, not a warning. Only
+  Ubuntu's packaged `default` symlink is removed automatically. To keep
+  existing vhosts untouched, create the marker file before deploying —
+  `sudo touch /etc/nginx/sites-available/opencompany` (never symlinked into
+  `sites-enabled`, so it does nothing) — and bootstrap reports "nginx vhost
+  exists -- leaving it untouched". When invoking `bootstrap.sh` directly, its
+  `--skip-nginx` flag does the same; `deploy.sh` does not expose the flag.
+  Either way, the vhost you keep must proxy to
+  `127.0.0.1:<PYTHON_BACKEND_PORT>` and carry the `/ws/` WebSocket upgrade
+  block — `conf/opencompany.nginx.conf` shows both.
 - **The public IP is resolved, not pinned.** Every script looks it up from
   `OC_INSTANCE_ID` on each run, so an instance without an Elastic IP keeps
   working after a stop/start without editing anything here. Set `OC_HOST` to
   skip the lookup.
+
+## Adopting a hand-managed host
+
+A box that already runs OpenCompany *unmanaged* — uvicorn started by hand as
+the login user, the tree somewhere like `/opt/opencompany/app`, state in that
+user's home, hand-written nginx vhosts — can be brought under this deploy
+without losing state. In order:
+
+1. **Inventory the existing `.env` — and the environment the process
+   *actually* runs with.** A systemd unit's `EnvironmentFile=` or
+   `Environment=` lines override whatever `.env` you found in the app tree;
+   `systemctl cat opencompany` shows both. The data root in effect is the
+   unit's `DATA_DIR`, not the file's — one real adoption migrated
+   `~ubuntu/.opencompany` because the tree's `.env` said so, while the unit
+   pinned `DATA_DIR=/var/lib/opencompany`, and the move "succeeded" with the
+   live databases left behind. The symptom arrives one login later:
+   `Login rejected: no such account` for every account. What must survive
+   the move: `SECRET_KEY`, `JWT_SECRET_KEY`, and above all
+   `API_KEY_ENCRYPTION_KEY` — a freshly generated key makes an existing
+   `credentials.db` undecryptable and there is no re-encryption path.
+2. **Stop the old process** — and find out what *owns* it first. A bare
+   `pkill -f uvicorn` against a process that something respawns (a systemd
+   unit running `python -m cli serve` is the common case) buys you a few
+   seconds of downtime and then a port conflict mid-deploy:
+
+   ```bash
+   systemctl list-unit-files | grep -i opencompany   # if present:
+   sudo systemctl stop opencompany && sudo systemctl disable opencompany
+   # otherwise, an unsupervised process:
+   sudo pkill -f 'uvicorn main:app'
+   ```
+
+   `systemctl stop` takes the unit's whole control group down, Temporal dev
+   server included. After a bare `pkill`, check separately — the dev server
+   is usually a child of the launcher (`cli serve`), not of uvicorn, and can
+   survive it: `pgrep -af 'temporal server'`. One SSH trap either way: run
+   the pkill from a shell *on* the host (`./deploy/ec2/ssh.sh` opens one),
+   not inline as `ssh host 'sudo pkill -f ...'` — the remote shell's own
+   command line contains the pattern, and pkill kills your session along
+   with the target. Nothing in the scripts does any of this for you — they
+   manage the supervisor program only, and two processes cannot bind the
+   same port. Expect the health check at the end of the deploy to fail with
+   `address already in use` otherwise. The old deployment's Temporal state
+   (`temporal.db`, possibly outside its `DATA_DIR`) is **not** migrated:
+   durable executions in flight at the cutover do not resume. The app
+   databases (`workflow.db`, `credentials.db`) are the state that matters.
+3. **Move the state** into the service account's home and hand it over.
+   Create the account first (bootstrap's own line works:
+   `sudo useradd --system --create-home --shell /bin/bash oc-app-user`), then
+   `sudo mv ~ubuntu/.opencompany /home/oc-app-user/.opencompany` and
+   `sudo chown -R oc-app-user:oc-app-user /home/oc-app-user/.opencompany`.
+   With `MULTI_TENANT_NAMESPACES=true` the live databases are the
+   **per-namespace tree** — `namespaces/<ns>/workflow.db` +
+   `credentials.db`, and auth *always* reads `namespaces/owner/workflow.db`
+   specifically; a top-level `workflow.db` is pre-namespaces leftover that
+   nothing in multi-tenant mode opens. Migrate the `namespaces/` tree
+   wholesale (its per-namespace `workspaces/` come along) and archive the
+   top-level file rather than merging it. Do **not** instead point the new
+   `.env` at the old home: a `DATA_DIR` under another account's home is
+   exactly what bootstrap's step-3b write probe exists to refuse, and it
+   fails the deploy.
+4. **Pre-write `/opt/opencompany/.env`** carrying the old secrets plus the
+   production values (absolute `DATA_DIR=/home/oc-app-user/.opencompany`,
+   `HOST=127.0.0.1`, `CORS_ORIGINS=["https://<domain>"]`,
+   `JWT_COOKIE_SECURE=true` once TLS exists). `bootstrap.sh` never overwrites
+   an existing `.env`, so the file you write is the file that ships — this is
+   the one sanctioned way to keep generated secrets across an adoption.
+   Two details the render branch would normally handle for you:
+   `chown oc-app-user:oc-app-user` + `chmod 600` (a root-owned `0600` file is
+   unreadable to the supervisor program), and the file must be the *full*
+   configuration — `.env.template` content followed by the overrides, since
+   many Settings fields declare no Python default.
+5. **Deploy normally** (`./deploy/ec2/deploy.sh`). If you are keeping the
+   hand-managed vhosts, `sudo touch /etc/nginx/sites-available/opencompany`
+   first so bootstrap leaves nginx alone — see "Adopting a host with
+   hand-managed vhosts" under [Runtime shape](#runtime-shape).
+6. **Verify** (`--health`, `--logs`, the public URL), then retire the old
+   tree at leisure. Nothing references it once the supervisor program runs.
 
 ## Adding users
 
@@ -272,7 +365,15 @@ plus no gate on who signs up — see
 
 Everything stateful is under `DATA_DIR`, which defaults to
 **`/home/oc-app-user/.opencompany`** — the service account's own home, read from
-`passwd` rather than assumed:
+`passwd` rather than assumed. The convention is absolute in both directions:
+**a production `.env` always points `DATA_DIR` at this persistent home,
+surviving every deploy, never at a path inside the app tree** — and a dev
+machine's repo-local `server/.opencompany/` (created when the backend runs
+with a relative `DATA_DIR`) is machine-local state that must **never reach
+git** (covered by `.gitignore`) **nor a deploy artifact** (excluded from the
+`deploy.sh` tarball). Dev state on a host overwrites nothing by itself, but
+it seeds a second, plausible-looking database tree — the exact confusion the
+adoption section above untangles:
 
 ```
 workflow.db        workflows, settings, executions
@@ -416,6 +517,48 @@ the only key that can decrypt `credentials.db`.
 Verify with `/health`: `"temporal":{"enabled":true,"connected":true}`.
 `"execution_engine":{"enabled":false}` next to it is **not** a problem — that
 field reports `REDIS_ENABLED`, not Temporal.
+
+### Multi-tenant namespaces
+
+`MULTI_TENANT_NAMESPACES=true` gives every login account its own Temporal
+namespace instead of sharing `TEMPORAL_NAMESPACE`. It is opt-in
+(`.env.template` ships it `false`) and requires `TEMPORAL_ENABLED=true`. Two
+rules matter before flipping it on a deployed host:
+
+- **`TEMPORAL_TENANT_WORKER_POOL=true` is mandatory alongside it** whenever
+  `TEMPORAL_WORKER_POOL_ENABLED=true` (the shipped default): startup
+  *refuses* the combination otherwise. A MachinaWorkflow running in a tenant
+  namespace schedules plugin activities on task queues that only the
+  default-namespace pool polls, so without per-tenant workers those
+  activities hang forever without an error. Each ready tenant namespace
+  starts its own `TemporalWorkerManager` + worker pool — budget roughly
+  **200–370 MB of idle RAM per namespace** on top of the backend. The
+  cost-analysis rule of thumb is 5–7 namespaces per 8 GB of host RAM, so a
+  4 GB host sits at 2–3. Sizing detail:
+  `docs-internal/infrastructure_cost_analysis.md`.
+- **Namespaces are provisioned by an operator, not self-service.** Accounts
+  without a mapping keep executing in the default namespace. Assign one on
+  the host, as `oc-app-user` (same invocation shape as the user commands
+  above):
+
+  ```bash
+  cd /opt/opencompany/server
+  sudo -u oc-app-user env HOME=/home/oc-app-user .venv/bin/python \
+      scripts/manage_users.py namespace --email person@example.com --namespace acme
+  ```
+
+  `assign-namespace` covers the many-to-many case; both are inert while
+  `MULTI_TENANT_NAMESPACES=false`.
+
+Both keys are pydantic-settings fields, so `.env` **is** the right place for
+them — unlike the `TEMPORAL_<QUEUE>_CONCURRENCY` family, which the
+uvicorn-under-supervisor shape never sees from `.env` (trap note below).
+Since `bootstrap.sh` renders `.env` once and never rewrites it, enabling
+multi-tenant on a live host means appending the two keys at the end of
+`/opt/opencompany/.env` (last assignment wins) and restarting — the same
+mechanism `temporal.sh` automates for `TEMPORAL_ENABLED`, and the two new
+keys are documented in `env.production.template` so a *fresh* render carries
+them too.
 
 ### The Temporal Web UI
 

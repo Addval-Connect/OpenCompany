@@ -105,6 +105,11 @@ fi
 # Adding a path here: it must not resolve under the host's DATA_DIR. bootstrap.sh
 # refuses to extract an artifact that contains one, because extracting it would
 # overwrite workflow.db / credentials.db.
+# Adds: server/.opencompany — a relative DATA_DIR makes the backend create
+# its runtime state (namespaces/, credentials.db, workspaces/) INSIDE the
+# tree while it runs; shipping it would seed a plausible-looking second
+# database on the host. Dev state stays on the dev machine (gitignore
+# covers git; this covers the tarball).
 TARBALL=/tmp/opencompany-deploy.tar.gz
 say "Packaging"
 tar czf "$TARBALL" \
@@ -115,6 +120,7 @@ tar czf "$TARBALL" \
     --exclude='.pytest_cache' \
     --exclude='.ruff_cache' \
     --exclude='server/tests' \
+    --exclude='server/.opencompany' \
     server client/dist .opencompany/workflows .env.template deploy/ec2
 du -h "$TARBALL"
 

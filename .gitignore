@@ -150,6 +150,10 @@ bun.lockb
 # launch by ``services.example_loader``), so it stays tracked.
 /.opencompany/*
 !/.opencompany/workflows/
+# Repo-local runtime state created when the backend runs with a relative
+# DATA_DIR (server is the uvicorn cwd). Machine-local only: never commit,
+# never ship (deploy.sh excludes it from the tarball too).
+/server/.opencompany/
 # Pre-rebrand repo-local state remains readable for upgrades but is never
 # tracked. Do not remove this rule: local databases and deploy state may live
 # here in existing checkouts.
