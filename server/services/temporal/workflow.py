@@ -473,10 +473,31 @@ class MachinaWorkflow:
                 node = node_map[node_id]
                 node_type = node.get("type", "unknown")
 
-                # Safety: auto-complete trigger nodes that weren't pre-executed.
-                # Trigger nodes are event listeners - scheduling them as activities
-                # would block indefinitely waiting for external events.
-                if node_type in TRIGGER_NODE_TYPES and not node.get("_pre_executed"):
+                # Event-mode trigger nodes mid-graph (taskTrigger after a
+                # team lead, e.g.) are the DURABLE WAIT of the canvas run:
+                # schedule them as activities — the worker shares the
+                # FastAPI process, so the body registers the in-process
+                # event_waiter waiter and blocks until the producer fires.
+                # The wrapper heartbeats for the whole (24h) window.
+                # They used to be auto-skipped here ("not_triggered"), which
+                # silently amputated the completion-review leg of every
+                # canvas team workflow: the lead finished, its delegated
+                # children submitted, and nothing ever reviewed them or
+                # delivered the response downstream.
+                # Start triggers always reach this loop pre-executed (the
+                # run was started BY them), so the scheduling path below
+                # only ever sees mid-graph listeners.
+                from services.node_registry import get_node_class as _gc
+                _node_cls = _gc(node_type)
+                _is_event_trigger = (
+                    _node_cls is not None
+                    and getattr(_node_cls, "mode", None) == "event"
+                )
+                if (
+                    node_type in TRIGGER_NODE_TYPES
+                    and not node.get("_pre_executed")
+                    and not _is_event_trigger
+                ):
                     workflow.logger.warning(f"Skipping non-pre-executed trigger: {node_id} ({node_type})")
                     outputs[node_id] = {
                         "success": True,

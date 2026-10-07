@@ -102,6 +102,14 @@ async def _broadcast_task_event(
     (b) direct in-process WS broadcast on the ``task_completed`` wire
     key so any FE consumers receive the envelope. Payload shape in
     ``data`` is exactly what the taskTrigger filter reads.
+
+    A third leg serves the CANVAS-Run path: a taskTrigger node inside a
+    running MachinaWorkflow blocks on an in-process ``event_waiter``
+    waiter, which only :func:`event_waiter.dispatch` resolves — the
+    same two-paths pattern every other push producer follows
+    (twitter / whatsapp_business). Without it the canvas review leg
+    never fired: the lead finished, its delegated children submitted,
+    and nothing resumed the run to review them.
     """
     from services.events.dispatch import emit
     from services.events.envelope import WorkflowEvent
@@ -119,6 +127,13 @@ async def _broadcast_task_event(
         payload["result"] = result
     elif status == "error" and error is not None:
         payload["error"] = error
+
+    # Canvas-Run waiters first: in-process future resolution, no network.
+    # The producers persist the durable task state BEFORE emitting, so an
+    # immediate wake is safe — the review run reads authoritative state.
+    from services import event_waiter
+
+    event_waiter.dispatch("task_completed", payload)
 
     envelope = WorkflowEvent.task_completed(
         task_id=task_id,

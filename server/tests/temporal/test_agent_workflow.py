@@ -145,6 +145,36 @@ class TestDurableTeamDelegationContract:
             )
 
 
+class TestCanvasCompletionReviewContract:
+    """The taskTrigger review leg for CANVAS team runs.
+
+    Two halves must both exist or the review never fires: the MachinaWorkflow
+    must SCHEDULE mid-graph event triggers (they used to be auto-skipped as
+    'not_triggered', amputating the review leg of every canvas team workflow),
+    and the agent task producer must resolve the canvas's in-process waiter
+    (the two-paths pattern twitter/whatsapp_business already follow)."""
+
+    def test_machina_schedules_midgraph_event_triggers(self):
+        import inspect
+
+        from services.temporal.workflow import MachinaWorkflow
+
+        source = inspect.getsource(MachinaWorkflow.run)
+        # Event-mode triggers are scheduled (skip branch excludes them);
+        # only non-event triggers keep the auto-skip.
+        assert 'getattr(_node_cls, "mode", None) == "event"' in source
+        assert "and not _is_event_trigger" in source
+
+    def test_task_event_resolves_canvas_waiters(self):
+        import inspect
+
+        from nodes.agent import _events
+
+        source = inspect.getsource(_events._broadcast_task_event)
+        assert "event_waiter.dispatch" in source
+        assert '"task_completed"' in source
+
+
 class TestConversationIdentity:
     """Every firing continues one conversation and saves each turn once."""
 
