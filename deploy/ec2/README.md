@@ -303,6 +303,23 @@ without losing state. In order:
    (`temporal.db`, possibly outside its `DATA_DIR`) is **not** migrated:
    durable executions in flight at the cutover do not resume. The app
    databases (`workflow.db`, `credentials.db`) are the state that matters.
+   The flip side of leaving `temporal.db` behind: **server-side namespace
+   registrations live in it too.** A multi-tenant deployment's `namespaces`
+   table rows survive the app-DB migration, but the fresh Temporal server
+   knows only `default` — every tenant then falls back at runtime
+   ("Tenant namespace not in client registry; falling back to default").
+   Re-register each tenant against the new server — idempotent, and it
+   also restores the search attributes event dispatch and workflow-control
+   reconciliation build on:
+
+   ```bash
+   cd /opt/opencompany/server
+   for NS in addval-tax bluedoc; do   # your tenant namespaces
+     sudo -u oc-app-user env HOME=/home/oc-app-user .venv/bin/python \
+         scripts/manage_users.py namespace --email <owner-email> --namespace "$NS"
+   done
+   sudo supervisorctl restart opencompany   # client bootstrap runs at startup
+   ```
 3. **Move the state** into the service account's home and hand it over.
    Create the account first (bootstrap's own line works:
    `sudo useradd --system --create-home --shell /bin/bash oc-app-user`), then
