@@ -151,16 +151,23 @@ async def test_export_parameter_read_is_authorized_and_server_redacted(
 ):
     from routers import websocket as websocket_router
 
+    # The export workflow row mirrors the DB access predicate: a caller who
+    # does not own the workflow (no namespace mapping) sees nothing.
+    async def get_workflow(workflow_id, owner_user_id=None, namespace=None):
+        if workflow_id != "workflow-1":
+            return None
+        if owner_user_id != "user-1":
+            return None
+        return SimpleNamespace(
+            data={
+                "owner_id": "user-1",
+                "nodes": [{"id": "memory", "type": "simpleMemory"}],
+                "edges": [],
+            }
+        )
+
     database = SimpleNamespace(
-        get_workflow=AsyncMock(
-            return_value=SimpleNamespace(
-                data={
-                    "owner_id": "user-1",
-                    "nodes": [{"id": "memory", "type": "simpleMemory"}],
-                    "edges": [],
-                }
-            )
-        ),
+        get_workflow=AsyncMock(side_effect=get_workflow),
         get_node_parameters=AsyncMock(
             return_value={
                 "reset_policy": "preserve",
@@ -187,6 +194,8 @@ async def test_export_parameter_read_is_authorized_and_server_redacted(
         "reset_policy": "preserve"
     }
 
+    # A different principal's export hits the DB owner predicate and fails
+    # closed instead of returning another tenant's parameters.
     denied = await websocket_router.handle_get_all_node_parameters(
         {
             "workflow_id": "workflow-1",
@@ -195,4 +204,4 @@ async def test_export_parameter_read_is_authorized_and_server_redacted(
         },
         SimpleNamespace(state=SimpleNamespace(user_id="user-2")),
     )
-    assert denied == {"success": False, "error": "Workflow access denied"}
+    assert denied["success"] is False

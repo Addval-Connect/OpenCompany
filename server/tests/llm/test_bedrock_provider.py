@@ -304,12 +304,33 @@ class TestAgentSelectability:
         ],
     )
     def test_bedrock_is_selectable_in_every_agent_dropdown(self, module_path, params_name):
-        """An agent whose provider is absent from the Literal falls back to
-        ``"openai"`` at runtime instead of failing validation."""
+        """An agent whose provider is absent from the registry falls back to
+        ``"openai"`` at runtime instead of failing validation.
+
+        The ``provider`` field is a ``ProviderRef``: a registry-validated
+        string whose dropdown options come from the ``aiProviders`` loader
+        (``nodes/model``), so the contract is "bedrock is registered", not
+        "bedrock is in a Literal".
+        """
         import importlib
-        import typing
+
+        from pydantic import AfterValidator, TypeAdapter
+
+        from nodes.agent._provider import ProviderRef
+        from services.llm.registry import has_provider
 
         module = importlib.import_module(module_path)
         params = getattr(module, params_name)
-        allowed = typing.get_args(params.model_fields["provider"].annotation)
-        assert "bedrock" in allowed
+        field = params.model_fields["provider"]
+        assert field is not None, f"{params_name!s} has no provider field"
+        # The field must still bind the registry-validated ProviderRef
+        # (validators + options loader), and the registry must list bedrock
+        # so the aiProviders dropdown offers it.
+        assert any(isinstance(v, AfterValidator) for v in field.metadata), (
+            f"{params_name}.provider no longer binds ProviderRef: {field.metadata!r}"
+        )
+        adapter = TypeAdapter(ProviderRef)
+        adapter.validate_python("openai")
+        with pytest.raises(Exception):
+            adapter.validate_python("not-a-registered-provider")
+        assert has_provider("bedrock")

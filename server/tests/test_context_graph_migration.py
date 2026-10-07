@@ -394,7 +394,9 @@ async def test_workflow_delete_archives_context_before_graph(
         "context_archives_pending": 0,
     }
     clear.assert_awaited_once_with(database, workflow_id="12")
-    database.delete_workflow.assert_awaited_once_with("12")
+    # Deletes are owner-scoped: handler passes the caller principal (auth
+    # disabled here, so OWNER_PRINCIPAL_ID).
+    database.delete_workflow.assert_awaited_once_with("12", owner_user_id="owner")
 
 
 @pytest.mark.asyncio
@@ -420,8 +422,9 @@ async def test_rest_delete_uses_shared_context_lifecycle_path(
 
     result = await database_router.delete_workflow(
         "12",
+        SimpleNamespace(state=SimpleNamespace(user_id=None)),
         database=database,
     )
 
     assert result["success"] is True
-    shared_delete.assert_awaited_once_with(database, "12")
+    shared_delete.assert_awaited_once_with(database, "12", owner_user_id="owner")
