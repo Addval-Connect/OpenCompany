@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch

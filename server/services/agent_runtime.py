@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Awaitable,
@@ -16,7 +16,6 @@ from typing import (
     Dict,
     List,
     Optional,
-    Protocol,
     Sequence,
     Type,
 )
@@ -252,7 +251,6 @@ async def run_native_agent_loop(
             except Exception as exc:  # progress is observational
                 logger.debug("[Agent loop] progress callback failed: %s", exc)
 
-        definitions = [_tool_definition(tool) for tool in current_tools]
         try:
             response = await run_native_llm_step(
                 chat_unifier,

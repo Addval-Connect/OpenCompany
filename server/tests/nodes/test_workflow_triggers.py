@@ -207,7 +207,7 @@ class TestWebhookTrigger:
             "body": "{}",
             "json": {"hello": "world"},
         }
-        with patched_trigger_waiter(canned), patched_broadcaster() as broadcaster:
+        with patched_trigger_waiter(canned), patched_broadcaster():
             result = await harness.execute("webhookTrigger", {"path": "my-hook", "method": "POST"})
         harness.assert_envelope(result, success=True)
         assert result["result"] == canned

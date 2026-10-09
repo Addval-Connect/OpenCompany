@@ -94,8 +94,12 @@ async def _shutdown_telegram() -> None:
 register_shutdown_hook("telegram", _shutdown_telegram)
 
 __all__ = [
+    "TelegramReceiveNode",
+    "TelegramReceiveOutput",
     "TelegramCredential",
     "TelegramService",
+    "TelegramSendNode",
+    "TelegramSendOutput",
     "WS_HANDLERS",
     "build_telegram_filter",
     "get_telegram_service",

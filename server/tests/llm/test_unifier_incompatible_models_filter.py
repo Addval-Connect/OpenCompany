@@ -14,9 +14,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 import services.llm  # noqa: F401 — populate registry
-from services.llm.registry import ProviderSpec, _reset_for_tests
+from services.llm.registry import ProviderSpec
 from services.llm.unifier import ChatUnifier
-from services.llm.providers.openai import OpenAIProvider
 
 
 @pytest.fixture

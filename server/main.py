@@ -30,7 +30,6 @@ import functools
 import json
 from datetime import datetime
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 # Note: We don't register custom signal handlers.
 # uvicorn already handles SIGINT (Ctrl+C) and SIGTERM (docker stop) gracefully.

@@ -9,7 +9,6 @@ from core.database import Database
 from core.logging import get_logger
 from services.example_loader import import_examples_for_user
 from services.workflow_storage.handlers import (
-    delete_workflow_with_context_archival,
     handle_get_workflow,
     handle_save_workflow,
 )
