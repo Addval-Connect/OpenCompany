@@ -203,6 +203,10 @@ class BlueflowActionNode(ActionNode):
     )
     task_queue = TaskQueue.REST_API
     credentials = (BlueflowCredential,)
+    handles = (
+        {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
+        {"name": "output-main", "kind": "output", "position": "right", "label": "Output", "role": "main"},
+    )
 
     Params = BlueflowActionParams
     Output = BlueflowActionOutput

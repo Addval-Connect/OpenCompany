@@ -28,7 +28,7 @@ SLUG = "My_Workflow_1"
 
 @pytest.fixture
 def roots(tmp_path, monkeypatch):
-    monkeypatch.setattr(workspace_locator, "workspaces_dir", lambda: tmp_path)
+    monkeypatch.setattr(workspace_locator, "workspace_base_dir", lambda: tmp_path)
     return tmp_path
 
 

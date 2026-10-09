@@ -21,8 +21,25 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 pytestmark = pytest.mark.node_contract
+
+
+@pytest.fixture(autouse=True)
+def _stub_agent_team_service(monkeypatch):
+    """Stub the AgentTeamService singleton for the inline delegation path.
+
+    Same rationale as ``test_specialized_agents``: ``prepare_agent_call``
+    mints a durable execution team eagerly for team-lead agents, and only
+    app startup initializes that singleton.
+    """
+
+    from services import agent_team
+
+    class _FakeTeamService:
+        async def get_or_create_execution_team(self, **_kwargs):
+            return {"team_id": "team-fake"}
+
+    monkeypatch.setattr(agent_team, "_service", _FakeTeamService())
 
 
 # ============================================================================

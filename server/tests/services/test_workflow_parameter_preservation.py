@@ -45,7 +45,12 @@ class _ParameterRecordingDatabase:
         self._next_workflow_id += 1
         return workflow_id
 
-    async def get_workflow(self, workflow_id: str):
+    async def get_workflow(
+        self,
+        workflow_id: str,
+        owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+    ):
         return self._rows.get(workflow_id)
 
     async def save_workflow(
@@ -56,6 +61,8 @@ class _ParameterRecordingDatabase:
         data: Dict[str, Any],
         description: Optional[str] = None,
         context_id_aliases: Optional[Dict[str, str]] = None,
+        owner_user_id: Optional[str] = None,
+        namespace: Optional[str] = None,
     ) -> bool:
         self._rows[workflow_id] = SimpleNamespace(
             id=workflow_id,
@@ -83,6 +90,11 @@ class _ParameterRecordingDatabase:
         self.deleted_parameter_ids.append(node_id)
         self._params.pop(node_id, None)
         return True
+
+    async def get_tenant_namespace(self, user_id: str) -> Optional[Dict[str, Any]]:
+        # No tenant mapping: resolve_tenant_namespace falls back to the
+        # default namespace without needing a wired Settings.
+        return None
 
     # -- context archive outbox -------------------------------------------
     async def list_workflow_context_archive_outbox(self, workflow_id: str) -> List[Any]:

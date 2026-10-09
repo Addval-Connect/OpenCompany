@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.logging import get_logger
-from core.paths import workspaces_dir
 
 logger = get_logger(__name__)
 
@@ -45,6 +44,23 @@ async def resolve_workflow_slug(workflow_id: Optional[str], database: Any) -> Op
         )
         return None
     return getattr(workflow, "slug", None) if workflow else None
+
+
+def workspace_base_dir() -> Path:
+    """Root of the per-workflow workspaces tree, namespace-aware.
+
+    Multi-tenant: the writer (``workflow.py::_get_workspace_dir``) puts
+    every workflow workspace under
+    ``{data_dir}/namespaces/{ns}/workspaces/{slug}``; the reader side
+    (Gallery panel, FileRef download) must resolve the very same subtree
+    or it reads a parallel, always-empty root-level workspace. Module
+    level so tests can patch the seam (see ``tests/routers/test_workspace.py``).
+    """
+    from core.config import Settings
+    from core.namespace_context import get_active_namespace
+
+    ns = get_active_namespace() or "owner"
+    return Path(Settings().data_dir) / "namespaces" / ns / "workspaces"
 
 
 async def resolve_workspace_root(
@@ -74,11 +90,12 @@ async def resolve_workspace_root(
                 "modified. Save the workflow and try again."
             )
         slug = DEFAULT_WORKSPACE_SLUG
-    return workspaces_dir() / slug
+    return workspace_base_dir() / slug
 
 
 __all__ = [
     "DEFAULT_WORKSPACE_SLUG",
     "resolve_workflow_slug",
     "resolve_workspace_root",
+    "workspace_base_dir",
 ]

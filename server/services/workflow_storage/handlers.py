@@ -260,7 +260,7 @@ async def handle_save_workflow(data: Dict[str, Any], websocket: WebSocket) -> Di
         "owner_user_id": _trusted_owner_id(websocket, existing),
         # Namespace from the caller's active JWT claim — only set on new
         # workflows (existing workflows keep their original namespace).
-        "namespace": getattr(existing, "namespace", None) or getattr(websocket.state, "active_namespace", "default"),
+        "namespace": getattr(existing, "namespace", None) or getattr(getattr(websocket, "state", None), "active_namespace", "default"),
     }
     if _supports_context_archive_outbox(database):
         save_kwargs["context_id_aliases"] = normalization.aliases

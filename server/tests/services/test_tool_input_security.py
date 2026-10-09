@@ -211,7 +211,12 @@ async def test_memory_panel_scope_is_resolved_from_workflow_and_auth(
     from nodes.tool.simple_memory import _handlers
 
     class _Database:
-        async def get_workflow(self, workflow_id):
+        async def get_workflow(
+            self,
+            workflow_id,
+            owner_user_id=None,
+            namespace=None,
+        ):
             assert workflow_id == "workflow-1"
             return SimpleNamespace(
                 data={

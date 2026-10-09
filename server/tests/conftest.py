@@ -18,6 +18,19 @@ if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_multi_tenant_flag(monkeypatch):
+    """Unit tests must not inherit the operator's ``.env`` tenancy state.
+
+    ``MULTI_TENANT_NAMESPACES`` defaults off; this repo's local ``.env``
+    turns it on for development. Tests exercising the flag pass their own
+    ``_FakeSettings``, so pinning the env off here keeps every other test
+    (which builds ``Settings`` through the container) hermetic regardless
+    of the machine it runs on.
+    """
+    monkeypatch.setenv("MULTI_TENANT_NAMESPACES", "false")
+
+
 def _make_package(name: str) -> types.ModuleType:
     """Force a fresh stub package, replacing whatever is in sys.modules."""
     pkg = types.ModuleType(name)
@@ -170,6 +183,19 @@ _session_teardown_mod = _importlib_util.module_from_spec(_session_teardown_spec)
 sys.modules["core.session_teardown"] = _session_teardown_mod
 _session_teardown_spec.loader.exec_module(_session_teardown_mod)
 setattr(_core_pkg, "session_teardown", _session_teardown_mod)
+
+# core.namespace_context is stdlib-only (ContextVars) and is imported at
+# module load by core/namespaced_db.py, core/db_pool.py and the Temporal
+# activities — expose the real module so the namespace-isolation plumbing
+# holds under the stubbed core package.
+_namespace_context_spec = _importlib_util.spec_from_file_location(
+    "core.namespace_context",
+    SERVER_DIR / "core" / "namespace_context.py",
+)
+_namespace_context_mod = _importlib_util.module_from_spec(_namespace_context_spec)
+sys.modules["core.namespace_context"] = _namespace_context_mod
+_namespace_context_spec.loader.exec_module(_namespace_context_mod)
+setattr(_core_pkg, "namespace_context", _namespace_context_mod)
 
 # core.paths — central path resolution. Stub the public surface with
 # tmpdir-rooted Paths so plugin module imports don't trip over the

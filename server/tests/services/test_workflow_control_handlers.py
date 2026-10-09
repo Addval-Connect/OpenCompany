@@ -8,6 +8,27 @@ import pytest
 from services.deployment import handlers
 
 
+@pytest.fixture(autouse=True)
+def _stable_tenant_namespace(monkeypatch):
+    """Pin the tenant-namespace resolvers for every control-handler test.
+
+    ``handle_start_workflow`` now resolves the Temporal namespace through
+    ``services.tenancy`` against the container, and under the conftest's
+    MagicMock container that resolution reads tenant-row garbage none of
+    these lifecycle tests stage. Every test here stages
+    ``_control_service``-level fakes, so keep tenancy flat: resolve to the
+    default namespace without a database round-trip.
+    """
+
+    from services import tenancy
+
+    async def _default(user_id=None, *, database=None, settings=None):
+        return getattr(settings, "temporal_namespace", None) or "default"
+
+    monkeypatch.setattr(tenancy, "resolve_tenant_namespace", _default)
+    monkeypatch.setattr(tenancy, "resolve_namespace_from_state", lambda state, *, settings: "default")
+
+
 def _control(
     status: str,
     revision: int,

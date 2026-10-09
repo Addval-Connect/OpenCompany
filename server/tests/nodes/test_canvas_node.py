@@ -422,9 +422,21 @@ class _HandlerDatabase:
     def get_session(self):
         return self._database.get_session()
 
-    async def get_workflow(self, workflow_id):
+    async def get_workflow(
+        self,
+        workflow_id,
+        owner_user_id=None,
+        namespace=None,
+    ):
         if workflow_id != self._graph["id"]:
             return None
+        # Mirror the production access predicate: a workflow owned by a
+        # different principal is invisible to the caller (the canvas
+        # owner check moved to the DB layer with the tenancy work).
+        if owner_user_id is not None:
+            stored = str(self._graph.get("owner_id") or "")
+            if stored and stored != owner_user_id:
+                return None
         return SimpleNamespace(data=self._graph)
 
 
@@ -478,7 +490,9 @@ async def test_owner_mismatch_is_denied(handler_env, handler_events):
         {"workflow_id": "wf-h", "node_id": "canvas-h"}, _FakeSocket()
     )
     assert response["success"] is False
-    assert "denied" in response["error"].lower()
+    # Ownership is enforced at the DB layer: a workflow owned by a different
+    # principal is invisible to this caller.
+    assert "not found" in response["error"].lower()
 
 
 async def test_wrong_node_type_is_denied(handler_env, handler_events):

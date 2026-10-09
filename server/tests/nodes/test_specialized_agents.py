@@ -46,6 +46,26 @@ GENERIC_SPECIALIZED_AGENTS = [
 TEAM_LEAD_AGENTS = ["orchestrator_agent", "ai_employee"]
 
 
+@pytest.fixture(autouse=True)
+def _stub_agent_team_service(monkeypatch):
+    """Stub the AgentTeamService singleton for the inline delegation path.
+
+    ``prepare_agent_call`` mints the durable execution team eagerly for
+    team-lead agents (orchestrator_agent / ai_employee); in production that
+    singleton is initialized at app startup. These tests stage the
+    collection contract only, so the team service resolves to a no-op
+    rather than requiring a full app boot.
+    """
+
+    from services import agent_team
+
+    class _FakeTeamService:
+        async def get_or_create_execution_team(self, **_kwargs):
+            return {"team_id": "team-fake"}
+
+    monkeypatch.setattr(agent_team, "_service", _FakeTeamService())
+
+
 # ============================================================================
 # Generic specialized agents -- parametrized so we do not repeat 13 near
 # identical test bodies.
