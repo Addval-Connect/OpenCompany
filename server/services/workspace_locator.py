@@ -74,7 +74,16 @@ async def resolve_workspace_root(
                 "modified. Save the workflow and try again."
             )
         slug = DEFAULT_WORKSPACE_SLUG
-    return workspaces_dir() / slug
+    # Multi-tenant: el escritor (workflow.py::_get_workspace_dir) usa
+    # {data_dir}/namespaces/{ns}/workspaces/{slug}. El locator debe coincidir;
+    # si no, el panel Gallery (y la descarga de FileRef) leen un workspace
+    # raíz paralelo y vacío.
+    from core.config import Settings
+    from core.namespace_context import get_active_namespace
+
+    ns = get_active_namespace() or "owner"
+    base = Path(Settings().data_dir) / "namespaces" / ns / "workspaces"
+    return base / slug
 
 
 __all__ = [
