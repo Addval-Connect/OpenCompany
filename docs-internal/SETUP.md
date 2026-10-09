@@ -2,6 +2,8 @@
 
 ## Project Structure
 
+For the optional local Android emulator, see [Mobile Workspace setup](../docs/mobile-workspace.md). It requires Windows x64, working virtualization, one backend process with embedded workers, and explicit SDK license acceptance. Add **Mobile Agent** or the **Android** tool, save the workflow, then open **Workspace → Mobile**. After backend/plugin changes, restart the backend and refresh the frontend. See the guide's runtime-file notes before moving or deleting an existing phone installation.
+
 ```
 OpenCompany/
 ├── client/                 # React frontend (Vite dev server on VITE_CLIENT_PORT, proxying the backend; production build served by uvicorn on PYTHON_BACKEND_PORT)
@@ -14,7 +16,7 @@ OpenCompany/
 │   ├── models/             # SQLModel definitions
 │   ├── nodes/              # Plugin folders (one per node; the WhatsApp bridge is the
 │   │                       #   `edgymeow` package `bun add`ed under DATA_DIR/packages/, not in-tree)
-│   └── requirements.txt
+│   └── uv.lock             # Locked Python dependencies (`uv sync` installs from it)
 ├── scripts/                # Install lifecycle helpers, run by bun (install/preinstall/postinstall)
 └── package.json            # Workspace root; bun@1.4.0 scripts wrapping `python -m cli`
 ```
@@ -32,12 +34,16 @@ command provisions the Python side (uv, the venvs, bytecode; a minute or two).
 `curl -fsSL https://opencompany.sh/install.sh | bash` (or `install.ps1` on
 Windows) installs bun, Python and uv first and provisions eagerly.
 
-**Known issue on 0.2.0 and 0.2.1**: a registry install provisions but then
-`company start` (and `company serve`) stops with "Project not built", and the
-package ships without the JS executor sidecar bundle; `company build` in the
-installed package works around both. Details and status in
-[errors.md #25 and #26](./errors.md). The desktop app is not affected and is
-the recommended install.
+Provisioning also creates `.env` as a plain copy of `.env.template`, including
+its publicly known placeholder secrets. Replace them before you store any
+credentials; see [Environment Configuration](#environment-configuration).
+
+**Known issue in registry installs (open since 0.2.0; the status line of
+[errors.md #25 and #26](./errors.md) says whether your version is fixed)**: a
+registry install provisions but then `company start` (and `company serve`)
+stops with "Project not built", and the package ships without the JS executor
+sidecar bundle; `company build` in the installed package works around both.
+The desktop app is not affected and is the recommended install.
 
 Open `http://localhost:$PYTHON_BACKEND_PORT` — `company start` is single-port (API +
 WebSocket + built SPA on the backend port).
@@ -154,14 +160,35 @@ the arrangement is [desktop_host_contract.md](./desktop_host_contract.md).
 - Ports: gRPC `TEMPORAL_FRONTEND_GRPC_PORT`, Web UI `TEMPORAL_UI_PORT` (values in `.env.template`)
 - Embedded worker runs inside the Python backend (`TemporalWorkerManager` + `TemporalWorkerPool`, built by `services/temporal/lifecycle.py`; `main.py` only schedules `run_temporal_lifecycle`)
 - Running and paused deployments survive restarts: `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP=false` is the default, and the boot-time reconcile pass re-arms them. Setting it `true` is a debug-only sweep (history preserved; active control rows still veto it)
+- New generations record execution control version 1. Stop drains admitted work
+  before reporting Stopped; Resume releases existing continuations. Existing
+  generations retain legacy behavior until Reset and Start. A lost version 1
+  controller fails closed rather than rebuilding an empty root registry. See
+  [control lifecycle, recovery and verification](temporal-workflow-control.md).
 - See [Temporal Architecture](./TEMPORAL_ARCHITECTURE.md) and [CLI Services Guide](./cli_services_integration.md)
 
-### Database (SQLite)
+### Application database (SQLite locally, PostgreSQL for multiple machines)
+
 - **workflows** - Workflow definitions
 - **node_parameters** - Node parameter storage
 - **conversation_messages** - AI conversation history
 - **cache_entries** - Execution cache (when Redis disabled)
 - **users** - Authentication (single/multi-user modes)
+
+Local development retains SQLite and embedded Temporal. Multi-machine Browser
+execution requires `DISTRIBUTED_MODE=true`, a shared
+`postgresql+asyncpg://` `DATABASE_URL`, external Temporal, shared artifact/profile
+storage and one registered browser owner per backend process (`WORKERS=1`).
+Do not share the SQLite files over NFS/SMB. Use the explicit offline transfer
+command when moving existing IDs and graphs. The full configuration, owner
+recovery and release checks are in [Browser deployment](browser_agent_deployment.md).
+
+Browser AI Agent direct tasks run independently of workflow Start/Stop/Resume;
+Cancel and Reset wait for confirmed browser-owner cleanup. Supported API keys
+and configured website logins can use approved [1Password bindings](onepassword_credentials.md).
+Local desktop authorization must reach the actual backend user/process.
+Distributed mode uses scoped service accounts and rejects local keys and
+unsupported OAuth/CLI-managed connections.
 
 ## Environment Configuration
 
@@ -171,7 +198,15 @@ Copy the example environment file:
 cp .env.template .env
 ```
 
-Alternatively, `company build` scaffolds `.env` from `.env.template` automatically when it is missing (step `[0/6]`) and generates fresh random secrets for `SECRET_KEY` / `JWT_SECRET_KEY` / `API_KEY_ENCRYPTION_KEY` instead of the dev placeholders. An existing `.env` is never modified. If you copy the template by hand and later enable auth (or set `DEPLOYMENT_MODE` to anything other than `local`), the server logs a non-fatal error banner at startup until the placeholder secrets are replaced.
+`company build` also creates `.env` when it is missing (step `[0/6]`), and then generates fresh random values for `SECRET_KEY` / `JWT_SECRET_KEY` / `API_KEY_ENCRYPTION_KEY` instead of the template's `dev-` placeholders. It never modifies an existing `.env`, and most installs already have one by then: `bun install` in a checkout, `company provision` and a global install's first `company` command all create `.env` as a plain copy of the template, placeholders included.
+
+**Replace the placeholder secrets before you store any credentials.** Generate one value per key, set it in `.env` (or the process environment), and restart:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(24))"
+```
+
+The startup warning about placeholder secrets appears only with login on or `DEPLOYMENT_MODE` other than `local`, so a default local install never shows it. Never change `API_KEY_ENCRYPTION_KEY` once credentials are stored: they are encrypted with it, and a new key makes them unreadable, so they would have to be entered again. See [Credentials Encryption → Placeholder secrets](./credentials_encryption.md#placeholder-secrets).
 
 ### Key Settings
 
@@ -198,13 +233,14 @@ Add these to `.env` or configure via the Credentials UI:
 When `VITE_AUTH_ENABLED=false` (the default):
 - Login page is skipped entirely
 - User is set as anonymous with owner privileges
-- Encryption service auto-initializes with `API_KEY_ENCRYPTION_KEY` as the password
+- Credentials are still encrypted with `API_KEY_ENCRYPTION_KEY`, exactly as with login on (the key never comes from a user's password)
 - API keys can be saved/retrieved without user authentication
 - Useful for local development and testing
 
-**Redis (optional):** Set `REDIS_ENABLED=true` in `.env`
-(Docker Compose tooling was removed; the historical topology is in
-[deployment_legacy.md](./deployment_legacy.md).)
+**Redis (optional):** Set `REDIS_ENABLED=true` in `.env`.
+
+**Docker:** `docker compose up -d --build` runs a self-hosting image
+built from source; see [docker.md](./docker.md).
 
 ## Local Commands
 
@@ -212,7 +248,7 @@ When `VITE_AUTH_ENABLED=false` (the default):
 |---------|-------------|
 | `bun run start` | Start the app (backend-owned daemons start on demand) |
 | `bun run stop` | Stop all services |
-| `bun run build` | Full production build (`company build`: bun install, client, sidecar, uv sync, bytecode, Temporal binary) |
+| `bun run build` | Full production build (`company build`: bun install, client, sidecar, `uv sync --extra docs`, bytecode, Temporal binary) |
 | `bun run dev` | Start development server |
 
 ## Troubleshooting
@@ -225,17 +261,15 @@ PYTHON_BACKEND_PORT=6678
 ```
 
 ### Python dependencies fail
-The server is uv-managed — prefer `uv sync` from `server/` (creates `server/.venv` against the committed `uv.lock`; after editing `pyproject.toml` run `uv lock` and commit the result, CI checks it with `uv lock --check`). The pip fallback works too:
+The server is uv-managed — prefer `uv sync` from `server/` (creates `server/.venv` against the committed `uv.lock`; after editing `pyproject.toml` run `uv lock` and commit the result, CI checks it with `uv lock --check`). The pip fallback installs the same pins from an export of the lock:
 ```bash
 cd server
+uv export --frozen --no-emit-project --no-hashes --no-dev -o requirements.txt
 python -m venv venv
 source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
 ```
-`server/requirements.txt` is an exact-pin export of the lock — regenerate after dependency changes with:
-```bash
-uv export --frozen --no-emit-project --no-hashes --no-dev -o requirements.txt
-```
+The export is never committed (`.gitignore` lists it): a tracked copy drifts from the lock, and GitHub files a second Dependabot alert against it that cannot close.
 
 ### Database issues
 SQLite databases are created automatically under `DATA_DIR`
@@ -249,104 +283,11 @@ Delete `workflow.db` there to reset all data.
 3. **WebSocket** provides real-time status updates
 4. **Database** persists data between restarts
 
-## Starting the Dev Server (source checkout)
-
-**Always use `python -m cli dev` from the repo root, not the global `company` binary.**
-
-```bash
-# From the repo root:
-python -m cli dev
-```
-
-The global `/usr/sbin/company` binary points to a separately installed package.
-Running it from a source checkout may execute the installed version's code and
-causes port mis-detection (both Vite and uvicorn try port 5678).
-
-### Port layout in dev mode
-
-| Service | Port | Note |
-|---------|------|------|
-| Vite (frontend + proxy) | 5678 | proxies `/api`, `/ws`, `/health`, `/mcp` to backend |
-| uvicorn (Python backend) | 5679 | set by `.env.dev` override |
-| Temporal gRPC | 5681 | backend-managed |
-| Temporal UI | 5680 | |
-| JS Executor sidecar | 5682 | |
-
-`.env.dev` sets `PYTHON_BACKEND_PORT=5679` and `VITE_CLIENT_PORT=5678`. This
-file is loaded **only** by `python -m cli dev` / `company dev`; running Vite or
-uvicorn independently requires passing the same vars explicitly:
-
-```bash
-# backend
-PYTHONUNBUFFERED=1 server/.venv/bin/python -m uvicorn main:app \
-    --host 127.0.0.1 --port 5679 --reload
-
-# frontend (from client/)
-VITE_CLIENT_PORT=5678 PYTHON_BACKEND_PORT=5679 bun run start
-```
-
-> **Note — `strictPort: false`**: Vite auto-increments the port if 5678 is
-> taken (e.g. by a stale process from a previous run). Always kill orphan
-> processes before restarting: `company stop` or kill by PID from `ss -tlnp`.
-
-### Database path in dev mode
-
-`DATA_DIR=.opencompany` (set in `.env.dev`) resolves to `<repo>/.opencompany/`
-via `core.paths.project_root()`. Per-namespace SQLite files live under:
-
-```
-<repo>/.opencompany/
-  namespaces/
-    owner/workflow.db      # auth, users, global namespace registry
-    <namespace>/workflow.db
-  credentials.db
-  temporal.db
-```
-
-## First-time setup (fresh DB)
-
-On a clean checkout or after `company clean`, the DB is empty. Run the dev
-server once so migrations run, then register the first user through the browser
-(http://localhost:5678) or via the TUI:
-
-```bash
-cd server
-DATA_DIR=../.opencompany .venv/bin/python scripts/tui.py
-```
-
-The TUI lets you:
-- **Create users** with email + password
-- **Create namespaces** (registers in Temporal + DB automatically)
-- **Assign users to namespaces**
-
-The first `POST /api/auth/register` (or TUI "Add user") also auto-assigns the
-user to the `default` namespace, so the namespace switcher appears immediately
-after login.
-
-## Multi-tenant namespace management
-
-Namespaces are managed via the TUI (`server/scripts/tui.py`).
-Each namespace gets its own Temporal namespace (workers, search attributes)
-and its own `workflow.db` under `<DATA_DIR>/namespaces/<slug>/`.
-
-To add a namespace from the CLI:
-
-```bash
-# From server/
-DATA_DIR=../.opencompany .venv/bin/python scripts/tui.py
-# → Namespaces → Create namespace
-```
-
-Or using manage_users.py for scripted/CI use:
-
-```bash
-DATA_DIR=../.opencompany .venv/bin/python scripts/manage_users.py \
-    namespace --email user@example.com --namespace my-org
-```
-
 ## Architecture Notes
 
 - **WebSocket-First**: WS message handlers replace most REST APIs (live set = `MESSAGE_HANDLERS` in `server/routers/websocket.py` + plugin-registered handlers)
 - **n8n-inspired**: Node definitions follow n8n INodeProperties pattern
 - **Cache Fallback**: Redis (production) → SQLite (dev) → Memory
-- **Event-Driven**: Trigger nodes use asyncio.Future for event waiting
+- **Event-Driven**: Controlled Temporal deployments queue Signals and polling
+  results in their generation controller. Direct/legacy paths retain in-memory
+  event waiters; see [event routing](event_framework.md).

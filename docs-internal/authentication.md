@@ -12,7 +12,8 @@ n8n-inspired authentication system with JWT tokens stored in HttpOnly cookies. A
 When `VITE_AUTH_ENABLED=false`:
 - Frontend skips login page entirely
 - User is set to anonymous with owner privileges
-- No backend auth API calls are made
+- The client still asks `GET /api/auth/status` once at boot; it answers
+  `auth_enabled: false`, and that is how the client knows to skip login
 - Useful for local development and testing
 
 ## Deployment Modes (when auth enabled)
@@ -72,13 +73,18 @@ class User(SQLModel, table=True):
 - `get_auth_status()` - Returns `auth_mode` and `registration_enabled`
 - `logout()` - A no-op log line. See Known Limitations.
 
-**`UserAuthService` does not touch the encryption service.** Earlier revisions
-of this document described `login()` calling `_initialize_encryption(password)`
-and `logout()` calling `self.encryption.clear()`. Neither method has ever
-existed. The Fernet key is **server-scoped**: initialised once during startup
-in `main.py` from `API_KEY_ENCRYPTION_KEY`, never derived from a user password
-and never cleared on logout. See
-[Credentials Encryption](./credentials_encryption.md) for the real pipeline.
+**`UserAuthService` never initialises, derives or clears the encryption key.**
+The container injects `EncryptionService` and `CredentialsDatabase` into it,
+and neither is used: the only reference to the encryption service is
+`is_encryption_initialized()` (a pass-through to
+`EncryptionService.is_initialized()`), which nothing calls, and
+`credentials_db` is held and never read. Earlier revisions of this document
+described `login()` calling `_initialize_encryption(password)` and `logout()` calling
+`self.encryption.clear()`. Neither method has ever existed. The Fernet key is
+**server-scoped**: initialised once during startup in `main.py` from
+`API_KEY_ENCRYPTION_KEY`, never derived from a user password and never
+cleared on logout. See [Credentials Encryption](./credentials_encryption.md)
+for the real pipeline.
 
 ### Auth Router (`server/routers/auth.py`)
 | Endpoint | Method | Description |
@@ -142,35 +148,75 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string, displayName: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  checkAuth: () => Promise<void>;
+  /** Check the session again; true when the server answered. */
+  checkAuth: () => Promise<boolean>;
+  /** A login/register request is in flight, or succeeded and its welcome
+   *  is still showing. */
+  signingIn: boolean;
+  /** End the welcome: the requests go back to idle and the app shows. */
+  finishSignIn: () => void;
 }
 ```
 
 ### Protected Route (`client/src/components/auth/ProtectedRoute.tsx`)
-Wraps protected content, shows LoginPage if not authenticated:
-```typescript
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuth();
-  if (isLoading) return <LoadingSpinner />;
-  if (!isAuthenticated) return <LoginPage />;
-  return <>{children}</>;
-};
-```
+The sign-in gate (onboarding handoff R4), in front of the whole app:
+
+| State | Shows |
+|-------|-------|
+| the session is being checked (`isLoading`) | a loading screen |
+| the server can't be reached (`error`, not signed in) | Connecting (`ConnectingPanel`): a countdown to each check, Try now, "Attempt n", and from the third attempt "Still nothing? Make sure OpenCompany is running." |
+| the server answered | "Connected", held `CONNECT_RETRY.CONNECTED_HOLD_MS` (1.5 s, `useHold`) |
+| then | sign-in, or the app when the session is good or login is off |
+| a sign-in from the form in flight or just done (`signingIn`) | sign-in, then its welcome (`SignedIn`) until `finishSignIn` |
+| signed in, the WebSocket down (`reconnecting` from `useWebSocketActions`) | Connecting over the app (`role="dialog"`, `z-60`); the app stays mounted, `inert` |
+
+Connecting, sign-in and the welcome render inside one `ConnectScreen` (the
+whole window, the orb filling it, the logo and the theme button on top), so
+the orb glides from one's slot to the other's. The schedule is `useRetrySchedule`:
+`CONNECT_RETRY.DELAYS_S` (2, 3, 5, 8, 8 s), each check being `checkAuth`;
+over the app the checks are HTTP session checks too, so a session that
+expired while the server was away goes to sign-in, and the overlay goes
+once the WebSocket is back. While a `ConnectScreen` shows, the theme is the
+base of the chosen family (`shellDialogsStore.connectScreenOpen`, read by
+`app/ShellThemeProvider.tsx`).
 
 ### Login Page (`client/src/components/auth/LoginPage.tsx`)
+Inside the gate's `ConnectScreen` (onboarding handoff R5): the orb's `login`
+slot above a card that rises in. "Welcome back" or "Create your account", the
+fields ("Your name" when registering, "Email", "Password" with a show/hide
+toggle), Sign in or Create account, and, while `canRegister`, the way to the
+other mode.
 - shadcn `Form` composition (react-hook-form + zod), matching `EmailPanel` —
-  schema in `components/auth/schemas/login.ts`. `FormControl` supplies
-  `aria-invalid` + `aria-describedby` per field; the form is `noValidate` so
-  zod is the single validation authority rather than native browser bubbles.
+  schema and the field messages in `components/auth/schemas/login.ts`.
+  `FormControl` supplies `aria-invalid` + `aria-describedby` per field; the
+  form is `noValidate` so zod is the single validation authority rather than
+  native browser bubbles.
 - `canRegister` gates the footer link only; the mode itself is local state.
-- **Two error channels, deliberately distinct.** `submitError` is the server's
-  own rejection text (wrong password, duplicate email, 429) and takes
-  precedence; `error` is a bootstrap-query connectivity failure. Both render in
-  a `role="alert"` region.
+- **The card shows one error: what the server said.** `submitError` is the
+  server's own rejection text, shown as it is: `UserAuthService` words it for
+  the owner ("An account with this email already exists.", "This OpenCompany
+  already has its owner. Sign in instead.", a wrong password, a 429). When the
+  request got no answer it is `AUTH_UNREACHABLE` ("Can't reach OpenCompany.
+  Make sure it's running, then try again."). The bootstrap `error` (the server
+  can't be reached at all) is the gate's Connecting screen, so this page never
+  shows it.
 - Inputs and the submit button gate on `isSubmitting` (per-request), **not**
   `isLoading` (bootstrap query). The latter has always settled by the time this
   page renders, so using it disabled nothing and the form accepted unlimited
   concurrent submits.
+- The card shakes (`shake` in `lib/motion.ts`) when a field is wrong or the
+  server refuses. The orb follows the form: livelier while a field has focus
+  (`ENERGY.focus`), more with text in it (`ENERGY.typing`), most while the
+  request is out (`ENERGY.generating`).
+- **After signing in** the card gives way to `SignedIn`: "Signed in" or
+  "Account created", "Welcome back, {first name}" (or "Welcome, …" for a new
+  account) and "Opening your team…", and the orb spikes. The gate keeps the
+  screen up while `signingIn` is true, which is the login and register
+  mutations' own state: in flight, or succeeded and not yet finished. The
+  welcome hands over the way a mode switch does (`app/useShellActions.ts`):
+  the screen the app opens on (Home or the editor) loads while the welcome
+  rises in, then `finishSignIn` returns the mutations to idle and the app
+  shows. A session that was already good never sees it.
 
 ## Configuration
 Environment variables in `.env`:
@@ -219,14 +265,38 @@ Recorded explicitly because each of these is easy to assume is handled.
   `get_all_workflows` returns every tenant's rows unfiltered. `is_owner` is
   still decorative. Until ownership moves to an indexed column with scoped
   accessors, treat `multi` as "several people who fully trust each other".
-- **`/ws/internal` is unauthenticated by design and must stay narrow.** It is in
-  `PUBLIC_PATHS` and performs no handshake, yet it dispatched through the same
-  registry as the authenticated socket — which made `save_workflow`,
-  `delete_workflow` and all six Memory handlers reachable without credentials.
-  `services/authz/ws_surface.py` now holds a deny-by-default allowlist
-  (`INTERNAL_SOCKET_HANDLERS`); refusal is deliberately indistinguishable from
-  an unknown message type so the socket cannot be probed. Its test is generated
-  from the live registry, so a newly added handler is closed by default.
+- **`/ws/internal` skips the cookie gate and must stay narrow.** It is in
+  `PUBLIC_PATHS` because a Temporal worker has no session cookie. It used to
+  accept any peer, and its `execute_node` runs whatever node type and parameters
+  the message names, so anyone who could reach the app port (published by
+  Docker and by `company deploy`), or any web page open on the same machine,
+  could run a `shell` node. The handshake now requires the
+  `X-OpenCompany-Internal-Token` header, an HMAC of `SECRET_KEY`
+  (`internal_socket_token` in `services/authz/ws_surface.py`); the worker
+  clients (`services/temporal/activities.py`, `ws_client.py`, and a standalone
+  worker's chat relay, `services/chat/relay.py`) send it, and any new internal
+  client must too. A loopback-address check would not do: a
+  reverse proxy on the same host makes public traffic arrive from 127.0.0.1,
+  and a page's socket to `localhost` is itself loopback. Even with the token
+  the socket reaches only the deny-by-default allowlist
+  (`INTERNAL_SOCKET_HANDLERS`), which exists because the socket once
+  dispatched through the same registry as the authenticated one —
+  `save_workflow`, `delete_workflow` and all six Memory handlers were
+  reachable. Refusal is deliberately indistinguishable from an unknown message
+  type so the socket cannot be probed, and the allowlist test is generated from
+  the live registry, so a newly added handler is closed by default.
+- **Every WebSocket handshake checks `Origin`.** A browser lets any page open a
+  socket to any host, `localhost` included, and with login off (the local
+  default) there is no cookie to check, so any page open on the machine could
+  drive `/ws/status`. `services/authz/ws_session.py` admits a handshake only
+  when `Origin` is absent (not a browser), matches the request's `Host`, or is
+  listed in `CORS_ORIGINS` (`*` there allows every origin, as it already does
+  for HTTP CORS); anything else closes with `4003` before `accept()`.
+  `authenticate_ws` (Origin, then the session cookie) serves every
+  browser-facing socket; `admit_internal_ws` (Origin, then the worker token)
+  serves `/ws/internal`. A reverse proxy that rewrites `Host` must list the
+  public origin in `CORS_ORIGINS`. Locked by `tests/test_internal_socket_surface.py`,
+  which runs real handshakes.
 - **No CSRF token.** The API is cookie-authenticated and `SameSite` is the only
   defence. Mitigated by every mutating endpoint being `POST` under `/api/` and
   by `SameSite=none` + insecure being rejected at startup. A real double-submit
@@ -249,37 +319,40 @@ Recorded explicitly because each of these is easy to assume is handled.
 and `dev_secret_offenders()`: server startup (lifespan) logs a non-fatal error
 banner when `SECRET_KEY` / `JWT_SECRET_KEY` / `API_KEY_ENCRYPTION_KEY` still
 carry the dev template placeholders while auth is enabled or `DEPLOYMENT_MODE`
-is not `local`. A `company build`-scaffolded `.env` avoids this by generating
-fresh `secrets.token_hex(24)` values at scaffold time.
+is not `local`. Only a `.env` that `company build` creates itself gets fresh
+`secrets.token_hex(24)` values; `bun install` in a checkout and
+`company provision` copy the template as-is, and with login off in a local
+install nothing warns. See
+[Credentials Encryption → Placeholder secrets](./credentials_encryption.md#placeholder-secrets).
 
-## Race Condition Handling (TanStack Query bootstrap)
+## Race Condition Handling (the bootstrap check)
 The frontend starts before the backend is ready during cold launch, so the
-auth-status check must tolerate transient failures.
+auth-status check must tolerate the server not being there yet.
 
-The `AuthContext` bootstraps the auth-status check through TanStack Query
-(`useQuery({ queryKey: AUTH_STATUS_QUERY_KEY, queryFn: fetchAuthStatus, retry, retryDelay, signal })`),
-which replaced the previous recursive `setTimeout` retry chain. Behaviour:
+The `AuthContext` runs the check through TanStack Query
+(`useQuery({ queryKey: AUTH_STATUS_QUERY_KEY, queryFn: fetchAuthStatus, retry: false, networkMode: 'always' })`):
 
-- **Full-jitter exponential backoff** per the AWS Architecture Blog formula:
-  `random(0, min(CAP_MS, BASE_MS * 2^attempt))`. Constants live in
-  [`client/src/lib/connectionConfig.ts`](../client/src/lib/connectionConfig.ts)
-  under `AUTH_RETRY`: `BASE_MS = 50`, `CAP_MS = 4000`, `MAX_ATTEMPTS = 7`.
-  Cumulative budget is ~10 s (vs. the old ~31 s); sub-second granularity early
-  covers the typical 4 s backend cold-start window in 4–5 attempts.
-- **401/403 short-circuit the retry chain** — those are valid responses meaning
-  "auth disabled / not logged in", not "backend unavailable", so no retry
-  budget is burned (`authShouldRetry` returns `false` when the wrapped error
-  message contains `HTTP 401` / `HTTP 403`).
+- **No hidden retries.** A failed check (no answer, a 5xx, a 401/403 or a
+  non-JSON 200) sets `error` at once, and the sign-in gate shows Connecting,
+  which checks again through `checkAuth` on a schedule the owner can see
+  (`CONNECT_RETRY` in
+  [`client/src/lib/connectionConfig.ts`](../client/src/lib/connectionConfig.ts)).
+  `checkAuth` refetches and says whether the server answered; a failed check
+  keeps the last answer, so a signed-in owner stays signed in while the
+  server is away. Nothing ever writes a failure into the status cache.
+- **`networkMode: 'always'`**: the browser's idea of being offline never
+  pauses a check of a server on this computer.
 - **AbortController `signal`** is plumbed through `queryFn` so unmount + React
   Strict Mode cleanup cancel in-flight requests automatically.
 - `login` / `register` / `logout` invalidate the cache via
   `queryClient.invalidateQueries({ queryKey: AUTH_STATUS_QUERY_KEY })`
   (`AUTH_STATUS_QUERY_KEY = ['auth', 'status']`).
 
-> Historical note: the original implementation used 5 fixed retries with
-> exponential backoff (1 s, 2 s, 4 s, 8 s, 16 s) and a recursive `setTimeout`
-> chain, surfacing "Failed to connect to server" only after all retries were
-> exhausted. This was superseded by the TanStack Query bootstrap above.
+> Historical note: the check used to retry on its own, first through a
+> recursive `setTimeout` chain (1, 2, 4, 8, 16 s), then through TanStack
+> Query's full-jitter backoff (`AUTH_RETRY`, about 10 s in all), after which
+> the login page showed "Failed to connect to server" and nothing checked
+> again. The visible Connecting screen replaced both.
 
 ## Cookie-Based Auth for API Calls
 All API calls must include `credentials: 'include'` for the HttpOnly cookie:
@@ -289,14 +362,33 @@ fetch(url, { credentials: 'include' })
 ```
 
 ## WebSocket Authentication
-WebSocket checks the cookie before accepting the connection:
+Every handshake is admitted by a helper in `services/authz/ws_session.py`
+before `accept()`. `/ws/status` (and `/ws/browser`) call `authenticate_ws`:
 ```python
-# In websocket.py
-token = websocket.cookies.get(settings.jwt_cookie_name)
-if not token:
-    await websocket.close(code=4001, reason="Not authenticated")
-    return
+# In routers/websocket.py
+authenticated_user_id = await authenticate_ws(
+    websocket,
+    settings=container.settings(),
+    user_auth_service=container.user_auth_service,
+)
+if authenticated_user_id is None:
+    return  # already closed
+websocket.state.user_id = authenticated_user_id
 ```
+`authenticate_ws` runs, in order:
+1. The `Origin` check: a foreign origin closes with `4003` ("Origin not
+   allowed"). See Known Limitations for which origins are admitted.
+2. With login disabled (`VITE_AUTH_ENABLED=false`), every same-origin caller
+   is the owner principal.
+3. Otherwise `core.auth_cookies.get_session_token` reads the session cookie
+   (`JWT_COOKIE_NAME`, falling back to the legacy `machina_token`), and
+   `UserAuthService.verify_token` checks it. A missing, invalid or subject-less
+   token closes with `4001`.
+
+`/ws/internal` uses `admit_internal_ws` instead: the same `Origin` check
+(`4003`), then the `X-OpenCompany-Internal-Token` header, an HMAC of
+`SECRET_KEY` (`internal_socket_token` / `is_internal_caller` in
+`services/authz/ws_surface.py`); a missing or wrong token closes with `4001`.
 
 `WebSocketProvider` only connects when authenticated:
 ```typescript
@@ -315,13 +407,16 @@ useEffect(() => {
 ## Key Files
 | File | Description |
 |------|-------------|
-| `client/src/config/api.ts` | API config with AUTH_ENABLED toggle |
-| `client/src/contexts/AuthContext.tsx` | React auth state with TanStack Query bootstrap + retry logic |
-| `client/src/lib/connectionConfig.ts` | `AUTH_RETRY` backoff constants (`BASE_MS` / `CAP_MS` / `MAX_ATTEMPTS`) |
-| `client/src/components/auth/LoginPage.tsx` | Login UI |
-| `client/src/components/auth/ProtectedRoute.tsx` | Route guard |
+| `client/src/config/api.ts` | The backend's base URL (same origin unless `VITE_PYTHON_SERVICE_URL`) |
+| `client/src/contexts/AuthContext.tsx` | React auth state: the TanStack Query bootstrap check, `checkAuth` |
+| `client/src/lib/connectionConfig.ts` | `CONNECT_RETRY` (the Connecting screen's schedule) and the WebSocket envelope |
+| `client/src/components/auth/LoginPage.tsx`, `schemas/login.ts` | Sign in and register, and their messages |
+| `client/src/components/auth/SignedIn.tsx` | The welcome after signing in, until the app is ready |
+| `client/src/components/auth/ProtectedRoute.tsx` | The sign-in gate (states above) |
+| `client/src/components/auth/ConnectScreen.tsx`, `ConnectingPanel.tsx` | The screen around Connecting and sign-in, and Connecting itself |
+| `client/src/components/auth/useRetrySchedule.ts`, `useHold.ts` | The countdown to each check; "Connected" held a moment |
 | `server/models/auth.py` | User SQLModel with bcrypt |
-| `server/services/user_auth.py` | `UserAuthService`: register / login / JWT mint + verify / `get_current_user`. No encryption-service coupling (see the note under Auth Service) |
+| `server/services/user_auth.py` | `UserAuthService`: register / login / JWT mint + verify / `get_current_user`. Holds the encryption service and credentials database but uses neither; its `is_encryption_initialized()` has no callers (see the note under Auth Service) |
 | `server/routers/auth.py` | REST endpoints |
 | `server/middleware/auth.py` | Route protection (`PUBLIC_PATHS` / `PUBLIC_PREFIXES`) |
 | `server/core/config.py` | Settings with `vite_auth_enabled` field |

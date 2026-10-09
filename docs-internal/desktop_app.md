@@ -27,7 +27,7 @@ produced this feature. Short form:
   `uv.lock` / `pyproject.toml` / the bundled Python changes. OpenCompany
   already provisions at first run (`install.js` runs `uv sync`, Temporal and
   the plugin CLIs (`bun add` into `~/.opencompany/packages/`) download on
-  first use, `browser_harness` needs `uv` at runtime), so uv ships in every
+  first use, the Browser node installs the browser-use CLI with `uv tool install`), so uv ships in every
   design.
 
 ## Layout
@@ -80,7 +80,7 @@ shell reads it directly (`stage/runtime/<os>-<arch>/`), in a packaged app
 4. `choosePort`: persisted port, else 5678, else scan 5679-5699. If the
    preferred port is busy and `/health` says an OpenCompany backend is there
    (a `company serve` the user left running), attach instead of spawning.
-5. `spawnBackend`: `<venv>/python -m uvicorn main:app --host 127.0.0.1 --port N --timeout-graceful-shutdown 5`
+5. `spawnBackend`: `<venv>/python -m uvicorn main:app --host 127.0.0.1 --port N --log-level warning --timeout-graceful-shutdown 5`
    with the contract env (`desktop/src/main/env.ts`), stdin kept as a pipe,
    stdout/stderr to `logs/backend.stdout.log`, detached on POSIX. The
    graceful-shutdown bound is load-bearing: uvicorn otherwise waits forever
@@ -96,7 +96,8 @@ shell reads it directly (`stage/runtime/<os>-<arch>/`), in a packaged app
 8. `checkForUpdatesAndNotify`.
 
 Quit: `POST /api/desktop/shutdown` with the per-launch token, close stdin,
-wait up to 30 s, then `taskkill /T` (Windows) or SIGKILL the process group.
+wait up to 75 s (longer than the backend's own 65 s deadline; host contract
+§5), then `taskkill /T` (Windows) or SIGKILL the process group.
 On the next launch a still-alive pid in `backend.pid` is tree-killed first.
 If the backend crashes it is restarted with 1 s / 3 s / 9 s backoff, at most
 three times in five minutes, then the setup window shows the error.
@@ -187,8 +188,12 @@ bundled Python. Then remove the macOS notify-only branch in
   differs from the tag (the build ships the committed desktop version, not
   the tag's), stages, runs typecheck + unit + invariant tests, then
   `electron-builder --publish always` into that draft; a `finalize` job
-  undrafts it once all legs pass. Separate from `release.yml` so the
-  registry publish (`bun publish`) is never blocked and its locked strings are untouched.
+  undrafts it once all legs pass. A manual dispatch has no tag, so there is
+  no `prepare` draft and no `finalize`: the legs upload (into a draft
+  electron-builder creates itself) only when its `publish` input is ticked,
+  and otherwise build with `--publish never` and keep the artifacts.
+  Separate from `release.yml` so the registry publish (`bun publish`) is
+  never blocked and its locked strings are untouched.
   The step-by-step is in [ci_cd.md -> Cutting a release](./ci_cd.md#cutting-a-release).
 - `desktop-ci.yml` on PRs touching `desktop/**` or the backend contract
   files: typecheck, unit, invariants, build, and the Playwright Electron

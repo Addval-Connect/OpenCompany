@@ -14,13 +14,48 @@ Detailed architecture reference for how AI Agent (`aiAgent`) and Chat Agent (`ch
 2. [Agent Loop](#agent-loop)
 3. [Skill Injection Pipeline](#skill-injection-pipeline)
 4. [Tool Building Pipeline](#tool-building-pipeline)
-5. [Tool Execution Flow](#tool-execution-flow)
+5. [Tool Execution and Dispatch](./tool_building_pipeline.md)
 6. [Context and Memory Integration](#context-and-memory-integration)
 7. [execute_agent vs execute_chat_agent](#execute_agent-vs-execute_chat_agent)
 
 ---
 
 ## End-to-End Data Flow
+
+### Browser AI Agent
+
+`browser_agent` inherits `SpecializedAgentBase`, standard parameters, provider
+selection/model inheritance, handles and the existing output envelope. It uses
+the provider-neutral reasoning loop and its saved Browser tool; it does not
+invoke Browser Use's Agent SDK. The private creation bundle is defined once
+in `services/browser_agent_recipe.py` and reused by canvas creation, Agent
+Builder and new employee Browser capabilities.
+
+Employee chat delegates through the ordinary delegation schema. Direct tasks
+are server-admitted Workspace invocations using the saved agent/tool binding:
+`WorkspaceTaskControllerWorkflow → NodeInvocationWorkflow → AgentWorkflow`.
+Their submitted prompt is applied after saved/template preparation, preserving
+the saved Browser system role. Their conversation is isolated from employee
+chat and deployed Context. A versioned native Workspace continuation permits
+generation-zero Continue-As-New without enrolling direct tasks in deployment
+Start/Stop/Resume. Cancel and Reset wait for owner cleanup; prepared tools,
+policy and routing remain frozen across continuation.
+
+A stable task token holds the Browser profile during reasoning, tool calls
+and human assistance. Delegated agents have separate tokens. Both in-process
+tool adapters forward trusted Browser bindings and task identity. The saved
+policy is tightened by trusted `interaction=read_only` restrictions, including
+Ask first; model arguments cannot relax it. The viewer remains attached to
+the saved Browser tool, preserving takeover and the binary frame protocol.
+
+1Password values are resolved inside the calling model Activity or browser
+owner, never during catalogue reads or into Temporal inputs. Configured login
+uses private CDP only while browser-use is suspended and page/capture channels
+are gated; the model receives an opaque binding ID and safe status. Multi-step
+login, MFA and passkeys use human assistance. See
+[1Password credentials](./onepassword_credentials.md),
+[Browser workspace](./browser_workspace.md) and
+[Temporal control](./temporal-workflow-control.md).
 
 ```
 User clicks "Run" on AI Agent
@@ -90,7 +125,7 @@ Result broadcast via WebSocket
 | `server/services/plugin/edge_walker.py` | `collect_agent_connections()` (the renamed `_collect_agent_connections`), `format_task_context()` |
 | `server/nodes/agent/_inline.py` | `prepare_agent_call()` — task-context injection + auto-prompt fallback + teammate collection; calls `collect_agent_connections` then `ai_service.execute_[chat_]agent` |
 | `server/nodes/agent/<plugin>/__init__.py` | Per-plugin `execute_op()` (Wave 11 replaced `handle_ai_agent` / `handle_chat_agent`) |
-| `server/services/ai.py` | `AIService` facade -- skill injection (`_build_skill_system_prompt`, line 273), tool building, context/memory and execution-boundary handling |
+| `server/services/ai.py` | `AIService` facade -- skill injection (`_build_skill_system_prompt`), tool building, context/memory and execution-boundary handling |
 | `server/services/skill_prompt.py` | `build_skill_system_prompt` -- the only skill-to-system-message path (personality bodies only) |
 | `server/services/agent_runtime.py` | `AgentToolSpec`, `run_native_llm_step`, and `run_native_agent_loop` |
 | `server/services/llm/` | `ChatUnifier`, provider-neutral messages/tool definitions, and native provider SDK adapters |
@@ -123,6 +158,8 @@ is involved — each iteration:
    dispatch it through `tool_executor`, and append a native
    `Message(role="tool", tool_call_id=...)`. Malformed arguments become a
    deterministic tool error containing `raw_arguments` rather than crashing.
+   An external tool's result text is cut to `tool_output_limit` characters
+   before it is appended (see Signature below).
    Results containing workflow `operations` are passed to
    `rebind_from_operations`; returned `AgentToolSpec` values extend
    `current_tools` for the next request.
@@ -155,16 +192,24 @@ async def run_native_agent_loop(
         Callable[[int, LLMResponse, List[Message]], Awaitable[Optional[List[Message]]]]
     ] = None,
     conversation_saver: Optional[Callable[[List[Message]], Awaitable[None]]] = None,
+    tool_output_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Returns messages, iteration, thinking, truncation, usage, and response."""
 ```
 
-(`services/agent_runtime.py:190-216`.) The three trailing keywords are the
-RFC-0002 hooks: `context_management` is forwarded to the provider step (the
-Anthropic compaction edit), `compaction_pause_callback` lets the caller swap
-the message list after a provider-side compaction pause, and
-`conversation_saver` persists the full transcript after every turn through
-the plain conversation store (see [agent_context_flow.md](agent_context_flow.md)).
+(`run_native_agent_loop` in `services/agent_runtime.py`.) `context_management`,
+`compaction_pause_callback` and `conversation_saver` are the RFC-0002 hooks:
+`context_management` is forwarded to the provider step (the Anthropic
+compaction edit), `compaction_pause_callback` lets the caller swap the
+message list after a provider-side compaction pause, and `conversation_saver`
+persists the full transcript after every turn through the plain conversation
+store (see [agent_context_flow.md](agent_context_flow.md)).
+`tool_output_limit` caps, in characters, what one external tool result adds
+to `messages` (`bound_tool_output` in `services/tool_output.py`; `None` or `0`
+keeps results whole). Delegated-agent answers, skill loads and Task Manager
+results are exempt (`tool_output_is_capped`). `execute_agent` /
+`execute_chat_agent` pass the resolved Tool Result Limit; see
+[agent_context_flow.md → Transcript size](agent_context_flow.md).
 
 There is no mutable model binding step. Each native LLM request derives its
 provider-facing declarations from the current `AgentToolSpec.definition`
@@ -177,6 +222,7 @@ next iteration.
 | Trigger | What happens |
 |---|---|
 | LLM emits no `tool_calls` | Return with `truncated: False`. This is the normal exit. |
+| `finish_reason == "compaction"` with no `tool_calls` | **Not** an exit. Anthropic's durability pause returns only a compaction block; it has already been saved, so the loop calls `compaction_pause_callback` (when given, its non-`None` return replaces `messages`) and continues to the next iteration. |
 | `tool_executor` is `None` but LLM emits tool calls | WARN + return (treat as final). |
 | `iteration` reaches `max_iterations` | Append a synthetic native assistant `Message` + return with `truncated: True`. |
 
@@ -199,20 +245,28 @@ Result Limit. See [memory_compaction.md](memory_compaction.md) and
 
 ### Hot rebind after canvas mutation
 
-When `agentBuilder` (the only canvas-mutating tool today) spawns a new node mid-run via `add_tool` / `add_skill` / `add_subagent`, the operation returns a `workflow_ops` batch in its result's `operations` field. The loop detects the field, calls `rebind_from_operations(ops)`, and extends the bound tool surface so the LLM can invoke the new tool in the very next iteration — no Run-stop-Run cycle.
+When `agentBuilder` (the only canvas-mutating tool today) adds a tool (`add_tool`) or a teammate (`add_subagent`) mid-run, it saves the change (`apply_graph_additions`) and returns the saved `workflow_ops` batch in its result's `operations` field. The loop detects the field, calls `rebind_from_operations(ops)`, and extends the bound tool surface so the LLM can invoke the new tool in the very next iteration — no Run-stop-Run cycle. A deployed run starts from the generation's frozen snapshot, so a tool saved in an earlier run can be missing from a later one; `add_tool` then returns that saved node alone (a bind-only batch, nothing saved) for the loop to bind. `add_skill` returns no operations: a skill is not bound as a tool, and a merge into an existing Skills node applies from the next run.
 
 Closure responsibilities:
 
 - **`_rebind_from_operations(ops) -> List[AgentToolSpec]`** (in
   `execute_agent` / `execute_chat_agent`): filter ops for `add_node` with the
   plugin class's `component_kind == "tool"` OR `usable_as_tool=True`
-  (excluding `component_kind == "model"`), synthesize a `tool_info` dict,
+  (excluding `component_kind == "model"`, and the Skills node, whose
+  `uiHints.isMasterSkillEditor` marks it: tool-kind, but it feeds
+  `input-skill`), skip a node already bound, synthesize a `tool_info` dict,
   call `self._build_tool_from_node(tool_info)`, and return the new specs. Tool
   configs get folded into the captured `tool_configs` dict so
   `tool_executor` can dispatch the new call.
 - The closure is gated on the user toggle: `UserSettings.auto_rebind_tools_after_canvas_change` (default `True`). When off, the LLM is told "Available on your next turn" in the operation summary and the closure isn't wired.
 
-For the F4.B Temporal path, the in-process closure is replaced by the `agent.refresh_tools` activity; see [TEMPORAL_ARCHITECTURE.md](TEMPORAL_ARCHITECTURE.md).
+For the F4.B Temporal path, the closure is replaced by `agent.refresh_tools`.
+The `agent-node-binding-refresh-v2` path passes bound node IDs, the run's graph,
+and parameter snapshot, then filters repeated node bindings. A distinct node
+that would introduce a conflicting provider-visible tool name is rejected
+with conflict details. Older histories preserve their recorded refresh path.
+Version 1 preparation/refresh also records plugin Activity policies for each
+bound tool. See [TEMPORAL_ARCHITECTURE.md](TEMPORAL_ARCHITECTURE.md).
 
 ### Where it's called
 
@@ -378,14 +432,14 @@ metadata:
 ### 5. System Message Injection
 
 The only path from `skill_data` to the system message is
-`_build_skill_system_prompt` (`server/services/ai.py:273`), a thin wrapper
-that imports and calls `services/skill_prompt.py::build_skill_system_prompt`.
-It is called from `execute_agent` (`ai.py:917`), `execute_chat_agent`
-(`ai.py:1633`), the RLM service (`services/rlm/service.py:74-77`) and the
-Temporal `agent.prepare_payload` activity (`agent_activities.py:971-973`):
+`_build_skill_system_prompt` (module-level in `server/services/ai.py`), a thin
+wrapper that imports and calls `services/skill_prompt.py::build_skill_system_prompt`.
+It is called from `execute_agent`, `execute_chat_agent`, the RLM service
+(`services/rlm/service.py`) and the Temporal `agent.prepare_payload` activity
+(`services/temporal/agent_activities.py`):
 
 ```python
-# server/services/ai.py:273
+# server/services/ai.py
 def _build_skill_system_prompt(skill_data, log_prefix="[Agent]") -> tuple:
     from services.skill_prompt import build_skill_system_prompt
     return build_skill_system_prompt(skill_data, log_prefix)
@@ -463,15 +517,18 @@ full transcript, and nothing else about the request changes because a Context
 node is attached.
 
 `simpleMemory` ("Memory") is **not** conversation history: it is a `ToolNode`
-on `input-tools` that the agent calls explicitly (`remember` / `recall` /
-`update` / `forget`). The `input-memory` handle is retired — no agent declares
+on `input-tools` that the agent calls explicitly (its `operation` argument
+takes the `MemoryOperation` values in `server/nodes/tool/simple_memory/`:
+`remember` / `recall` / `list` / `get` / `update` / `forget`). The
+`input-memory` handle is retired — no agent declares
 it; `normalize_workflow_graph` rewrites legacy `simpleMemory -> input-memory`
 edges into a Context node plus an ordinary tool edge. The legacy markdown
 memory path (`memory_data`, `parse_memory_markdown`,
 `append_to_memory_markdown`, `trim_markdown_window`, the vector store) is
 reached only for `input-memory` graphs: `execute_agent` passes the tuple's
 first element as `context_data` to `_prepare_context` and sets `memory_data =
-None` whenever a Context runtime resolves (`ai.py:969-980`). Token tracking
+None` whenever a Context runtime resolves (the `context_runtime is not None`
+branch right after the `_prepare_context` call). Token tracking
 and compaction thresholds are in [memory_compaction.md](memory_compaction.md).
 
 ---
@@ -523,7 +580,7 @@ authoritative agent list, or read `AI_AGENT_TYPES` in
 [`server/constants.py`](../server/constants.py) — do not hand-maintain a
 count here. The frozenset currently spans: the two
 base agents (`aiAgent`, `chatAgent`), the specialized agents
-(`android_agent`, `coding_agent`, `web_agent`, `task_agent`, `social_agent`,
+(`android_agent`, `browser_agent`, `coding_agent`, `web_agent`, `task_agent`, `social_agent`,
 `travel_agent`, `tool_agent`, `productivity_agent`, `payments_agent`,
 `consumer_agent`, `autonomous_agent`), the 2 team leads
 (`orchestrator_agent`, `ai_employee`), the 2 CLI/REPL agents that bypass
@@ -538,10 +595,17 @@ Two settings flags route agent execution through different Temporal paths (see [
 
 | Flag | Off | On (default) |
 |---|---|---|
-| `TEMPORAL_PER_TYPE_DISPATCH` | Every node routes through the legacy `execute_node_activity` single dispatcher (WS round-trip to the FastAPI handler). | Each node routes through its per-type activity `node.{type}.v{version}` registered via `BaseNode.as_activity()`. Per-plugin retry / timeout / heartbeat configs apply. |
-| `TEMPORAL_AGENT_WORKFLOW_ENABLED` | All specialized + team leads + base agents (`aiAgent` / `chatAgent`) run inside `execute_node_activity` using the in-process native loop. | The migrating agent types become Temporal **child workflows** (`AgentWorkflow`). LLM steps + tool calls become activities; `agent.prepare_payload` resolves the DB-backed payload as the workflow's first step; `agent.refresh_tools` refreshes the native tool surface after canvas mutations. `rlm_agent` / `claude_code_agent` stay on the F4.A per-type activity path (externalised session state). |
+| `TEMPORAL_PER_TYPE_DISPATCH` | Ordinary nodes use the legacy `execute_node_activity` dispatcher (WS round-trip); enabled agent child-Workflow routing still takes precedence for supported types. | Ordinary nodes use per-type `node.{type}.v{version}` Activities registered by `BaseNode.as_activity()`. Graph dispatch honors plugin retry/queue; Workspace-task patches and version 1 agent-tool dispatch also use plugin timeout/heartbeat. |
+| `TEMPORAL_AGENT_WORKFLOW_ENABLED` | Supported agents run the in-process loop inside a node Activity: per-type when per-type dispatch is on, otherwise the legacy single dispatcher. | Types in `AGENT_WORKFLOW_TYPES` become **child Workflows** (`AgentWorkflow`). LLM steps and ordinary tools are Activities; preparation resolves configuration and explicit refresh binds canvas changes. `rlm_agent`, `claude_code_agent`, and `vertex_managed_agent` remain whole-node Activities. |
 
-Both flags default to `true` in `.env.template`.
+Both flags default to `true` in `.env.template`; the starter freezes their
+values and the worker-pool routing flag into each execution's input.
+
+Distributed Browser bindings additionally freeze an owner-specific queue.
+That queue applies to Browser Activities even when worker pools are disabled;
+generic orchestration workers cannot execute them. Direct `browser_agent`
+Workspace tasks use the versioned native child path described above, while
+older Workspace submissions retain their recorded single-Activity path.
 
 `AgentWorkflow` executions carry messages in the single `MessageWire` shape;
 there is one engine and one wire standard, with no `llm_engine` or
@@ -550,10 +614,44 @@ there is one engine and one wire standard, with no `llm_engine` or
 after a provider request starts, and changing the environment does not alter an
 execution whose `agent.prepare_payload` result is already in history.
 
-**Team leads** (`orchestrator_agent`, `ai_employee`) run the same
-`execute_chat_agent` path as the other specialized agents but add an
-`input-teammates` handle. Connected agents become `delegate_to_<type>` tools
-automatically via `collect_teammate_connections()` (in
+### Version 1 cooperative Stop and Resume
+
+New generation manifests enable `execution_control_version=1`, separately
+from the dispatch flags. Workflow gates close before model requests, tools,
+compaction, explicit binding refresh, polling fetches, and child starts. Stop
+drains already-admitted parallel work and its normal result bookkeeping;
+unstarted actions wait. If a recorded response requested A and B, stopping
+during A retains A's result and leaves B pending. Resume continues with B,
+preserving the current model response and transcript.
+
+The controller tracks graph/cron/job roots and detached delegation runners
+that can outlive their parent. Attached agent descendants are discovered by
+native execution descriptions after their child-start acknowledgement fence.
+Completed Updates acknowledge admission closure and drain; Queries report
+state. Resume holds producers while descendants/roots are released, then
+releases controller, local, and schedule producers. Revision and chain checks
+prevent stale intent or reused Workflow IDs from controlling another execution.
+
+At clean continue-as-new boundaries, version 1 carries prepared configuration,
+resolved tools and plugin timeout/retry/heartbeat/queue declarations, transcript,
+thinking, iteration, usage, execution identity, and control state. A stopped
+agent parks before rollover. The complete encoded next input is checked against
+1,900,000 bytes; an oversized continuation raises `AgentContinuationTooLarge`
+instead of returning to the opening prompt. Old generations retain their
+legacy command paths and capacity fallback for replay compatibility.
+
+Unlimited transient LLM retries can keep a Stop in `pausing`. A tool's retry
+and idempotency contract still governs effects lost before recorded completion.
+Opaque CLI/REPL/managed-agent nodes stop after the whole Activity settles;
+heartbeats do not checkpoint their internal sessions. Direct Workspace tasks
+and separately approved sends retain independent ownership. See
+[Temporal workflow control](temporal-workflow-control.md) for lifecycle/API
+details and [Temporal architecture](TEMPORAL_ARCHITECTURE.md#cooperative-generation-stop-and-resume)
+for accounting, topology, and continuation.
+
+**Team leads** (`orchestrator_agent`, `ai_employee`) share the supported agent
+runtime and add an `input-teammates` handle. Connected agents become authorized
+Task Manager assignees via `collect_teammate_connections()` (in
 `server/services/plugin/edge_walker.py`, called from
 `server/nodes/agent/_inline.py:prepare_agent_call`). See [agent_teams.md](agent_teams.md).
 
@@ -692,7 +790,7 @@ Handle layouts are declared in `server/nodes/agent/_handles.py` (local to `nodes
 
 AI Agents delegate to other agents wired to their `input-tools` handle, enabling hierarchical agent trees. There are two execution paths depending on whether the parent runs under Temporal F4.B:
 
-- **F4.B (default, `TEMPORAL_AGENT_WORKFLOW_ENABLED=true`)**: the parent `AgentWorkflow` spawns the child as a **child `AgentWorkflow`** via `workflow.execute_child_workflow` when the child type is in `AGENT_WORKFLOW_TYPES`. The parent's `node_id` rides in `child_context["parent_node_id"]` so the child's `_emit_phase` mirrors progress onto the parent's canvas badge. The LLM's `{task, context}` args travel as `child_context["invocation"]`, applied AFTER config resolution in `prepare_agent_payload` (so stored node parameters never override the delegated task; empty-task calls are rejected at the boundary without spawning). Deterministic child id `f"{parent_workflow_id}-delegate-{child_node_id}-{iteration}"`. The parent waits for the child result synchronously through the child-workflow handle.
+- **F4.B (default, `TEMPORAL_AGENT_WORKFLOW_ENABLED=true`)**: direct non-team delegation starts attached `AgentWorkflow` children when the target type is supported. Parent identity mirrors progress and per-invocation `{task, context}` wins over saved configuration. The deterministic child ID includes parent Workflow ID, child node ID, iteration, and call index. Team leads use Task Manager instead: assignment persists, a detached `DelegatedTaskWorkflow` owns the permit and attached child, and the lead receives `queued` without waiting. Version 1 detached runners independently enroll with generation control; attached children are controlled through the native parent tree.
 - **Legacy / F4.A-only**: fire-and-forget via `asyncio.create_task`. Still the path for `rlm_agent` / `claude_code_agent` (excluded from `AGENT_WORKFLOW_TYPES`) and any deployment with `TEMPORAL_AGENT_WORKFLOW_ENABLED=false`. The `delegate_to_*` tool spawns the child as a background task and returns immediately with `{"status": "delegated", "task_id": "..."}`; the parent keeps working while the child executes independently and broadcasts its own status (executing / success / error).
 
 Design decisions (legacy path): **memory isolation** (child uses its own connected memory, not the parent's), **error isolation** (child errors are logged + broadcast, never propagated to the parent), **task tracking** (background tasks live in `_delegated_tasks`, cleaned up on completion).

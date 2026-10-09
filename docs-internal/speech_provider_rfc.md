@@ -24,11 +24,11 @@ big**. That constraint, measured rather than assumed, drives nearly every decisi
 |---|---|---|
 | Temporal blob **error** — activity result, activity **input**, workflow result | **2,097,152 B** | server default; no custom `DataConverter` or `PayloadCodec` anywhere in the repo |
 | Temporal blob **warning** | 524,288 B → `PayloadSizeWarning` | not covered by `pyproject.toml` `filterwarnings`, so it surfaces |
-| Retries burned before the failure is reported | **3** | `_PayloadSizeError` absent from `NON_RETRYABLE_ERROR_TYPES` ([`_retry_policies.py:51`](../server/services/temporal/_retry_policies.py)) |
-| Legacy `execute_node_activity` internal WS | 4 MiB inbound (aiohttp default, `max_msg_size` unset) | [`activities.py:243`](../server/services/temporal/activities.py) |
-| `node_outputs.data` | no cap; written **3×** per store (`output_main`/`output_top`/`output_0`) | [`activities.py:488`](../server/services/temporal/activities.py) |
-| WS broadcast | no size guard; retained in `_status` **forever** and replayed to every newly connecting client | [`status_broadcaster.py:90,683`](../server/services/status_broadcaster.py) |
-| In-memory `_outputs` | never evicted except by `clear_all_outputs` | [`workflow.py:74,766`](../server/services/workflow.py) |
+| Retries burned before the failure is reported | **3** | `_PayloadSizeError` absent from `NON_RETRYABLE_ERROR_TYPES` in [`_retry_policies.py`](../server/services/temporal/_retry_policies.py) |
+| Legacy `execute_node_activity` internal WS | 4 MiB inbound (aiohttp default, `max_msg_size` unset) | the `ws_connect` call in `NodeExecutionActivities.execute_node_activity` ([`activities.py`](../server/services/temporal/activities.py)) |
+| `node_outputs.data` | no cap; written **3×** per store (`output_main`/`output_top`/`output_0`) | `store_node_output_activity` in [`activities.py`](../server/services/temporal/activities.py) |
+| WS broadcast | no size guard; retained in `_status` **forever** and replayed to every newly connecting client. Since this RFC, `update_node_output` caches an output larger than `_CACHED_OUTPUT_MAX_BYTES` as a stub (`_elide_for_cache`); `update_node_status` still caches its `data` as given | `StatusBroadcaster._status`, `update_node_status` and `update_node_output` in [`status_broadcaster.py`](../server/services/status_broadcaster.py) |
+| In-memory `_outputs` | never evicted except by `clear_all_outputs` | `WorkflowService._outputs` and `clear_all_outputs` in [`workflow.py`](../server/services/workflow.py) |
 
 ### What actually happens to a 12 MB base64 TTS result
 
@@ -74,7 +74,7 @@ method that raises — invisible to the node layer, so the provider would appear
 fail at runtime.
 
 With `TtsProvider` and `SttProvider` registries, **direction capability is registry membership**:
-the TTS node's provider enum is literally `tts_registry.all_providers()`. Zero extra machinery.
+the TTS node's provider enum is literally `tts_providers()` (`server/nodes/speech/_registry.py`). Zero extra machinery.
 
 ### D3 — Capability-driven common params + a `provider_options` escape hatch
 
@@ -109,7 +109,7 @@ builds a dict over **all** declared credentials and raises only for undeclared i
 this today.
 
 Consequence: the node must use imperative `@Operation` bodies — the declarative `routing=` path
-hardcodes `self.credentials[0]` ([`base.py:769`](../server/services/plugin/base.py)).
+hardcodes `self.credentials[0]` ([`BaseNode._run_operation`](../server/services/plugin/base.py)).
 
 ### D6 — Extract the generic registry rather than copy it
 

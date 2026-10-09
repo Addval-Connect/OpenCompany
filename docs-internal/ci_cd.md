@@ -37,7 +37,7 @@ The repo currently ships **five workflows** plus one composite action. Code scan
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
 | CI | `.github/workflows/ci.yml` | push/PR → main | Delegates to predeploy.yml |
-| Predeploy | `.github/workflows/predeploy.yml` | `workflow_call` | build/lint + backend tests + CLI tests + cross-OS build/start smoke |
+| Predeploy | `.github/workflows/predeploy.yml` | `workflow_call` | build/lint + JS dependency audit + backend tests + CLI tests + cross-OS build/start smoke |
 | Release | `.github/workflows/release.yml` | `v*.*.*` tag, `workflow_dispatch` | predeploy gate → publish (npm + GitHub Packages) |
 | Desktop CI | `.github/workflows/desktop-ci.yml` | PR touching `desktop/**` or the backend host-contract files; push to main touching `desktop/**` | typecheck + unit + staged-tree invariants + `electron-vite build` + Playwright Electron smoke on ubuntu-22.04 (xvfb) and windows-latest |
 | Desktop release | `.github/workflows/desktop-release.yml` | `v*.*.*` tag, `workflow_dispatch` | `prepare` drafts the GitHub Release from the annotated tag's message (first line = title, rest = notes); a 3-runner matrix (windows-latest x64, macos-14 arm64+x64, ubuntu-22.04 x64) checks the synced version against the tag, builds installers with electron-builder and uploads into that one **draft**; `finalize` undrafts once every leg is green. Artifacts-only on dispatch unless `publish` is ticked |
@@ -88,10 +88,10 @@ After tool install the composite installs the supervisor CLI editably (`uv pip i
 
 Reusable `workflow_call` workflow with four independent jobs (no plan/change-detection gate, no aggregator — every job runs on every call):
 
-- `build-and-lint` — `bun install --frozen-lockfile` + `bun run build`, then client lint (`bun run --filter react-flow-client lint`), TypeScript check (`... typecheck`), and frontend tests (`... test`, vitest). Runs on `ubuntu-latest`.
-- `backend-tests` — `uv lock --check` (the committed `server/uv.lock` must match `pyproject.toml`; the desktop app installs from it with `--frozen`), then `uv sync` + `uv run pytest tests/ -v` in `server/`. Whole suite, unsharded. Runs on `ubuntu-latest`.
+- `build-and-lint` — `bun install --frozen-lockfile` + `bun run build`, then client lint (`bun run --filter react-flow-client lint`), TypeScript check (`... typecheck`), frontend tests (`... test`, vitest), and the JS dependency audit (`bun run audit:deps` at the root and in `desktop/`; see "Dependency update policy" below). Runs on `ubuntu-latest`.
+- `backend-tests` — `uv lock --check` (the committed `server/uv.lock` must match `pyproject.toml`; the desktop app installs from it with `--frozen`), a pinned `pip-audit` check of the locked Python dependencies including all extras, then `uv sync` + `uv run pytest tests/ -v` in `server/`. Whole suite, unsharded. Runs on `ubuntu-latest`.
 - `cli-tests` — `uv pip install --system pytest pytest-asyncio pyyaml` + `python -m pytest cli/tests/ -v`. Runs on `ubuntu-latest`.
-- `test-build-start` — cross-OS matrix (`ubuntu-latest`, `macos-latest`, `windows-latest`, `fail-fast: false`). Runs `bun run build`, then `bun run tsc --version` (proves the per-platform TypeScript 7 Go binary delivered via `optionalDependencies` resolves on every OS — the type-check gate itself runs on ubuntu only; `bun run`, never `bunx`, so it resolves strictly from the root `node_modules/.bin`), then a start smoke test. On Unix it backgrounds `bun run start`, reads `PYTHON_BACKEND_PORT` out of `.env.template` and polls `http://localhost:${APP_PORT}/health` for up to ~30 s, then `bun run stop`. On Windows it starts the supervisor as a background job, waits 15 s, and fails if the job already exited.
+- `test-build-start` — cross-OS matrix (`ubuntu-latest`, `macos-latest`, `windows-latest`, `fail-fast: false`). Runs `bun run build`, then `bun run tsc --version` (proves the per-platform TypeScript 7 Go binary delivered via `optionalDependencies` resolves on every OS — the type-check gate itself runs on ubuntu only; `bun run`, never `bunx`, so it resolves strictly from the root `node_modules/.bin`), then a start smoke test. On Unix it backgrounds `bun run start`, reads `PYTHON_BACKEND_PORT` out of `.env.template` and polls `http://localhost:${APP_PORT}/health` (`curl -sf -m 5`, every 2 s) for up to 90 s, giving up early if the start process exits. It always runs `bun run stop` afterwards, then fails unless `/health` answered. On Windows it starts the supervisor as a background job, waits 15 s, and fails if the job already exited.
 
 ---
 
@@ -125,9 +125,10 @@ publish-npm                    publish-github-packages
       npmjs, bun publish --access public   npm.pkg.github.com, bun publish
 ```
 
-- Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → `bun install --frozen-lockfile` → `bun run build` → `python -m cli version sync`. There is no `setup-node` step and no npm CLI anywhere in the release: bun packs, authenticates and publishes.
+- Both publish jobs `needs: predeploy`, run on `ubuntu-latest`, and share the same prefix: immutable `actions/checkout` with `persist-credentials: false` → composite setup → `bun install --frozen-lockfile` → `bun run build` → `python -m cli version sync`. Neither job has a `setup-node` step of its own, but the composite setup installs Node (see the table above), which bun uses to run vite during `bun run build`. There is no npm CLI anywhere in the release: bun packs, authenticates and publishes.
 - `publish-npm` — writes `//registry.npmjs.org/:_authToken=<NPM_TOKEN>` to `~/.npmrc`, validates it with `bun pm whoami`, then publishes the canonical public npmjs package `@zeenie-ai/opencompany` via `bun publish --access public`. npm provenance attestation was an npm-CLI feature and is gone with it.
 - `publish-github-packages` — writes `@zeenie-ai:registry=https://npm.pkg.github.com/` and the `//npm.pkg.github.com/:_authToken=<GITHUB_TOKEN>` line to `~/.npmrc`, then a plain `bun publish`. bun 1.4 ignores `publishConfig.registry`, and it keeps an `.npmrc` token only for the registry that same file points at, so the route and the token must sit together; the v0.2.0 mirror publish went to npmjs with the GitHub token and failed with `missing authentication` before this was known ([errors.md #24](./errors.md#24-github-packages-publish-fails-with-missing-authentication-although-the-job-wrote-a-token-for-npmpkggithubcom)).
+- `bun publish` runs the root `prepublishOnly` script in both jobs, so `python -m cli version sync` runs a second time inside the publish step (a no-op after the explicit sync step), followed by a `bun -e` check that `package.json` still has `bin` and `version`. The root `publishConfig` still carries `registry: https://registry.npmjs.org` beside `access: public` (`test_root_package_uses_public_zeenie_scope` locks both), but bun ignores that `registry` key: each job's `~/.npmrc` alone decides where it publishes.
 
 Both registries use `@zeenie-ai/opencompany`, matching the npm and GitHub
 organization owned by the project.
@@ -197,12 +198,12 @@ folder — both the folder and the workflow are gone.
 | File | Purpose |
 |------|---------|
 | `.github/workflows/ci.yml` | CI entry point (delegates to predeploy.yml) |
-| `.github/workflows/predeploy.yml` | Reusable validation (build/lint + backend tests + CLI tests + OS matrix build/start) |
+| `.github/workflows/predeploy.yml` | Reusable validation (build/lint + JS dependency audit + backend tests + CLI tests + OS matrix build/start) |
 | `.github/workflows/release.yml` | Tag / manual release: predeploy gate → publish npm + GitHub Packages |
 | `.github/workflows/desktop-ci.yml` | Desktop shell checks on PRs: typecheck, unit, invariants, build, Playwright smoke |
 | `.github/workflows/desktop-release.yml` | Tag-triggered desktop installers (NSIS / DMG+zip / AppImage+deb) into a draft release, then undraft. Separate from `release.yml` so npm publish is never blocked |
 | `.github/actions/setup/action.yml` | Composite: bun + Node + Python + uv + editable CLI install |
-| `.github/dependabot.yml` | **Dependabot disabled** — every entry ignores `*`, so no version or security PRs; the entries exist only to keep alerts routed to the right updater; see below |
+| `.github/dependabot.yml` | **Manual dependency updates** — scheduled PRs suppressed; automatic security-update attempts also require the repository setting to be disabled; see below |
 | `.python-version` | Toolchain pin (`3.12`) — single source of truth |
 
 ---
@@ -244,32 +245,105 @@ the alerts stayed open. Dismiss in the Security tab instead.
 
 ## Dependency update policy (Dependabot disabled)
 
-Dependabot opens **no pull requests**, neither version bumps nor security
-updates (disabled 2026-09-12). Every entry in `.github/dependabot.yml`
-carries `open-pull-requests-limit: 0` and `ignore: dependency-name: "*"`;
-the ignore rule is what also stops security-update PRs. Dependencies move
-by hand, alongside test runs:
+The policy is **no automatic pull requests**, neither version bumps nor
+security updates (since 2026-09-12). Every entry in `.github/dependabot.yml`
+carries `open-pull-requests-limit: 0` and `ignore: dependency-name: "*"`.
+This suppresses scheduled updates but does not disable GitHub's
+alert-triggered security-update attempts. Enforce the policy with the
+repository setting described below. Dependencies move by hand with tests:
 
 - JS: bump the range in the relevant `package.json` (or the top-level
   `overrides` block in the root manifest for transitive pins), `bun install`,
-  run the suites.
+  `bun run audit:deps` (at the root and in `desktop/`), run the suites.
 - pip: `uv lock --upgrade-package <name>` in `server/`, `uv sync`, run the
-  suites (`predeploy.yml` runs `uv lock --check`).
+  suites (`predeploy.yml` runs `uv lock --check` and the audit below).
 
-The file is kept rather than deleted because of how alerts are routed:
-a directory with no entry gets whatever updater Dependabot guesses, and for
-a `bun.lock` tree it guesses `npm_and_yarn`, which cannot read `bun.lock`
-and fails every run ("can't update vulnerable dependencies for projects
-without a lockfile or pinned version requirement", the desktop vitest alert
-of 2026-09-11). The four entries (`bun /`, `bun /desktop`, `pip /server`,
-`github-actions /`) keep every surface mapped to the right ecosystem so
-that never happens again.
+The Python gate exports exact pins from `uv.lock` without installing optional
+extras. `pip-audit==2.10.1` queries advisories with `--strict --disable-pip
+--no-deps`; it fails on vulnerabilities or packages it cannot audit. The export
+is temporary and must not become a second committed dependency source. To run
+the same gate locally from `server/`:
+
+```sh
+uv export --locked --all-extras --no-hashes --no-emit-project --output-file /tmp/opencompany-audit.txt
+uvx --from pip-audit==2.10.1 pip-audit --strict --disable-pip --no-deps -r /tmp/opencompany-audit.txt
+```
+
+On Windows, use a file under `$env:TEMP` in both commands. Advisory lookup
+requires network access; Python markers select the current platform, so the
+Ubuntu CI audit also covers Linux-only dependencies.
+
+The five entries (`bun /`, `bun /desktop`, `pip /server`, `uv /server`,
+`github-actions /`) declare the intended updaters; they do not guarantee
+the ecosystem chosen for alert-triggered jobs. The
+[2026-10-06 Sharp update attempt](https://github.com/zeenie-ai/OpenCompany/actions/runs/37474349729)
+selected `npm_and_yarn` for `/desktop`, with no ignore conditions, despite
+the existing Bun entry. It failed because that updater cannot modify
+`bun.lock`. Do not add a second package-manager lockfile to work around it.
+`server/` retains both entries because its uv updater also needs the
+manual-update policy; ignoring only pip previously allowed uv PRs.
 
 Alerts themselves still appear in the repository's Security tab; they are
-useful and cost nothing. Dependabot's own security-update attempts are a
-repository setting (Settings > Code security > Dependabot), not something
-the config file controls; turn them off there if the "Dependabot Updates"
-job should stop running entirely.
+useful and cost nothing. Those for `server/` come from `uv.lock`, which
+Dependabot's "uv in /server" graph job resubmits whenever a push changes
+it, so they close as fixed once the lock carries the fix.
+`server/requirements.txt` is no longer committed; pip users export it on
+demand (`SETUP.md`). As a tracked copy of the lock's pins it received every
+Python alert twice, and GitHub matched it against a snapshot that only
+Dependabot's pip graph job for the repository root refreshes, so those
+copies never closed (the last 18 were dismissed on 2026-10-03). GitHub keeps
+that snapshot until the job runs again (it last ran on 2026-09-12, for the
+v0.2.0 release commit, which changed the root `pyproject.toml`); until then,
+dismiss any alert filed against `server/requirements.txt` as inaccurate.
+To stop automatic security-update attempts, a repository administrator
+must disable **Dependabot security updates** under **Settings > Code
+security > Dependabot**. Keep **Dependabot alerts** and the dependency
+graph enabled. This stops automatic patch PR attempts while retaining
+vulnerability detection and the CI audit gates. The equivalent command,
+run with an administrator's GitHub CLI authentication, is:
+
+```sh
+gh api --method DELETE repos/zeenie-ai/OpenCompany/automated-security-fixes
+```
+
+This endpoint does not disable alerts. A YAML ignore rule cannot replace
+this setting, and updating dependencies does not change historical failed
+Actions runs. Fix current alerts, push the tested lockfiles, and verify
+the latest checks instead.
+
+GitHub's dependency graph does not read `bun.lock`; it sees only the ranges
+in each `package.json`, so no Dependabot alert ever covers a resolved JS
+version. `bun run audit:deps` is the check: `predeploy.yml` runs it at the
+root and in `desktop/` (`bun audit` reads the lockfile and needs no install).
+The root audit has no exclusions. The desktop audit fails on any advisory
+except the explicit exception below. An advisory
+is ignored only when it has no patched release and cannot be reached from
+untrusted input here:
+
+| Advisory | Package | Reached through | Why it is ignored |
+|---|---|---|---|
+| [GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) | http-cache-semantics 4.2.0 | `desktop/`: Electron Builder → app-builder-lib → @electron/get 3.1.0 → got → cacheable-request | No patched release as of 2026-10-09. Build-time artifact downloading does not share authenticated user-response caches; this chain is absent from the shipped desktop runtime dependencies. |
+
+The shadcn CLI was removed from `client/package.json` and the root lockfile on
+2026-10-09, removing `braces` and its advisory entirely. The client used one
+file from that package, its Tailwind stylesheet (`shadcn/tailwind.css`, the
+Radix-state variants the generated components use), which is now a verbatim
+copy at `client/src/styles/shadcn.css`. The existing
+`bun x shadcn@latest add <name>` development command still works with the
+checked-in generated components; it is not part of application execution.
+
+Electron itself uses `@electron/get` 5.1.0, which uses native fetch. Stable
+Electron Builder 26.17.0 (the `v26` tag; `latest` remains 26.15.3) still requires
+3.x. Do not force a 5.x transitive override: its removed GotDownloader API,
+changed download options and proxy handling are incompatible with that caller.
+The migration is in Electron Builder 27 prereleases; wait for a supported
+stable release and validate packaging before removing the exception. See the
+[downloader migration notes](https://github.com/electron/get/releases/tag/v5.0.0).
+
+When the affected package gets a patch, drop `--ignore` and pin the fix in
+`overrides`; a compatible parent upgrade that removes the package also resolves
+the advisory. A passing audit with this exception does not mean the raw desktop
+audit is clean.
 
 Re-enable updates deliberately, never by just deleting the ignore rules:
 raise `open-pull-requests-limit`, add `groups` with `patterns: ["*"]` +
@@ -282,7 +356,7 @@ raise `open-pull-requests-limit`, add `groups` with `patterns: ["*"]` +
 The following existed in earlier drafts of this doc but are **not present in the current repo**. Listed here so the intent is preserved without misrepresenting the shipped pipeline:
 
 - **`predeploy.yml` change-detection + aggregator** — a `plan` job (`dorny/paths-filter`) gating downstream jobs, a `pre-commit` job, pytest sharding by domain, and a `ci-passed` aggregator (`re-actors/alls-green`) as the single branch-protection target. Today every predeploy job runs unconditionally and there is no aggregator job.
-- **`release.yml` hardening** — `workflow_dispatch` dry-run default, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job for the registry publish (the desktop workflow's `prepare` job now drafts the GitHub Release from the tag message; `release.yml` itself still creates none). (An earlier draft also planned a blocking `pnpm audit`; bun has no audit-equivalent gate, so the top-level `overrides` block + Dependabot alerts are the vulnerability-remediation channel instead.)
+- **`release.yml` hardening** — `workflow_dispatch` dry-run default, a once-per-release `build-for-publish` artifact, `actions/attest-build-provenance` SLSA attestations, and a `create-github-release` job for the registry publish (the desktop workflow's `prepare` job now drafts the GitHub Release from the tag message; `release.yml` itself still creates none). Dependency audits already run in the reusable predeploy workflow.
 - **`publish-pypi.yml`** — reusable PyPI publish (OIDC trusted publishing, `uv build --no-sources`, `pypa/gh-action-pypi-publish`). No PyPI distribution is published today.
 - **`test-install.yml`** — cross-platform end-user install smoke (`bun add -g`, git clone, install script) across 3 OS.
 - **`rollback.yml`** — manual registry deprecate (`npm deprecate` has no bun equivalent, so this would be the one place the npm CLI reappears) + optional revert PR.

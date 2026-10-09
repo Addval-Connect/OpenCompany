@@ -75,16 +75,21 @@ StatusBroadcaster.connect(ws)
 Message loop:
   receive_json -> dispatch: MESSAGE_HANDLERS.get(type) or get_ws_handlers().get(type)
   send_json    -> pushed by broadcaster on state change
-  ping/pong    -> keepalive every 30s from frontend
+  ping/pong    -> frontend heartbeat (WS_HEARTBEAT; visible pages only)
         |
         v
 Frontend unmounts or logs out
         |
         v
-StatusBroadcaster.disconnect(ws) -> remove from _connections
+StatusBroadcaster.disconnect(ws) -> remove from _connections, then call each
+                                    register_disconnect_listener(fn) listener
 ```
 
-Auto-reconnect is handled by `WebSocketContext.tsx` through PartySocket's `ReconnectingWebSocket` (`partysocket/ws`): jittered exponential backoff (`MIN_DELAY_MS` / `MAX_DELAY_MS` / `GROW_FACTOR` in `client/src/lib/connectionConfig.ts`), message replay, and intentional-close handling (code 1000 stops the reconnect loop). A 100ms mount delay avoids React Strict Mode double-connect in dev.
+`register_disconnect_listener(fn)` (module-level, idempotent) is for services that keep per-socket state:
+`fn(websocket)` runs after the socket leaves `_connections`, synchronously, and must not block. Chat registers one so a
+closed socket's run subscriptions are dropped (`services/chat/__init__.py`).
+
+Auto-reconnect is handled by `WebSocketContext.tsx` through PartySocket's `ReconnectingWebSocket` (`partysocket/ws`), with jittered exponential backoff (`MIN_DELAY_MS` / `MAX_DELAY_MS` / `GROW_FACTOR` in `client/src/lib/connectionConfig.ts`). Requests queued while disconnected are sent after the next open; requests already in flight are rejected on close and never replayed. A remote close, even with code 1000, keeps the loop retrying; only the client's own `disposeConnection` (logout or unmount) closes with 1000 and stops it. The full client-side rules are in [frontend_architecture.md → Real-time](./frontend_architecture.md#real-time). A 100ms mount delay avoids React Strict Mode double-connect in dev.
 
 ## Handler Registry
 
@@ -120,7 +125,7 @@ Live total = `len(MESSAGE_HANDLERS) + len(get_ws_handlers())` -- the `MESSAGE_HA
 | WhatsApp | `whatsapp_status`, `whatsapp_qr`, `whatsapp_send`, `whatsapp_chat_history`, `whatsapp_newsletters`, `whatsapp_diagnostics`, ... |
 | Telegram | `telegram_connect`, `telegram_disconnect`, `telegram_status`, `telegram_send`, `telegram_get_me`, `telegram_get_chat` |
 | Workflow storage | `save_workflow`, `get_workflow`, `get_all_workflows`, `delete_workflow` |
-| Chat messages | `send_chat_message`, `get_chat_messages`, `clear_chat_messages`, `get_chat_sessions` |
+| Chat messages | `send_chat_message`, `get_chat_messages`, `chat_subscribe`, `chat_unsubscribe`, `get_chat_run`, `clear_chat_messages`, `save_chat_message` (`services/chat/handlers.py`; run events reach only subscribed sockets, see [chat_protocol.md](./chat_protocol.md)) |
 | Console / terminal | `get_console_logs`, `clear_console_logs`, `get_terminal_logs`, `clear_terminal_logs` |
 | Skills | `get_skill_content`, `save_skill_content`, `get_user_skills`, `create_user_skill`, `scan_skill_folder` |
 | Memory | `clear_memory`, `reset_skill`, `configure_compaction`, `get_compaction_stats` |
@@ -152,21 +157,32 @@ Broadcasts are sent to all connected clients without a request-response correlat
 | `compaction_completed` | Memory compaction ends | `{session_id, success, tokens_before, tokens_after}` |
 | `context.updated` | A conversation durably saved (`save_conversation` upsert), or cleared from the panel / workflow Reset — emitted from the store's save boundary via `register_conversation_listener`, so every writer (in-process loop, Temporal LLM activity, specialized-provider bridge) is covered without call-site code. Frontend invalidates `['agentContext']`. | `{specversion: "1.0", id, source: "opencompany://nodes/context", type: "com.opencompany.context.updated", subject: agent_node_id, time, data: {workflow_id, generation, agent_node_id, message_count}}` |
 | `memory.updated` | A durable Memory mutation (remember / update / forget / clear) from either writer — the agent's tool call or the panel handlers. Frontend invalidates `['memoryItems']` + `['memoryItem']`. | `{specversion: "1.0", id, source: "opencompany://nodes/simple_memory", type: "com.opencompany.memory.updated", subject: memory_node_id, time, data: {workflow_id, memory_node_id, operation}}` |
+| `chat.updated` | A chat row added or a thread cleared, sent after every insert and clear by `services/chat_thread.py` (`record_chat_message` / `clear_chat_thread`), the one write path for chat rows: `send_chat_message`, `save_chat_message`, `clear_chat_messages` and the `chatReply` node all go through it. Frontend invalidates Home's thread (`queryKeys.chatThread.bySession`) and reloads the editor's chat pane when the session is the open workflow's. | `{specversion: "1.0", id, source: "opencompany://services/chat_thread", type: "com.opencompany.chat.updated", subject: session_id, time, data: {workflow_id, session_id, role}}` (`workflow_id` null for session `"default"`, `role` null for a clear) |
+| `workflow_ops_apply` | A workflow-ops batch for open editors, sent by the core factory `services/workflow_ops.broadcast_workflow_ops`. `services/workflow_storage/mutate.apply_graph_additions` (Turn on Talk, the Agent Builder) sends every batch it saved with `persisted: true`: the ops carry the server's node and edge ids, positions and full parameter rows, and editors adopt them without saving. The Vertex managed agent's cloud-tool nodes send the same frame from `nodes/agent/vertex_managed_agent/_ops.py`, not persisted. See [workflow_ops_protocol.md](./workflow_ops_protocol.md#persisted-batches). | The event's flat data, not the envelope: `{workflow_id, caller_node_id, operations, persisted?}` (the event is built as `com.opencompany.workflow.ops.applied`) |
+| `browser_updated` | A Browser profile's control state changes (`idle` / `agent` / `awaiting_user` / `user`), from `nodes/browser/_session.py`. Identity and state only; the live viewer reads the details over `/ws/browser`. Frontend opens the Dev dock on its Browser tab when the open workflow's browser reaches `awaiting_user`. | `{specversion: "1.0", id, source: "opencompany://nodes/browser", type: "com.opencompany.browser.updated", subject: session_id, time, data: {workflow_id, node_id, session_id, state, revision}}` |
+| `browser_profiles_updated` | A Browser profile is added, renamed, deleted or gets new logins. Frontend invalidates `['browserProfiles']` (the Credentials "Web browser" panel). | `{specversion: "1.0", id, source: "opencompany://nodes/browser", type: "com.opencompany.browser.profiles.updated", subject: "profiles", time, data: {revision}}` |
+| `browser_runtime` | Chrome for Testing download progress (`BROWSER_RUNTIME=testing` only; `_install_chrome.py`). No frontend case; the viewer polls `browser_runtime_status` while it waits. | `{specversion: "1.0", id, source: "opencompany://nodes/browser", type: "com.opencompany.browser.runtime.progress", subject: component, time, data: {component, phase, percent, version, error}}` |
 
-`context.updated` and `memory.updated` call
-`get_status_broadcaster().broadcast(...)` directly rather than
+`context.updated`, `memory.updated`, `chat.updated` and `workflow_ops_apply`
+call `get_status_broadcaster().broadcast(...)` directly rather than
 `services.events.dispatch.emit`. `emit` exists to reach Temporal consumers and
 pays a Visibility `ListWorkflowExecutions` query to find them; no node type
 registers a canary consumer for `com.opencompany.context.*` /
-`com.opencompany.memory.*`, so that query can only ever match nothing — once
-per save. Same pattern as `nodes/telegram/_events.py`. See
+`com.opencompany.memory.*` / `com.opencompany.chat.updated` /
+`com.opencompany.workflow.ops.*`, so that query can only ever match nothing —
+once per save. Same pattern as `nodes/telegram/_events.py`. See
 [event_framework.md → UI-only lifecycle events](./event_framework.md).
 
-Payloads are identity + count only — no message bodies, no item content —
-because `StatusBroadcaster.broadcast()` fans out to **every** connected socket with no
+The `context.updated`, `memory.updated` and `chat.updated` payloads are
+identity only (plus a count, an operation or a role) — no message bodies, no
+item content — because
+`StatusBroadcaster.broadcast()` fans out to **every** connected socket with no
 per-workflow filtering. The panels refetch through the authorized
 `get_agent_context` / `list_memory_items` handlers, which is where ownership
-is enforced.
+is enforced; chat views refetch through `get_chat_messages`, which reads a
+session by id (threads are per workflow, not per user). `workflow_ops_apply`
+is the exception: it carries the ops themselves, parameter rows included,
+because an editor applies them as they arrive.
 
 ## Execution correlation IDs
 
@@ -216,8 +232,8 @@ Android service nodes (`batteryMonitor`, `wifiAutomation`, etc.) check `androidS
 
 **Frontend** (`WebSocketContext.tsx`):
 
-- 30-second `setInterval` sends `{"type": "ping"}`.
-- On disconnect: PartySocket's `ReconnectingWebSocket` reconnects with jittered exponential backoff (`client/src/lib/connectionConfig.ts`), replaying queued messages; an intentional close (code 1000) stops the loop.
+- While the socket is open and the page is visible, `startWebSocketHeartbeat` (`client/src/lib/webSocketHeartbeat.ts`) sends `{"type": "ping"}` every 30 s (`WS_HEARTBEAT`). If no `pong` arrives within 10 s, it reconnects with close code 4000 (`WS_CLOSE.HEARTBEAT_TIMEOUT`).
+- On disconnect: PartySocket's `ReconnectingWebSocket` reconnects with jittered exponential backoff (`client/src/lib/connectionConfig.ts`). In-flight requests are rejected, and requests queued while disconnected are sent after the next open. A remote close, including code 1000, does not stop the loop; only `disposeConnection` (logout or unmount) does.
 - 100ms mount delay avoids React Strict Mode double-connect in development.
 - `isMountedRef` prevents connections after unmount.
 - WebSocket is gated on `isAuthenticated` from `AuthContext`: if auth is disabled or not yet loaded, the provider defers connection.

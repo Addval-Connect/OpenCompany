@@ -1,8 +1,8 @@
 # Node Logic Flow Documentation
 
-Frozen behavioural contract for every workflow node. One file per node, grouped
-by category. After the upcoming full-stack refactor each handler must still
-match its doc here, and each doc must still describe what the code does.
+Behavioural contract for every workflow node. One file per node, grouped
+by category. Keep each card aligned with its plugin and execution path;
+historical diagrams do not override the current shared execution contract.
 
 ## How to use
 
@@ -28,7 +28,41 @@ match its doc here, and each doc must still describe what the code does.
 - Keep "Side Effects" honest: every DB write, broadcast, subprocess, and HTTP
   call must be listed.
 
+## Shared execution contract
+
+Cards describe a node's operation. The workflow layer owns cooperative
+admission and continuation for new controlled generations
+(`execution_control_version=1`): Stop allows admitted work and result
+bookkeeping to finish, then waits; Resume begins the next pending action in
+the same execution. Already-admitted parallel tools drain concurrently.
+An operation's sleep or approval wait is part of its admitted Activity when
+the node runs as an Activity; it is not automatically a control checkpoint.
+Legacy cancellation branches in a card describe explicit cancellation or
+older execution paths, not the new generation's Stop behavior.
+
+Controlled push triggers are definitions and Signal queues in
+`WorkflowControlWorkflow`; controller polling uses provider fetch Activities,
+and cron uses Temporal Schedules plus `CronTriggerWorkflow`. Separate
+listener/poller workflows remain legacy compatibility paths. Stable event
+IDs, durable pending-key protection, and Continue-As-New fences apply to the
+versioned controller; interactive canvas waiters remain process-local.
+Signal acceptance acknowledges receipt into Temporal history, while completed
+Updates acknowledge transitions and read-only Queries return status.
+
+Read [Workflow control](../temporal-workflow-control.md),
+[Node creation](../node_creation.md#temporal-execution-and-stopresume-contract),
+and [Event Waiter System](../event_waiter_system.md) for topology, Activity
+policies, compatibility, producer delivery gaps, and known naming limits.
+This shared contract applies to all cards below; individual cards call out
+provider identities and operation-specific stopping boundaries.
+
 ## Index
+
+For the current browser architecture, see [Browser runtime](../browser.md)
+and [Browser workspace](../browser_workspace.md). The registered node is
+`browser`; the `browserHarness` card is retained only as historical migration
+documentation. Inclusion in this generated document index does not establish
+that a retired node remains registered.
 
 <!-- AUTO-GENERATED-INDEX-START -->
 
@@ -90,6 +124,8 @@ match its doc here, and each doc must still describe what the code does.
 ### chat_utility
 
 - [Chat History (`chatHistory`)](./chat_utility/chatHistory.md)
+- [Reply in Chat (`chatReply`)](./chat_utility/chatReply.md)
+- [Show UI (`chatUi`)](./chat_utility/chatUi.md)
 - [Chat Send (`chatSend`)](./chat_utility/chatSend.md)
 - [Console (`console`)](./chat_utility/console.md)
 - [File Handler (`fileHandler`)](./chat_utility/fileHandler.md)
@@ -172,6 +208,11 @@ match its doc here, and each doc must still describe what the code does.
 - [Outlook Mail (`msMail`)](./microsoft/msMail.md)
 - [Outlook Mail Receive (`msMailReceive`)](./microsoft/msMailReceive.md)
 
+### mobile
+
+- [Android (`android_tool`)](./mobile/android_tool.md)
+- [Mobile Agent (`mobile_use_agent`)](./mobile/mobile_use_agent.md)
+
 ### search
 
 - [Brave Search (`braveSearch`)](./search/braveSearch.md)
@@ -223,7 +264,7 @@ match its doc here, and each doc must still describe what the code does.
 
 - [Apify Actor (`apifyActor`)](./web_automation/apifyActor.md)
 - [Browser (`browser`)](./web_automation/browser.md)
-- [Browser Harness (`browserHarness`)](./web_automation/browserHarness.md)
+- [Browser Harness (`browserHarness`) — retired](./web_automation/browserHarness.md)
 - [Crawlee Scraper (`crawleeScraper`)](./web_automation/crawleeScraper.md)
 - [TikHub (`tikhubAction`)](./web_automation/tikhubAction.md)
 
@@ -242,6 +283,7 @@ match its doc here, and each doc must still describe what the code does.
 
 ### workflow_triggers
 
+- [Approval (`approvalGate`)](./workflow_triggers/approvalGate.md)
 - [Chat Trigger (`chatTrigger`)](./workflow_triggers/chatTrigger.md)
 - [Cron Scheduler (`cronScheduler`)](./workflow_triggers/cronScheduler.md)
 - [Start (`start`)](./workflow_triggers/start.md)

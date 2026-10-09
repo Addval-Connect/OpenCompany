@@ -8,6 +8,43 @@ this file picks the right entry point based on what you're adding.
 
 ## Decision tree
 
+### Browser AI Agent creation
+
+`browser_agent` is a `SpecializedAgentBase` plugin using the existing native
+agent loop. Browser control stays in the pinned browser-use CLI (`0.13.10`).
+`services/browser_agent_recipe.py` defines its complete creation bundle:
+agent, one private Browser tool, private Context, Master Skill with the shipped
+browser skill enabled, and `visionAnalyze`. Canvas drop and the workspace's
+**Add Browser AI Agent** action call `POST /api/browser/agents`, which persists
+the bundle atomically through `apply_graph_additions`. Agent Builder and new
+employee Browser capabilities use the same recipe. Existing employees and
+Browser/`web_agent` nodes retain their graphs.
+
+The plugin declares `uiHints.createsBrowserAgent`; canvas drag-and-drop reads
+that capability from NodeSpec to select the recipe. Keep this hint separate
+from `isBrowserPanel`, which belongs only to the Browser tool.
+
+Reuse an explicitly selected saved Browser tool. The server allocates IDs and
+checks graph ownership and operator blocklists; transport retries use the same
+mutation UUID. Repeating Add for an already associated Browser agent returns
+its association without recreating a deliberately deleted Context or Skills
+node. The viewer remains bound to the Browser tool; `browser_agent` must never
+carry `isBrowserPanel`.
+
+`services/browser_agent_recipe.py::browser_tool_id` requires exactly one
+connected saved Browser tool before task admission. Creation returns allocated
+`node_ids`, graph `operations`, `applied` and `saved_revision`; clients apply
+those acknowledged operations through the existing graph update path. They
+do not construct an executable task graph. Provider/model fields use standard
+agent configuration and inheritance. Companion deletion remains an explicit
+graph edit, not a trigger to rebuild the bundle.
+
+See [Browser workspace](./browser_workspace.md),
+[agent architecture](./agent_architecture.md) and
+[distributed deployment](./browser_agent_deployment.md) for runtime contracts.
+
+### General node selection
+
 | You're adding… | Read this | Boilerplate |
 |---|---|---|
 | A simple action node (one HTTP call, no state) | [Quick start](./plugin_system.md#quick-start--adding-a-new-node) | folder under `server/nodes/<group>/<name>/` with `__init__.py` |
@@ -34,6 +71,103 @@ Simple plugins inherit directly from `ActionNode` /
 `TriggerNode` / `ToolNode`. Rich plugin folders (telegram,
 stripe) layer additional bases from `services.events` underneath them.
 
+## Temporal execution and Stop/Resume contract
+
+Read [Workflow control](./temporal-workflow-control.md) before adding a node
+that starts external work, a trigger, or an agent tool. New deployment
+generations use `execution_control_version=1`; existing histories retain their
+recorded command paths. A plugin does not implement a second pause lifecycle.
+
+The workflow owns admission. It checks the control gate before admitting a
+node, model request, tool, polling fetch, compaction, or child start. Stop
+closes that admission, lets already-admitted work finish under its existing
+retry policy, records its result and normal bookkeeping, then acknowledges
+Stopped. Resume releases the same continuation at the next pending action.
+For an agent response containing tools A and B, Stop during A preserves A's
+result and the pending B call; Resume executes B without repeating the model
+response or A. Already-admitted parallel tools finish concurrently.
+
+Declare the operation's Temporal policy on the node class:
+
+| Declaration | Meaning |
+|---|---|
+| `task_queue` | Plugin worker pool when the run's frozen worker-pool setting is enabled; otherwise the default worker handles it. |
+| `start_to_close_timeout` | Maximum duration of one Activity attempt. |
+| `heartbeat_timeout` | Liveness window for a long Activity; independent of cooperative Stop. |
+| `retry_policy` | Attempts, intervals, and non-retryable error types for the operation. |
+
+Ordinary per-type agent-tool dispatch applies all four declarations for new
+controlled generations. Graph node dispatch currently applies plugin retry
+and queue declarations but uses generic 24-hour attempt / 2-minute heartbeat
+defaults; the existing Workspace-task override uses that plugin's timeout and
+heartbeat values. Do not assume a graph node's timeout declaration is enforced
+on every path. Resolved tool bindings and policies are recorded during agent
+preparation and carried through
+Continue-As-New, so Resume does not rebuild the pending call from changed
+configuration. The in-process executor does not provide Temporal's policies.
+Keep provider/tool I/O in regular Activities. A heartbeat can report liveness
+or a real recovery checkpoint supported by the operation; a status string
+cannot restore an opaque HTTP request, subprocess, or provider session.
+Managed agents such as Claude Code, RLM, and Vertex stop at their whole
+Activity boundary. Stop can remain Stopping while an admitted operation is
+waiting or retrying; the model request policy currently permits unlimited
+retries. See [Temporal Activity failure detection](https://docs.temporal.io/develop/python/failure-detection)
+and [Long-running Activity](https://docs.temporal.io/design-patterns/long-running-activity).
+
+## Event identity and delivery contract
+
+For a deployed event trigger, register its CloudEvents type with
+`register_canary_trigger_type` and emit a `WorkflowEvent` through
+`services.events.dispatch.emit`. Controlled deployments keep definitions and
+queued events in `WorkflowControlWorkflow`; separate
+`TriggerListenerWorkflow` / `PollingTriggerWorkflow` executions are legacy
+compatibility paths. An interactive canvas waiter is a separate in-memory
+mechanism; check the [Event Waiter delivery gap](./event_waiter_system.md#known-gap-canvas-run-on-canary-push-triggers)
+before assuming `emit` resolves it.
+
+Use a stable event ID only when the provider supplies the complete identity.
+Keep it unchanged on redelivery and distinguish different messages or event
+families. The current producer conventions are:
+
+| Producer | `WorkflowEvent.id` when identity is complete |
+|---|---|
+| Telegram message | `telegram:{chat_id}:{message_id}` |
+| Discord message | `discord:message:{message_id}` |
+| Discord interaction | `discord:interaction:{interaction_id}` |
+| WhatsApp message | `whatsapp:{direction}:{chat_id-or-sender-or-from}:{message_id}` |
+| Tracked chat message | Existing chat `run_id` (untracked messages use their message UID). |
+
+Missing identity uses the envelope's random ID. Do not synthesize a constant
+or partial key that would merge different messages. Random fallback preserves
+distinct messages but cannot deduplicate provider redelivery.
+
+The controller adopts the [Event Accumulator](https://docs.temporal.io/design-patterns/event-accumulator)
+pattern's durable queue, deduplication, and continuation practices while
+keeping immediate per-event processing and accepted queue order through
+overflow. It does not add an inactivity batching window. Deduplication is per
+trigger and event ID: pending keys remain protected
+independently of the bounded recent-key window, overflow pages restore pending
+keys, and queued events remain pending while stopped. Carry and overflow
+spill fences include Signals arriving during awaits before Continue-As-New.
+This protection is versioned with `controller-event-accumulator-v1`; it does
+not retrofit old runs' recorded decisions.
+
+Temporal Signals carry events, completed Updates acknowledge control and
+membership changes, and read-only Queries expose status. Successful Signal
+delivery means Temporal accepted the event into history, not that its handler
+or downstream node finished. `dispatch.emit` still discovers consumers through
+eventually consistent Visibility and logs/suppresses delivery errors; the
+durability guarantee begins after a target accepts its Signal. There is no
+durable producer outbox or promise of external exactly-once effects. Do not
+use Signal-With-Start to recreate a missing versioned controller with an empty
+root registry. See [Workflow messaging](https://docs.temporal.io/design-patterns/workflow-messaging-patterns)
+and [Python message passing](https://docs.temporal.io/develop/python/message-passing).
+
+Known naming limit: triggers with the same display-label/type slug can still
+collide in listener and child Workflow IDs. A stable provider event ID does
+not fix that separate trigger-identity issue. See the control document's
+operating limits when adding multiple similar triggers.
+
 ## Five-minute recipe — one folder, one `__init__.py`
 
 For nodes with no state, no daemon, no signed webhooks (the common
@@ -59,16 +193,19 @@ appears in the Component Palette under its first `group` entry.
 ## Five-minute recipe — Wave 12 self-contained folder (signed webhook + CLI)
 
 For nodes that wrap a CLI tool **and** receive signed webhooks
-(Stripe, future GitHub-CLI / Cloudflare-Wrangler integrations), use
+(Stripe; CLI wrappers without webhooks — GitHub, Vercel, Cloudflare,
+gcloud — need only the CLI-managed-auth variants further down), use
 the [Wave 12 framework](./plugin_system.md#wave-12--generalized-event-framework-servicesevents).
 Stripe is the reference implementation
 ([`server/nodes/stripe/`](../server/nodes/stripe/)). The shape:
 
 ```
 server/nodes/<provider>/
-├── __init__.py             # 5 register_* calls (zero logic)
-├── _credentials.py         # ApiKeyCredential subclass
+├── __init__.py             # register_* calls only (zero logic)
+├── _credentials.py         # Credential subclass (Stripe: StripeCredential(Credential))
 ├── _source.py              # DaemonEventSource + WebhookSource subclasses
+├── _events.py              # CloudEvents factory (the one type the trigger is canary-registered
+│                           #   for) + the dispatch.emit wrapper that reaches deployed listeners
 ├── _handlers.py            # WS_HANDLERS via make_lifecycle_handlers()
 ├── _install.py             # ensure_<provider>_cli() auto-downloader
 ├── <provider>_action.py    # ActionNode + AI tool — uses run_cli_command
@@ -98,15 +235,19 @@ reused:
 
 1. **Marker-token write after CLI login completes.** The plugin
    writes synthetic strings to `auth_service.store_oauth_tokens`
-   with the provider id matching the catalogue entry's key. CLI-managed
-   providers set **no** `status_hook` — the catalogue handler at
-   [`server/routers/websocket.py:handle_get_credential_catalogue`](../server/routers/websocket.py)
-   resolves them through its `kind == "oauth"` fallback, which keys
+   with the provider id matching the catalogue entry's key. Stripe,
+   Vercel and GitHub set **no** `status_hook`, so
+   `provider_connection_state` in
+   [`server/services/credential_registry.py`](../server/services/credential_registry.py)
+   (which the catalogue handler calls) resolves them through its
+   `kind == "oauth"` branch, which keys
    `auth_service.get_oauth_tokens(provider_id) is not None` off the
-   provider id directly to set `provider.stored = true` (the
-   `status_hook` branch is only for providers that declare one:
-   google / twitter / telegram). **Same storage API path Google's
-   OAuth callback uses** — no new abstraction.
+   provider id directly to set `provider.stored = true`. The order is
+   `stored_check`, then `status_hook`, then `kind`, then
+   `connected_check`; the providers that declare a `status_hook` are
+   listed in `server/config/credential_providers.json` (the
+   `claude_code` / `codex_cli` CLI entries among them). **Same storage
+   API path Google's OAuth callback uses** — no new abstraction.
 
    ```python
    await auth_service.store_oauth_tokens(
@@ -135,8 +276,10 @@ reused:
 3. **Auto-installer for the CLI binary.** Plugins that wrap a CLI
    ship a `_install.py` with a single `ensure_stripe_cli()`-shaped
    async helper:
-   - Cached path → system PATH (`brew`, `scoop`, `apt`) → workspace
-     cache → fresh download from GitHub releases.
+   - Cached path → system PATH (`brew`, `scoop`, `apt`) → a previous
+     download under `<DATA_DIR>/packages/<provider>/bin/`
+     (`core.paths.package_dir`) → fresh download from GitHub releases
+     into that same directory.
    - Pinned version constant; `(system, machine) -> asset_name` map
      covering Windows/Linux/Mac × x86_64/arm64.
    - Returns absolute binary path; subsequent calls hit the cache.
@@ -194,29 +337,30 @@ packages tree, the bin shim then running on bun — instead of a
 GitHub-release download. Reference: [`server/nodes/vercel/`](../server/nodes/vercel/)
 + [vercel_service.md](./vercel_service.md).
 
-**CLI-opens-the-browser variant (Cloudflare).** Some CLIs run the
-whole browser interaction themselves: `cf auth login` starts a loopback
-PKCE callback server on a **fixed port** (8877) and opens the default
-browser directly. The login handler then proxies NOTHING to the modal
-(no URL, no verification code — just `{success, message}`); the badge
-flips when the background completion broadcasts. Two hazards force the
-handler's shape: concurrent logins collide on the fixed port
-(single-flight guard: repeat clicks return "already in progress"), and
-on Windows killing bun's `.exe` launcher shim orphans the child bun
-process still holding the port (the completion watcher never kills — the CLI's own
-login timeout ends it). Success gate = a CLI status probe that parses
-JSON, never exit codes (`cf auth whoami` exits 0 in both auth states).
-When the CLI's OAuth grant is a fixed scope set (cf: 86 scopes, no
-`--scopes`), pair it with an optional API-token field (vercel dual-path)
-as the documented full-scope escape. Reference:
+**CLI-opens-the-browser variant (gcloud).** Some CLIs run the whole
+browser interaction themselves: `gcloud auth login --quiet` starts a
+loopback callback server and opens the default browser directly. The
+login handler then proxies NOTHING to the modal (no URL, no
+verification code — just `{success, message}`); the badge flips when the
+background completion broadcasts. A single-flight guard (repeat clicks
+return "already in progress") prevents duplicate browser tabs — and,
+for a CLI whose callback port is fixed, port collisions — and the
+completion watcher never kills the process: on Windows killing a
+launcher shim orphans the child still serving the callback, and the
+CLI's own login timeout ends it. Success gate = a CLI status probe that
+parses JSON, never exit codes. gcloud also pins `CLOUDSDK_CONFIG` so
+node auth state never touches the operator's own gcloud config.
+Reference: [`server/nodes/gcloud/`](../server/nodes/gcloud/) +
+[gcloud_service.md](./gcloud_service.md). Cloudflare used this variant
+until cf 1.0 made device authorization its default login; it now
+follows the gh device-flow shape (URL + code relayed to the modal,
+`--no-browser` so the server never opens a second tab), keeps the
+single-flight guard (a repeat click returns the same code) and the
+never-kill rule, installs the CLI before spawning any login so no code
+is issued after its request was answered, and pairs the login with an
+optional API-token field (vercel dual-path) for unattended use:
 [`server/nodes/cloudflare/`](../server/nodes/cloudflare/) +
-[cloudflare_service.md](./cloudflare_service.md). gcloud is the second
-reference for this variant (`gcloud auth login --quiet`; random
-loopback port, so no fixed-port collision — the single-flight guard is
-kept anyway to prevent duplicate browser tabs, and it adds a pinned
-`CLOUDSDK_CONFIG` dir so node auth state never touches the operator's
-own gcloud config): [`server/nodes/gcloud/`](../server/nodes/gcloud/) +
-[gcloud_service.md](./gcloud_service.md).
+[cloudflare_service.md](./cloudflare_service.md).
 
 ## What auto-wires (don't write it yourself)
 
@@ -233,7 +377,7 @@ walker does on startup), these registrations happen automatically:
 | Trigger registry + filter builders | `event_waiter.TRIGGER_REGISTRY`, `FILTER_BUILDERS` | back-fill from `TriggerNode` subclasses on first lookup |
 | Temporal activity wrapper | `cls.as_activity()` | first call; pooled into the worker queue declared by `task_queue` |
 | Palette icon | `<plugin_folder>/icon.svg`, or `icon_<nodeType>.svg` per node type in a multi-node folder — served via `GET /api/schemas/nodes/<type>/icon`. Brand artwork belongs here. `meta.json` → `"icons": {"<nodeType>": "lucide:Send"}` is the fallback for generic utility nodes. Resolution: SVG file → plugin `meta.json` ref → `visuals.json`. |
-| Palette color | `<plugin_folder>/meta.json` (`{"color": "#xxx"}`); `visuals.json` is the fallback for legacy entries (post-F2 it has zero color fields). |
+| Palette color | `<plugin_folder>/meta.json` (`{"color": "#xxx"}`); `visuals.json` is the fallback for legacy entries. Its only `color` fields are on the lowercase tool-name alias keys (`github`, `vercel`, `gcloud`, `cloudflare`, `data`, `vision`) that the skill icon resolver reads — see below. |
 
 What you **do** still write:
 
@@ -257,6 +401,7 @@ What you **do** still write:
 | Polling triggers + event_waiter mechanics | [event_waiter_system.md](./event_waiter_system.md) |
 | Memory lifecycle (markdown parse/append/trim, vector store, session resume) — *archived; describes the retired pre-RFC-0002 `input-memory` markdown model* | [ARCHIVE/memory_lifecycle.md](./ARCHIVE/memory_lifecycle.md) |
 | Tool building pipeline (`_build_tool_from_node`, schema, per-type Temporal dispatch) | [tool_building_pipeline.md](./tool_building_pipeline.md) |
+| Cooperative Stop/Resume, root registration, messaging, and rollover | [temporal-workflow-control.md](./temporal-workflow-control.md) |
 | Process supervision (used by `DaemonEventSource`) | [server/services/process_service.py](../server/services/process_service.py) — singleton API |
 | Multi-vendor node behind one `provider` dropdown (two registries, JSON capabilities, per-vendor modules) | [speech_provider_rfc.md](./speech_provider_rfc.md) |
 | Returning media from a node without blowing the payload limits (`AudioRef`, workspace routes, containment) | [media_transport.md](./media_transport.md) |

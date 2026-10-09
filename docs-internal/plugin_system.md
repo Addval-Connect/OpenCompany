@@ -42,6 +42,8 @@ plus one `@Operation` method, and nothing else.
 
 ## Architecture
 
+The [Mobile plugin](../server/nodes/mobile/__init__.py) is an optional runtime example: **Mobile Agent** (`ActionNode`) and **Android** (`ToolNode`) register together and advertise `ui_hints.workspace.kind="mobile"`. Import only registers the router, schemas and shutdown hook. The Android tool uses a locked, prompt-only `ToolInput`; saved `MobileParams` retain time/step limits. Both nodes share owner checks, model resolution, task queue and broker, without integrating through the legacy Android relay. See [Mobile Workspace](../docs/mobile-workspace.md) and the [Android node contract](node-logic-flows/mobile/android_tool.md).
+
 ### Class hierarchy
 
 ```
@@ -75,11 +77,15 @@ class SpecializedAgentBase(ActionNode, abstract=True):
 | `credentials` | Sequence of `Credential` subclasses the node uses. More than one is supported — see [Multi-credential nodes](#multi-credential-nodes). |
 | `Params` | Pydantic `BaseModel` — user-facing parameters. Used for both UI rendering and AI tool schemas. |
 | `Output` | Pydantic `BaseModel` — runtime output shape. |
-| `usable_as_tool` | `ActionNode` flag — mints a ToolNode adapter for AI invocation. Combined with `component_kind != "model"`, makes the plugin visible to `agentBuilder.add_tool` (catalogue + rebind paths). **Side effect:** setting it auto-sets `hide_input_handle` / `hide_output_handle` to `True` unless the class declares them ([base.py:243-246](../server/services/plugin/base.py#L243)), so a dual-purpose node that must remain wirable on the canvas has to declare both `False` explicitly. |
-| `needs_canvas` | `ClassVar[bool]` — when `True`, the F4.B `AgentWorkflow` tool-dispatch forwards the parent workflow's `nodes`/`edges` into the per-tool activity payload. Today only `AgentBuilderNode` opts in (walks edges to resolve its calling agent). |
+| `usable_as_tool` | `ActionNode` flag — mints a ToolNode adapter for AI invocation. Combined with `component_kind != "model"`, makes the plugin visible to `agentBuilder.add_tool` (catalogue + rebind paths). **Side effect:** setting it auto-sets `hide_input_handle` / `hide_output_handle` to `True` unless the class declares them (`BaseNode.__init_subclass__` in [base.py](../server/services/plugin/base.py), which does the same for `component_kind == "tool"`), and `_metadata_dict` adds an `output-tool` handle. The frontend (`SquareNode`) reads the hide flags only when a spec declares no handles; a spec with handles renders exactly what it declares. So a dual-purpose node that must stay wirable on the canvas declares `input-main` / `output-main` in `handles`; setting the flags `False` alone does not add them. |
+| `needs_canvas` | `ClassVar[bool]` — when `True`, the F4.B `AgentWorkflow` tool-dispatch forwards the parent workflow's `nodes`/`edges` into the per-tool activity payload. Today only `AgentBuilderNode` opts in: `add_tool` compares the run's canvas with the saved graph, so a tool saved earlier but missing from the running snapshot is handed back to be bound. Its calling agent comes from `invoking_agent_node_id` / `parent_node_id`, not from edges. |
+| `chat_step` / `chat_step_hidden` | How a call of this tool reads as a working step in the chat while it answers the owner ("Searched the web"; default "Used <display name>"); `chat_step_hidden = True` shows none (the clock, the checklist). A tool may put a short line in its result as `_step_detail`, shown under the step and removed before the model reads the result. See [Chat Protocol](./chat_protocol.md#streaming-steps-and-stop). |
+| `answers_chat_run` | `ClassVar[bool]` — the node posts a chat run's answer (Reply in Chat). The agent wired straight into such a node streams its text into the chat. |
+| `approval` | `ApprovalSpec` (`services/plugin/approval.py`) for a tool that reaches someone outside: which operations send (`operations`, `when`), who it goes to, the body and subject the owner may edit, the card's other lines, `refuse_while_asking` (Stripe) or `restrict_while_asking` (the browser, read-only). While the workflow asks first, an agent's call that sends is held as a draft for the owner instead of running. See [Chat Protocol, Approvals](./chat_protocol.md#approvals). |
+| `chat_sources` | `ClassVar[bool]` — the tool returns web results (`results: [{title, snippet, url}]`, the searches). When the agent answering a chat run calls it, the results are numbered for the conversation in what the model reads, so the answer can cite them as `[n]`. See [Chat Protocol](./chat_protocol.md#sources). |
 | `task_queue` | Temporal worker pool. See `TaskQueue` constants. |
-| `retry_policy` | `RetryPolicy` dataclass (mirrors `temporalio.common.RetryPolicy`). |
-| `start_to_close_timeout` / `heartbeat_timeout` | Per-node Temporal knobs. |
+| `retry_policy` | `RetryPolicy` dataclass (mirrors `temporalio.common.RetryPolicy`); attempts, intervals, and non-retryable error types. |
+| `start_to_close_timeout` / `heartbeat_timeout` | Per-attempt deadline / liveness window for regular Temporal Activities. Heartbeats do not extend the attempt deadline. |
 
 ### Polymorphic result envelope (`interpret_result`)
 
@@ -112,6 +118,8 @@ Practical rules for plugin authors:
 Defense in depth below the plugin layer: the SQLAlchemy engine in `core/database.py` sets `json_serializer=lambda obj: json.dumps(to_jsonable_python(obj, fallback=str))` (`pydantic_core.to_jsonable_python` — official arbitrary-object → JSON coercion), so every JSON column on the engine tolerates dataclasses / datetimes / enums / sets even if a payload bypasses Output validation. Locked by `tests/test_output_contract.py`.
 
 **Error convention — `NodeUserError` vs bare `Exception`.** For any failure the user (or the calling LLM) can correct — missing required field, unknown enum value, bad path, service not running — raise `NodeUserError("...")` (exported from `services.plugin`). `BaseNode.execute()` catches it specially: one WARN line in the operator log (no traceback) plus a structured `{success: False, error_type: "NodeUserError", error: ...}` envelope, and the shared Temporal retry policy treats it as **non-retryable** (`services/plugin/scaling.py`) so a bad input doesn't burn three activity attempts. Reserve bare `Exception` / `RuntimeError` for genuine server bugs — those keep the full `logger.exception` traceback.
+
+Use `NodeUserError(message, hint="How to recover", requires_user_action=True)` for an owner-only blocker such as exhausted billing or an unusable provider credential. Keep both texts safe for public display. The framework preserves `hint`, `requires_user_action`, and `retryable: false` through tool results. Both agent loops stop before another model turn or compaction, and a controlled trigger deployment pauses on its first blocked run. Ordinary input errors leave `requires_user_action` false so the model can correct them; other run failures retain the configured circuit-breaker threshold. Temporal saves outstanding tool results before stopping so Resume has a complete tool turn. Home and the node output panel display the recovery hint.
 
 ### Auto-derived uiHints
 
@@ -205,7 +213,7 @@ plugins that don't declare any group render flat exactly like today.
 ```python
 class AIAgentParams(BaseModel):
     # Top-level fields (always visible)
-    provider: Literal[...] = "openai"
+    provider: ProviderRef = "openai"   # loader-driven (aiProviders), nodes/agent/_provider.py
     model: str = Field(default="")
     prompt: str = Field(default="", json_schema_extra={"rows": 4})
     system_message: Optional[str] = Field(default="")
@@ -287,8 +295,8 @@ plus a CloudEvents broadcast, so the Credentials modal lights up the right
 provider.
 
 **A multi-credential node MUST use imperative operations.** The declarative
-`routing=` path resolves `self.credentials[0]`
-([base.py:769](../server/services/plugin/base.py#L769)), so a routed op would
+`routing=` path resolves `self.credentials[0]` (`BaseNode._run_operation` in
+[base.py](../server/services/plugin/base.py)), so a routed op would
 authenticate every provider with the first key in the tuple regardless of what
 the user picked. `test_plugin_contract.py` only asserts the tuple is non-empty,
 so nothing else catches it. `nodes/speech/` has a test asserting neither of its
@@ -397,10 +405,10 @@ on a plugin resolves to a registered class.
 | `nodes/twitter/_credentials.py` | `TwitterCredential` | oauth2 | twitterSend / twitterSearch / twitterUser / twitterReceive |
 | `nodes/telegram/_credentials.py` | `TelegramCredential` | api_key | telegramSend / telegramReceive |
 | `nodes/scraper/_credentials.py` | `ApifyCredential` / `TikHubCredential` | api_key (bearer) | apifyActor / tikhubAction (TikHub probes `tikhub/user/get_user_info` declaratively — see [tikhub_service.md](./tikhub_service.md)) |
-| `nodes/model/_credentials.py` | `OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / Xai / Sarvam / Ollama / LMStudio` | api_key | 13 credential classes covering the 13 agent-selectable providers and the 12 standalone chat-model nodes (`ls server/nodes/model/*_chat_model`). Ollama / LM Studio store a local server URL; xAI is agent-selectable but has no standalone node; `SarvamCredential` also serves the speech / translate plugins. |
+| `nodes/model/_credentials.py` | `OpenAI / Anthropic / Gemini / OpenRouter / Groq / Cerebras / DeepSeek / Kimi / Mistral / Xai / Sarvam / Ollama / LMStudio / OpenAICompatible` | api_key | One credential class per LLM provider, covering every agent-selectable provider and every standalone chat-model node (`ls server/nodes/model/*_chat_model`). Ollama / LM Studio store a local server URL; `OpenAICompatibleCredential` stores any number of named endpoints, each under its own `openai_compatible:<slug>` reference (RFC-0003); xAI is agent-selectable but has no standalone node; `SarvamCredential` also serves the speech / translate plugins. |
 | `nodes/search/<name>/__init__.py` (inline) | `BraveSearch / Serper / Perplexity` | api_key | single-use search nodes |
 
-This table is the Wave 11.E snapshot, not an inventory — later plugins (Stripe, Vercel, GitHub, Cloudflare, gcloud, WhatsApp, WhatsApp Business, Discord, Microsoft, ElevenLabs, Deepgram, DeepL, ...) each ship their own `_credentials.py`. Read the live set from `len(services.plugin.credential.CREDENTIAL_REGISTRY)` (34 at the time of writing).
+This table is the Wave 11.E snapshot, not an inventory — later plugins (Stripe, Vercel, GitHub, Cloudflare, gcloud, WhatsApp, WhatsApp Business, Discord, Microsoft, ElevenLabs, Deepgram, DeepL, ...) each ship their own `_credentials.py`. Read the live set from `len(services.plugin.credential.CREDENTIAL_REGISTRY)`.
 
 `GoogleCredential` exposes a `build_credentials()` classmethod that
 returns a `google.oauth2.credentials.Credentials` — hand-off to
@@ -457,6 +465,30 @@ per-type activity to its plugin-declared `cls.task_queue`. Setting
 `TEMPORAL_WORKER_POOL_ENABLED=false` stops the pool and routes activities back
 to the manager's single default queue.
 
+Execution routing is recorded in the run's input; changing environment settings
+does not redirect an already-running workflow. New controlled generations
+(`execution_control_version=1`) also freeze resolved agent-tool bindings and
+the plugin's timeout, heartbeat, retry, and queue declarations during payload
+preparation. Ordinary per-type tools use these policies and carry them through
+Continue-As-New. Existing histories retain their recorded policy decisions.
+The in-process executor does not enforce Temporal Activity policies.
+
+Graph Activity starts currently honor plugin retry and queue declarations,
+while ordinary graph nodes retain generic 24-hour attempt / 2-minute heartbeat
+defaults. The existing Workspace-task override applies its declared timeout
+and heartbeat. The frozen v1 ordinary-agent-tool policy described above is
+stronger; do not assume the graph path applies every timeout declaration.
+
+Cooperative Stop is owned by workflow admission gates before node, tool,
+model, polling, compaction, refresh, and child-start work. Admitted work finishes
+under its existing retries and retains its result/bookkeeping; Resume releases
+the existing continuation's next pending action. Already-admitted parallel work
+drains concurrently. Keep provider I/O in regular Activities, and add heartbeat
+progress recovery only when the operation actually supports it. A status
+heartbeat cannot resume an opaque subprocess or HTTP request. See
+[Workflow control](./temporal-workflow-control.md) and
+[Node creation: execution contract](./node_creation.md#temporal-execution-and-stopresume-contract).
+
 ```python
 # Worker collection patterns (both supported).
 
@@ -495,16 +527,25 @@ activities. The three shown above are the core model/persistence/compaction
 steps; the remainder cover payload preparation, progress and output
 persistence, tool/skill refresh, delegation lifecycle, and team finalization.
 
-**Agents that migrate** (15): `aiAgent`, `chatAgent`, 11 specialized
-agents (`android_agent`, `coding_agent`, `web_agent`, `task_agent`,
+**Native agent types**: `aiAgent`, `chatAgent`, specialized
+agents (`android_agent`, `browser_agent`, `coding_agent`, `web_agent`, `task_agent`,
 `social_agent`, `travel_agent`, `tool_agent`, `productivity_agent`,
 `payments_agent`, `consumer_agent`, `autonomous_agent`), 2 team
 leads (`orchestrator_agent`, `ai_employee`).
 
-**Agents that stay as single activities** (2): `rlm_agent`,
-`claude_code_agent`. Their internal session state (RLM REPL / Claude
-CLI `--resume` with stable `cwd`) requires single-process continuity
-that would break across activity boundaries.
+`browser_agent` uses this same loop and a saved Browser tool. Its shared
+atomic creation recipe, direct Workspace tasks and private credential flow
+are described in [node creation](node_creation.md#browser-ai-agent-creation)
+and [Browser deployment](browser_agent_deployment.md). Distributed Browser
+Activities use their frozen owner's physical queue regardless of the worker
+pool switch; generic orchestration workers exclude them. The authoritative
+native type set is `AGENT_WORKFLOW_TYPES` in `services/temporal/workflow.py`.
+
+**Agents that stay as single activities**: `rlm_agent`,
+`claude_code_agent`, and `vertex_managed_agent`. Their internal session state
+(RLM REPL, Claude CLI `--resume` with stable `cwd`, or Vertex interaction and
+environment chaining) remains inside one Activity. Cooperative Stop drains
+that whole Activity; it cannot stop between tools hidden inside that session.
 
 Queue distribution (live count via
 `distinct_task_queues()` and `len(_NODE_CLASS_REGISTRY)`):
@@ -519,7 +560,9 @@ Queue distribution (live count via
 | `triggers-event` | Push-based triggers | 100 |
 | `triggers-poll` | Polling triggers (Gmail, etc.) | 100 |
 | `code-exec` | Python / JS / TS sandboxes | 10 |
-| `browser` | Playwright / agent-browser | 4 |
+| `browser` | Installed Chrome/Edge/Chromium / browser-use / CDP | 4 |
+
+The current Browser plugin launches installed Chrome/Edge/Chromium in dedicated profiles rendered headless in the workspace UI by default, owns browser-use tool execution and the CDP live view, and offers Chrome for Testing only through explicit testing mode. See [browser.md](./browser.md) and [browser_workspace.md](./browser_workspace.md); the retired `browserHarness` node is not a second active plugin.
 
 Env overrides: `TEMPORAL_<QUEUE>_CONCURRENCY` (e.g.
 `TEMPORAL_AI_HEAVY_CONCURRENCY=8`).
@@ -551,32 +594,36 @@ themselves** into those registries from their package `__init__.py`.
 
 ```
 server/nodes/telegram/
-├── __init__.py          # imports + register_* calls covering seven of the generic registries (no logic)
+├── __init__.py          # imports + one register_* call per concern (no logic)
 ├── _credentials.py      # TelegramCredential (ApiKeyCredential)
 ├── _service.py          # TelegramService singleton (bot lifecycle)
 ├── _handlers.py         # WebSocket handlers + WS_HANDLERS dict
 ├── _filters.py          # build_telegram_filter (event_waiter filter)
 ├── _refresh.py          # refresh_telegram_status + precheck_telegram_trigger
 ├── _events.py           # typed CloudEvents factory + broadcast_telegram_status
-├── telegram_send.py     # ActionNode + AI tool
-└── telegram_receive.py  # TriggerNode
+├── _send.py             # perform_send / resolve_chat_id, shared by the node and the WS send command
+├── telegram_send.py     # ActionNode, also an AI tool (usable_as_tool; ApprovalSpec: held while Ask first is on)
+├── telegram_receive.py  # TriggerNode
+├── icon.svg             # node icon for every node type in the folder
+├── telegram.svg         # credential brand icon (Credential.get_icon_path)
+└── meta.json            # palette colour
 ```
 
 Underscore-prefixed files are package-private; the `nodes` walker
-skips them. The two non-underscore files are the plugin classes (one
-per node type) — same pattern as every other folder.
+skips them. The two non-underscore `.py` files are the plugin classes
+(one per node type) — same pattern as every other folder.
 
-### Cross-cutting registries (19 at time of writing, hand-curated below; `grep -rn '^def register_' server/services server/core` also lists the node / group / provider / session-pool registration internals) — use only what your plugin needs
+### Cross-cutting registries (hand-curated below; `grep -rn '^def register_' server/services server/core` lists the live set, plus the node / group / provider / session-pool registration internals) — use only what your plugin needs
 
 | Concern | Registry module | Register from plugin via |
 |---|---|---|
 | Credentials-modal WebSocket commands (Connect / Disconnect / Send / Status / etc.) | `services.ws_handler_registry` | `register_ws_handlers({type: handler, ...})` |
 | FastAPI HTTP router (OAuth callbacks, webhook receivers, etc.) | `services.ws_handler_registry` | `register_router(router, name='<plugin>')` — Wave 11.I; declare a `_router.py` exposing an `APIRouter` and call from `__init__.py`. Discovered at startup via `services.ws_handler_registry.get_routers()`. |
-| `loadOptionsMethod` async loader for a dynamic dropdown (`json_schema_extra={"loadOptionsMethod": "..."}`) | `services.ws_handler_registry` | `register_option_loader(method_name, fn)` |
+| `loadOptionsMethod` async loader for a dynamic dropdown (`json_schema_extra={"loadOptionsMethod": "..."}`). A loader that lists one user's things reads the caller from `current_load_options_principal()`, never a `user_id` in its params (the client writes those) | `services.ws_handler_registry` | `register_option_loader(method_name, fn)` |
 | OAuth callback path (`/api/<provider>/callback`) so `services.oauth_utils.get_redirect_uri` never cross-imports `nodes/<plugin>/_oauth.py` | `services.ws_handler_registry` | `register_oauth_callback_path(provider, path)` |
 | Trigger event-filter builder | `services.event_waiter` | `register_filter_builder(node_type, fn)` |
 | Trigger pre-execution check (e.g. "bot not connected") | `services.event_waiter` | `register_trigger_precheck(node_type, fn)` |
-| Service-status refresh on WebSocket connect | `services.status_broadcaster` | `register_service_refresh(callback)` |
+| Service-status refresh (runs once, in a background task at startup; not on each WebSocket connect) | `services.status_broadcaster` | `register_service_refresh(callback)` |
 | Per-node output schema (when not auto-derivable) | `services.node_output_schemas` | `register_output_schema(node_type, ModelClass)` |
 | Master-Skill expander (how a `masterSkill` node expands into its enabled skills during edge walking) | `services.plugin.edge_walker` | `register_master_skill_expander(fn)` — registered by `nodes.skill` on package import. |
 | Agent Context descriptor (node connected on `input-context`) | `services.plugin.edge_walker` | `register_agent_context_builder(async_fn)` — RFC-0002; the framework walks the edge but owns no knowledge of the descriptor's keys or thread-selection rules. Reference: `nodes/context/_descriptor.py`. |
@@ -593,17 +640,19 @@ per node type) — same pattern as every other folder.
 All accept idempotent re-imports (same callable / class for the
 same key is a no-op; conflicts raise `ValueError`).
 
-**Plugins use only the registries they need.** Telegram uses 7 (no
-router); Stripe uses 4 (webhook-driven, no filter/precheck); Android
-uses 6 (with router); WhatsApp uses 8. There is no "register every
-hook" rule.
+**Plugins use only the registries they need.** Telegram registers no
+router; Stripe is webhook-driven, with no filter or precheck; Android
+registers a router. There is no "register every hook" rule — read a
+plugin's `__init__.py` for what it actually registers.
 
 ### Telegram `__init__.py` (canonical wiring)
 
 ```python
-# server/nodes/telegram/__init__.py
+# server/nodes/telegram/__init__.py (abridged: docstring, re-exports and __all__ omitted)
+from services.deployment.canary_registry import register_canary_trigger_type
 from services.event_waiter import register_filter_builder, register_trigger_precheck
 from services.node_output_schemas import register_output_schema
+from services.plugin.shutdown_hooks import register_shutdown_hook
 from services.status_broadcaster import register_service_refresh
 from services.ws_handler_registry import register_ws_handlers
 
@@ -624,6 +673,17 @@ register_trigger_precheck("telegramReceive", precheck_telegram_trigger)
 register_service_refresh(refresh_telegram_status)
 register_output_schema("telegramReceive", TelegramReceiveOutput)
 register_output_schema("telegramSend", TelegramSendOutput)
+register_canary_trigger_type(TelegramReceiveNode.type, "com.opencompany.telegram.message.received")
+
+
+async def _shutdown_telegram() -> None:
+    # Release the single getUpdates slot before the process exits.
+    service = get_telegram_service()
+    if service.connected:
+        await service.disconnect()
+
+
+register_shutdown_hook("telegram", _shutdown_telegram)
 ```
 
 That's the entire wiring. Adding telegram-style cross-cutting code to
@@ -700,10 +760,11 @@ server/
 │   │   │                        # subclasses, rlm / claude_code / codex, vertex_* variants)
 │   │   ├── _handles.py          # Shared handle topology helpers
 │   │   ├── _inline.py           # prepare_agent_call()
+│   │   ├── _provider.py         # ProviderRef: the loader-driven provider field every agent shares
 │   │   ├── _specialized.py      # SpecializedAgentBase
 │   │   ├── _vertex.py           # Shared Vertex Agent Engine helpers
 │   │   └── <agent>/__init__.py  # one folder per agent
-│   ├── model/                   # AI chat models (12 providers; all agent-capable)
+│   ├── model/                   # AI chat models (one per provider except xAI, plus openaiCompatibleChatModel for named endpoints)
 │   │   ├── _base.py             # ChatModelBase + ChatModelParams/Output
 │   │   └── <provider>_chat_model/__init__.py
 │   ├── android/                 # 16 Android service nodes
@@ -733,7 +794,7 @@ server/
 │   ├── email/                   # emailSend / emailRead / emailReceive
 │   ├── chat/                    # chatSend / chatHistory
 │   ├── social/                  # socialSend / socialReceive
-│   ├── browser/                 # browser (agent-browser CLI) / browser_harness (browser-use CDP)
+│   ├── browser/                 # browser (managed Chrome, browser-use CLI, live CDP view)
 │   ├── utility/                 # httpRequest / webhookResponse / console / team_monitor / process_manager
 │   ├── text/                    # textGenerator / fileHandler
 │   ├── location/                # gmaps_create / gmaps_locations / gmaps_nearby_places
@@ -846,8 +907,8 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
   TelegramCredential + ApifyCredential + 12 LLM providers + 3 inline
   search credentials + Stripe / Vercel / GitHub / Cloudflare /
   WhatsApp); 29 plugins declared `credentials = (...)`. Today the live
-  numbers are `len(CREDENTIAL_REGISTRY)` (35) and 55 node types with a
-  non-empty `credentials` tuple (September 2026). Agents stay poly-provider (empty tuple).
+  numbers are `len(CREDENTIAL_REGISTRY)` (36) and 56 node types with a
+  non-empty `credentials` tuple (late September 2026). Agents stay poly-provider (empty tuple).
 - Wave 11.E.1 — Modularised credentials into per-domain
   `nodes/<group>/_credentials.py` files. `server/credentials/`
   directory deleted; auto-discovery rides on node-package import.
@@ -890,7 +951,7 @@ All Wave 10 invariants in `test_node_spec.py` still run; Wave 11 invariants in `
   added Wave 11.I),
   `event_waiter.register_filter_builder` (event filters),
   `event_waiter.register_trigger_precheck` (trigger pre-execution
-  checks), `status_broadcaster.register_service_refresh` (WS-connect
+  checks), `status_broadcaster.register_service_refresh` (service-status
   refresh callbacks), `node_output_schemas.register_output_schema`
   (output schemas).
 - Wave 11.I — Eight more plugin domains migrated to the
@@ -1042,14 +1103,20 @@ dataschema / data` plus the extras.
 
 ```python
 WorkflowEvent(
-    id=payload["id"],                          # provider's event id (replay safety)
-    source="stripe://acct_test",               # URI: scheme://provider/account
-    type="stripe.charge.succeeded",            # reverse-DNS event type
+    id=payload["id"],                                # provider's event id (replay safety)
+    source="stripe://acct_test",                     # URI: scheme://provider/account
+    type="com.opencompany.stripe.event.received",    # reverse-DNS event type
     time=datetime.fromtimestamp(payload["created"], tz=timezone.utc),
-    subject=payload.get("type"),
-    data=payload,
+    subject=payload.get("type"),                     # the provider's own type, "charge.succeeded"
+    data=shape_stripe_event(payload),
 )
 ```
+
+A deployed trigger listens for exactly one CloudEvents type (the string
+`register_canary_trigger_type` records), so a provider with many event
+types sends them all under one type and carries its own type in
+`subject` and `data`, where the trigger's filter reads it
+(`nodes/stripe/_events.py`).
 
 `WorkflowEvent.matches_type(pattern)` does CloudEvents-style glob
 matching: `"all"` / `""` matches everything, `"foo.*"` matches
@@ -1068,6 +1135,7 @@ differs from the generic shape:
 from services.events import (
     BaseTriggerParams, WebhookTriggerNode, WorkflowEvent,
 )
+from services.events.envelope import event_type_matches
 
 class MyParams(BaseTriggerParams):
     livemode_filter: Literal["all", "test", "live"] = "all"
@@ -1080,7 +1148,7 @@ class MyReceiveNode(WebhookTriggerNode):
     credentials = (MyCredential,)
 
     webhook_source = MyWebhookSource          # required: which source feeds events
-    event_type_prefix = "my."                  # auto-prepended to user filters
+    event_type = MY_EVENT_TYPE                 # the type MyWebhookSource.shape emits
     Params = MyParams
     Output = MyOutput
 
@@ -1088,25 +1156,54 @@ class MyReceiveNode(WebhookTriggerNode):
         from ._source import get_listen_source
         return None if get_listen_source()._started else "Daemon not running"
 
-    def _extra_filter(self, params):           # optional; on top of event-type match
-        if params.livemode_filter == "all":
-            return None
-        target = params.livemode_filter == "live"
-        return lambda ev: bool(ev.data.get("livemode")) is target
+    def build_filter(self, params):            # both callers pass the envelope's data
+        pattern = params.event_type_filter or "all"
+
+        def matches(event):
+            data = event.data if isinstance(event, WorkflowEvent) else event
+            if not isinstance(data, dict):
+                return False
+            if not event_type_matches(str(data.get("event_type") or ""), pattern):
+                return False
+            return params.livemode_filter == "all" or (
+                bool(data.get("livemode")) is (params.livemode_filter == "live")
+            )
+
+        return matches
 
     def shape_output(self, event: WorkflowEvent) -> Dict:
-        # Optional override; default returns event.model_dump(mode="json")
-        ...
+        return event.data                      # shaped by the source, as the deployed run sees it
 ```
 
 `WebhookTriggerNode` provides:
 
-- `event_type` derived from `webhook_source.type` automatically.
+- `event_type` derived from `webhook_source.type` automatically. It is
+  the canvas-Run waiter key, so set it yourself when `shape` returns
+  envelopes of another type, or `event_waiter.dispatch` matches no
+  waiter (Stripe sets `STRIPE_EVENT_RECEIVED_TYPE`).
 - `build_filter` combining CloudEvents type-glob + optional
-  `_extra_filter`.
-- `execute()` with `_check_precondition` short-circuit and reshape
-  passthrough.
+  `_extra_filter`. **Override it to read the payload instead.** Both
+  callers hand the filter the envelope's `data`, not the envelope: the
+  event waiter on a canvas Run, and `evaluate_trigger_filter_activity`
+  on a deployed listener. The base rebuilds a `WorkflowEvent` from that
+  dict, which raises unless the data happens to carry `source` and
+  `type`; a waiter logs the error and stays unresolved, and a deployed
+  listener fails open and ignores the filter. `StripeReceiveNode`
+  overrides it; the WhatsApp Business triggers do not, so a deployed one
+  admits every event whatever its `event_type_filter`.
+- `execute()` with the `_check_precondition` short-circuit, then
+  `shape_output` on the resolved event (the waiter resolves with
+  `data`, which `_as_event` wraps back into an envelope). A deployed
+  run receives `event.data` verbatim and never calls `shape_output`,
+  so shape the payload in the source and let `shape_output` return
+  `event.data`, or Run and deploy disagree about the fields.
 - The `@Operation("wait")` stub.
+
+A trigger whose events need something running (Stripe's `stripe listen`
+daemon) starts it from the `TriggerNode.prepare_deployment` classmethod,
+which the deployment manager calls for every trigger it arms, at Start
+and at the boot re-arm. Return quickly and schedule slow work; a raise is
+logged and the trigger is armed anyway.
 
 ### `WebhookSource` — HTTP receiver
 
@@ -1124,23 +1221,30 @@ class StripeWebhookSource(WebhookSource):
     credential = StripeCredential
 
     async def shape(self, request, body, payload) -> WorkflowEvent:
-        return WorkflowEvent(
-            id=payload["id"],
-            type=f"stripe.{payload['type']}",
-            source=f"stripe://{payload.get('account', 'default')}",
-            time=datetime.fromtimestamp(payload["created"], tz=timezone.utc),
-            data=payload,
+        data = shape_stripe_event(payload)          # the trigger's output fields
+        return stripe_event_received(               # type: com.opencompany.stripe.event.received
+            data, event_id=data["event_id"], account=data["account"], time=...,
         )
+
+    async def handle(self, request):
+        event = await super().handle(request)       # verify, shape, wake the in-process waiter
+        await emit_stripe_event(event)              # dispatch.emit: deployed listeners
+        return event
 ```
 
 The shared dispatch path lives in `routers/webhook.py` — it consults
 `WEBHOOK_SOURCES`, runs the verifier, calls `shape()`, dispatches via
-`event_waiter`. **No plugin name is hardcoded in core.**
+`event_waiter`. **No plugin name is hardcoded in core.** That reaches a
+canvas Run, and a deploy only when it runs without Temporal. A
+trigger that deploys on Temporal also needs `register_canary_trigger_type`
+and a `dispatch.emit` of each envelope, as `StripeWebhookSource.handle`
+does above.
 
 ### `DaemonEventSource` — supervised subprocess driver
 
-For plugins that wrap a long-lived CLI tool or SDK loop (Stripe CLI,
-future GitHub-CLI / Cloudflare-Wrangler / etc.). Delegates lifecycle
+For plugins that wrap a long-lived CLI tool or SDK loop (the Stripe
+CLI's `stripe listen`; one-shot CLI wrappers such as GitHub, Vercel,
+Cloudflare and gcloud call `run_cli_command` instead). Delegates lifecycle
 to `ProcessService` (battle-tested PATHEXT-aware launching, kill_tree
 cleanup, log capture, Terminal-tab broadcast). The base subscribes to
 ProcessService's per-line callback hook (`line_handler`), so plugins
@@ -1278,20 +1382,23 @@ without any node-specific code in the frontend or in core services:
 
 1. **Marker-token write via the existing `auth_service.store_oauth_tokens`
    API.** Plugin writes synthetic strings (e.g. `"cli-managed"`) on
-   login completion. The catalogue's existing per-provider `stored`
-   check at
-   [`routers/websocket.py:handle_get_credential_catalogue`](../server/routers/websocket.py)
-   uses
-   `auth_service.get_oauth_tokens(status_hook) is not None` —
-   identical to Google's OAuth-callback path. The synthetic tokens
-   exist purely to flip the existence check; the CLI owns the real
-   auth.
+   login completion. The catalogue's per-provider `stored` flag comes
+   from `provider_connection_state` in
+   [`services/credential_registry.py`](../server/services/credential_registry.py)
+   (called by `handle_get_credential_catalogue` and by the Normal-mode
+   employee summaries). It checks, in order: a declarative
+   `stored_check`, then `status_hook`
+   (`auth_service.get_oauth_tokens(status_hook) is not None` —
+   identical to Google's OAuth-callback path), then the provider
+   `kind` (`apiKey` / `oauth`), then `connected_check`. The synthetic
+   tokens exist purely to flip that existence check; the CLI owns the
+   real auth.
 
 2. **Generic `credential_catalogue_updated` broadcast.** The plugin
    emits this event after every state change. The frontend's
    existing handler in
    [`WebSocketContext.tsx`](../client/src/contexts/WebSocketContext.tsx)
-   (`case 'credential_catalogue_updated'`, line 1007) invalidates the catalogue query; the modal refetches
+   (`case 'credential_catalogue_updated'`) invalidates the catalogue query; the modal refetches
    and re-renders. **No new broadcast type, no Zustand entry, no
    `case '<provider>_status'`.** Frontend has zero references to any
    CLI-managed plugin's name.
@@ -1337,8 +1444,10 @@ project that publishes pre-built binaries via GitHub releases.
 | Concern | Framework integration | Plugin contribution |
 |---|---|---|
 | HTTP webhook ingress | `routers/webhook.py` consults `WEBHOOK_SOURCES` registry | `register_webhook_source(MySource())` |
-| Event dispatch into workflows | `event_waiter.dispatch(source.type, event)` from `WebhookSource.handle` | provider-specific `shape()` returning `WorkflowEvent` |
-| Trigger waiting + filtering | `WebhookTriggerNode.build_filter` (CloudEvents glob) | optional `_extra_filter(params)` |
+| Event dispatch into workflows | `event_waiter.dispatch(event)` from `WebhookSource.handle` (canvas Run, and a deploy that runs without Temporal) | provider-specific `shape()` returning `WorkflowEvent` |
+| Deployed delivery (Temporal) | `services.events.dispatch.emit` discovers consumers through Visibility and sends `on_event` Signals; controlled deployments queue/filter in `WorkflowControlWorkflow`, separate listeners are compatibility paths | `register_canary_trigger_type(node_type, <the envelope type>)` + an `emit` of each envelope (Stripe: `_events.emit_stripe_event`, called from `handle`) |
+| Trigger waiting + filtering | `WebhookTriggerNode.build_filter` (CloudEvents glob); both callers pass the envelope's `data` | override `build_filter` to read the payload (the base rebuilds an envelope from it and raises); `_extra_filter(params)` only on top of the base |
+| Deploy-time setup | `DeploymentManager._prepare_trigger_deployment` calls the trigger class's `prepare_deployment` at Start and at the boot re-arm; a raise is logged and the trigger armed anyway | optional `prepare_deployment(node_id=, workflow_id=, parameters=)` classmethod (Stripe starts `stripe listen` in a background task) |
 | Daemon lifecycle | `DaemonEventSource.start/stop/restart` via `ProcessService` | `build_command(secrets)` + `parse_line(stream, line)` (subscribed via `ProcessService.start(line_handler=...)` — no log-file tailing) |
 | Daemon credential gate | `DaemonEventSource.start` consults `await self.has_credential()` before spawning | optional override when auth is non-api-key (Stripe → `is_logged_in()`); default tests `secrets["api_key"]` |
 | Lifecycle WebSocket commands | `make_lifecycle_handlers(prefix, source, extra=…)` | provider-specific extra handlers |
@@ -1349,6 +1458,20 @@ project that publishes pre-built binaries via GitHub releases.
 | Skill (LLM teaching markdown) | `server/skills/<agent>/<skill-name>/SKILL.md` (auto-discovered by `SkillLoader`) | the markdown itself, plus the linkage in `visuals.json` (`"<nodeType>": { ..., "skill": "<skill-name>" }`) |
 | Connection state surfaced to the modal (CLI-managed auth) | `auth_service.store_oauth_tokens(provider, "cli-managed", "cli-managed")` + `StatusBroadcaster.broadcast_credential_event` (CloudEvents v1.0 envelope wrapping `WorkflowEvent`; locked by `tests/credentials/test_credential_broadcasts.py`) | `_mark_logged_in` / `_mark_logged_out` helper pair; one `broadcaster.broadcast_credential_event("credential.oauth.connected", provider="<id>")` after login and `…disconnected` after logout. Same shape Twitter / Google logout use. |
 | Auto-install of an external CLI binary | `_install.py` with `ensure_<cli>_cli()` + GitHub-releases asset map | pinned `_VERSION` constant, `(system, machine) -> (asset, kind, member)` table, and an override on `DaemonEventSource.start()` that `await`s the helper before `super().start()` (also set `binary_name = ""` to skip the framework's `shutil.which` pre-check) |
+
+Use a stable provider event ID when the complete identity is available and
+preserve it on redelivery; otherwise retain the random envelope fallback.
+The controller borrows durable pending-key, deduplication, and rollover
+practices from the Event Accumulator pattern while preserving immediate
+per-event processing. Accepted Signals queue while stopped, including across
+overflow spill and Continue-As-New. Consumer discovery and delivery errors
+remain best effort before Signal acceptance; there is no producer outbox or
+external exactly-once guarantee. Same-label/type trigger Workflow-ID collisions
+remain a known naming limit. See
+[Node creation: event identity and delivery](./node_creation.md#event-identity-and-delivery-contract),
+[Workflow control](./temporal-workflow-control.md),
+[Event Accumulator](https://docs.temporal.io/design-patterns/event-accumulator),
+and [Workflow messaging](https://docs.temporal.io/design-patterns/workflow-messaging-patterns).
 
 ### Tool / skill / visuals naming contract
 

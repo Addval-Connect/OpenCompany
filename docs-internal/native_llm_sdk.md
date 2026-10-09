@@ -99,19 +99,21 @@ Source of truth for this list: `server/config/llm_defaults.json` (the `providers
 
 ### Provider / model reference table
 
-`ModelRegistryService` (`server/services/model_registry.py`) manages the per-model constraints below — fetching from OpenRouter for cloud models and from the user's running local server (`ollama.AsyncClient.ps()` / `lmstudio.AsyncClient.llm.list_loaded()`) for Ollama / LM Studio. Falls back to `llm_defaults.json` only when neither source is available.
+`ModelRegistryService` (`server/services/model_registry.py`) manages the per-model constraints below — fetching from OpenRouter for cloud models and from the user's running local server (`ollama.AsyncClient.ps()` / `lmstudio.AsyncClient.llm.list_loaded()`) for Ollama / LM Studio, and — for a named endpoint — from the server itself or LiteLLM's model table at save time (see [Named OpenAI-compatible endpoints](#named-openai-compatible-endpoints)). Falls back to `llm_defaults.json` only when none of these has a figure. Kimi and Mistral always use the fallback: the registry files their models under `moonshotai/` and `mistralai/`, which never match those provider names, so their `llm_defaults.json` maps are what requests are sized by.
+
+The curated lists and figures in `llm_defaults.json` and `pricing.json` take the OpenRouter snapshot (`config/model_registry.json`) as their ground truth for every provider it lists, with two exceptions noted in those files: Kimi and Mistral keep max-output budgets below the registry's caps, since those caps (about 80-90% of each window) are what `resolve_max_tokens` would send, and Mistral keeps its `-latest` aliases as keys. The hosts (Groq, Cerebras, Sarvam) are not in the snapshot.
 
 | Provider | Key Models | Context | Max Output | Thinking | Temp Range |
 |----------|-----------|---------|-----------|----------|------------|
-| **OpenAI** | GPT-6 Astra (+ `-pro`), GPT-5.6 Sol/Terra/Luna (+ `-pro`; default `gpt-5.6-sol`), GPT-5.5/5.4 | 1.05M | 128K | effort | omitted for reasoning models |
+| **OpenAI** | GPT-6 Sol/Luna/Astra (+ `-pro`; default `gpt-6-sol`), GPT-5.6 Sol/Terra/Luna (+ `-pro`), GPT-5.5/5.4 | 1.05M | 128K | effort | omitted for reasoning models |
 | **OpenAI** | GPT-4.1 | ~1.05M | 32K | none | 0-2 |
-| **Anthropic** | Claude Opus 5 (default `claude-opus-5`), Fable 5.1 / 5, Sonnet 5 | 1M | 128K | adaptive | omitted (`temperature` / `top_p` / `top_k` rejected — `sampling_params_removed`) |
+| **Anthropic** | Claude Opus 5.5 (default `claude-opus-5-5`), Opus 5, Fable 5.1 / 5, Sonnet 5.5 / 5 | 1M | 128K | adaptive | omitted (`temperature` / `top_p` / `top_k` rejected — `sampling_params_removed`) |
 | **Anthropic** | Claude Opus 4.8/4.7 | 1M | 128K | adaptive | omitted (`sampling_params_removed`) |
 | **Anthropic** | Claude Sonnet 4.6 | 1M | 128K | budget | 0-1 |
 | **Anthropic** | Claude Haiku 4.5 | 200K | 64K | budget | 0-1 |
 | **Google** | Gemini 3.8-flash (default), 3.7/3.6/3.5-flash, 3.5-flash-lite, 3.1-pro-preview/flash-lite, 3-flash-preview, 2.5-pro/flash/flash-lite | 1M | 64K | budget (`thinking_level` on 3.x when set explicitly) | 0-2 |
-| **xAI** | Grok 4.20/4.20-multi-agent, 4.6, 4.5, 4.3, 3 | 131K-1M | 131K | model/provider dependent | 0-2 |
-| **DeepSeek** | deepseek-flash (default; V4.1-Flash), deepseek-v4.1-flash, deepseek-v4-pro (deepseek-v4-flash is a retired alias served by V4.1-Flash; chat/reasoner discontinued) | 1M | 384K | thinking modes | 0-2 |
+| **xAI** | Grok 4.20/4.20-multi-agent, 4.3, 4.7, 4.6, 4.5 | 500K-2M | 450K-1.8M | model/provider dependent | 0-2 |
+| **DeepSeek** | deepseek-v4.1-flash (default), deepseek-v4-pro, deepseek-v4-flash | 1M | ~944K (V4.1 Flash); 384K (V4 Pro); 131K (V4 Flash) | thinking modes | 0-2 |
 | **Kimi** | kimi-k3 (default), kimi-k2.6, kimi-k2.7-code (+ `-highspeed`) | 1M (K3); 256K (K2) | 131K (K3); 32K/96K (K2) | K2 provider default explicitly disabled unless requested | K2 fixed 0.6; K3 0-1 |
 | **Mistral** | mistral-large/medium/small-latest (Large 3 / Medium 3.5 / Small 4), codestral-latest | 256K | 32K-131K | none | 0-1.5 |
 | **Groq** | GPT-OSS-120b/20b, Llama 3.x tiers, qwen3.8-27b + minimax-m2.7 (preview) | 131K-196K | 16K-131K | effort (GPT-OSS), format (Qwen3) | 0-2 |
@@ -210,6 +212,7 @@ class LLMProvider(Protocol):
         max_tokens: int = 4096,
         thinking: Optional[ThinkingConfig] = None,
         tools: Optional[List[ToolDef]] = None,
+        on_event: Optional[StreamSink] = None,
     ) -> LLMResponse: ...
 
     async def fetch_models(self, api_key: str) -> List[str]: ...
@@ -233,6 +236,60 @@ class LLMResponse:
 `assistant_message` is the durable source of truth. The flat `content`,
 `thinking`, and `tool_calls` fields remain convenience views; `raw` is never
 written to memory or Temporal history.
+
+### Streaming (`on_event`)
+
+`chat()` takes an optional `on_event: StreamSink`, an async callable that
+receives each `StreamEvent(kind, delta)` (`kind` is `text` or `reasoning`) while
+the response is written. Streaming never changes the response: the provider
+still returns the whole `LLMResponse` it would have returned without a sink,
+and the text deltas, joined, are its `content`. The chat answer of an employee
+streams this way (see [Chat Protocol](./chat_protocol.md)).
+
+A provider streams only when its `llm_defaults.json` block declares
+`"streaming": true` (today `anthropic` and `openai`); `ChatUnifier._streams`
+reads the flag, so no code branches on a provider name. For every other
+provider the unifier calls `chat()` without a sink and replays the finished
+response into it (reasoning, then text), so a caller sees the same events
+either way, only later. How each declared provider streams:
+
+- **Anthropic** iterates the `messages.stream(...)` context it already opened
+  (`text` and `thinking` events), then takes `get_final_message()` as before.
+- **OpenAI chat completions** call `create(stream=True, stream_options=
+  {"include_usage": True})` and fold the chunks with the SDK's own
+  `ChatCompletionStreamState`, whose `current_completion_snapshot` is parsed
+  exactly like a non-streamed completion (the `.stream()` helper is not used:
+  it insists on strict tools and raises on `length`).
+- **OpenAI Responses** call `responses.create(stream=True)`, send
+  `response.output_text.delta` and `response.reasoning_summary_text.delta`, and
+  return the terminal event's `response` (`completed`, `incomplete` or
+  `failed`); a stream that ends without one raises a retryable connection error.
+
+Turning streaming on for another provider means declaring the flag after a
+recorded-stream test shows its response is unchanged (`tests/llm/test_streaming.py`).
+None has a recording yet. Each needs one stream recorded with a real key (a
+request with tool calls and, where the model reasons, reasoning on). Checked
+against each vendor's docs (2026-10-04), this is what stands in the way:
+
+- **Gemini** (`generate_content_stream`): its thinking guide says a client must
+  send thought parts back exactly as received, and a stream arrives as text
+  fragments, with the signature possibly on a part of its own. The streamed
+  parts therefore cannot be folded into the parts the plain call returns
+  (`content` joins parts with a newline; tool-call ids fall back to the part's
+  index), and keeping them as received changes `provider_state`. A recording
+  decides between merging them and relaxing the contract for `provider_state`.
+- **OpenRouter** (an `OpenAIProvider`): streamed `reasoning_details` entries
+  carry `index` only optionally and repeat `id` and `format` in every delta. The
+  SDK's accumulator fails on an entry without `index` and joins repeated
+  strings ("anthropic-claude-v1anthropic-claude-v1"), which would corrupt the
+  details replayed on the next tool turn. It needs its own fold first.
+- **OpenAI-compatible providers** go through the same chat-completions path and
+  need `stream_options.include_usage`, or the response would report no usage.
+  DeepSeek documents it, along with `reasoning_content` deltas, and is the
+  nearest. Groq's reference does not say where streamed usage goes (top-level
+  or `x_groq.usage`). For Mistral, Kimi, Cerebras, xAI and Sarvam, the docs
+  read did not settle it either. A user-named endpoint (`openai_compatible`)
+  can be any server, so it does not stream.
 
 ## Registry, Unifier, and Lazy SDK Clients
 
@@ -260,6 +317,39 @@ also owns error translation: typed SDK exceptions (resolved lazily from
 with a user-correctable message. There is no per-provider branch anywhere
 in `ai.py`.
 
+Agent execution preserves typed `LLMError` metadata until the runtime boundary.
+For Gemini, `google.rpc.RetryInfo.retryDelay` in the SDK exception's `details`
+sets the minimum wait (the larger of it and `Retry-After`); native retries must
+not shorten this to their fallback backoff cap. Minute throttles and generic
+`RESOURCE_EXHAUSTED` capacity responses remain retryable. A `QuotaFailure`
+with a daily quota ID or an explicit zero quota, and depleted billing credits,
+pause for user action with safe recovery guidance. A 500 `INTERNAL` remains
+a transient server failure, not evidence of exhausted quota.
+
+Temporal owns retries for agent LLM steps (SDK and native retries are disabled).
+The activity publishes `retry_wait` with a safe message and scheduled delay to
+the workflow-scoped node status; each new attempt clears it with `llm_step`.
+Canvas and Talk show automatic retries, and Talk does not time out a reply
+while Temporal is waiting to retry. Status delivery is best effort and must
+never cause a successful model request to be repeated.
+
+Across providers, an HTTP 429 remains a throttle even when its message
+mentions an API key. Structured billing codes require user action; incidental
+message text cannot turn a throttle or server outage into authentication
+failure. Retry pacing accepts seconds, HTTP-date `Retry-After`,
+`retry-after-ms`, and Gemini `RetryInfo`, using the longest valid hint.
+Invalid, zero, or unrepresentable waits use exponential backoff. Native
+agent retries start at five seconds; Temporal retains its durable retry
+policy and cancellation behavior.
+
+SDK HTTP transport errors use this same boundary. OpenAI Responses failures
+in a successful HTTP body or `response.failed` event are classified before
+recording any output; valid max-token incomplete responses remain supported.
+Failed streamed attempts are withdrawn immediately, while an owner's Stop
+keeps the intentionally saved partial reply. Planned Temporal retries log
+a warning with activity context instead of a runtime traceback; terminal
+quota, credential, and unexpected programming failures keep their tracebacks.
+
 The legacy `factory.py` (`create_provider` / `is_native_provider` /
 `NATIVE_PROVIDERS`) was **removed** — `ChatUnifier` + `registry.py` is the
 only dispatch layer.
@@ -285,7 +375,7 @@ Adding a new OpenAI-compatible provider requires a config entry:
 
 ```json
 "deepseek": {
-  "default_model": "deepseek-flash",
+  "default_model": "deepseek-v4.1-flash",
   "detection_patterns": ["deepseek"],
   "models_endpoint": "https://api.deepseek.com/models",
   "base_url": "https://api.deepseek.com",
@@ -352,11 +442,11 @@ Each provider's `chat()` method reads only the fields it supports. The extracted
 
 | Provider | Models | Parameter | Thinking Type | Notes |
 |----------|--------|-----------|---------------|-------|
-| **Claude** (adaptive) | `claude-opus-5`, `claude-fable-5*`, `claude-mythos-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7` (`adaptive_thinking_models`, prefix-matched) | `thinkingEnabled` only — the budget is ignored | adaptive | Sends `{"type":"adaptive","display":"summarized"}` when enabled; when disabled the field is omitted (`disabled` is itself rejected on Fable/Mythos). `budget_tokens` is a 400 on these generations. No `temperature` / `top_p` / `top_k` is sent at all (`sampling_params_removed`). `anthropic.py:72-92`. |
+| **Claude** (adaptive) | `claude-opus-5*`, `claude-fable-5*`, `claude-mythos-5`, `claude-sonnet-5*`, `claude-opus-4-8`, `claude-opus-4-7` (`adaptive_thinking_models`, prefix-matched) | `thinkingEnabled` only — the budget is ignored | adaptive | Sends `{"type":"adaptive","display":"summarized"}` when enabled; when disabled the field is omitted (`disabled` is itself rejected on Fable/Mythos). `budget_tokens` is a 400 on these generations. No `temperature` / `top_p` / `top_k` is sent at all (`sampling_params_removed`). `anthropic.py:72-92`. |
 | **Claude** (budget) | `claude-sonnet-4-6`, `claude-haiku-4-5` and older 4.x/3.5 | `thinkingBudget` (1024-16000 tokens) | budget | `{"type":"enabled","budget_tokens":N}`; provider bumps `max_tokens` to `budget + 1024` if it is not already larger. Temperature auto-set to 1. |
 | **Gemini** | gemini-3.x, gemini-2.5-pro/flash | `thinkingBudget` (token count); `thinkingLevel` on 3.x when set explicitly | budget | Uses `thinking_budget` API parameter (`thinking_level` only when the user set it — Vertex rejects an unsolicited level on 2.5-era models) |
 | **OpenAI** | `o3`, `o4-mini` (reasoning-only; both on the API-shutdown path per `_models_note`, `o1`/`o3`/`o4` prefixes still detected) | `reasoningEffort` (low/medium/high) | effort | Reasoning-only models. Temperature omitted. |
-| **OpenAI** | GPT-5.6 sol/terra/luna (+ `-pro`), GPT-5.5, GPT-5.4 (`thinking_models: ["gpt-5"]`) | `reasoningEffort` (low/medium/high/xhigh) | effort | Hybrid reasoning: can operate with or without thinking. |
+| **OpenAI** | GPT-6 sol/luna/astra and GPT-5.6 sol/terra/luna (+ `-pro`), GPT-5.5, GPT-5.4 (`thinking_models: ["gpt-5", "gpt-6"]`) | `reasoningEffort` (low/medium/high/xhigh) | effort | Hybrid reasoning: can operate with or without thinking. |
 | **Groq** | qwen/qwen3.8-27b (`thinking_models: ["qwen3"]`, prefix match) | `reasoningFormat` ('parsed' or 'hidden') | format | 'parsed' returns reasoning, 'hidden' returns only final answer. GPT-OSS models on Groq use `reasoning_effort` instead (`openai.py:671-675`). |
 | **Cerebras** | none — `thinking_models` is empty since zai-glm-4.7 left the public endpoints (2026-09) | `thinkingBudget` | budget | Would be sent as `extra_body.thinking_budget` (`openai.py:111-114`) if a thinking model were curated again. The qwen-3-235b variants are shut down upstream. |
 
@@ -422,7 +512,7 @@ def resolve_max_tokens(params: dict, model: str, provider: str) -> int:
     return model_max
 ```
 
-Paired with `ModelRegistryService` (`server/services/model_registry.py`), which loads `model_registry.json` (cached from OpenRouter's `/api/v1/models` endpoint) and falls back to `llm_defaults.json` for unknown models. The registry is the single source for:
+Paired with `ModelRegistryService` (`server/services/model_registry.py`), which loads `model_registry.json` (cached from OpenRouter's `/api/v1/models` endpoint) plus the models registered from the user's own servers (`DATA_DIR/local_models.json`; they win lookups), and falls back to `llm_defaults.json` for unknown models. LiteLLM's table (`DATA_DIR/litellm_models.json`) is read only when a generic endpoint is saved; its figures reach lookups through those registered entries. The registry is the single source for:
 
 - `max_output_tokens`
 - `context_length`
@@ -594,3 +684,14 @@ those encoders land, so bytes are never hydrated only to be dropped.
 Text-only providers keep the `visionAnalyze` delegate tool as their vision
 path (see [data_node.md](data_node.md)). Locked by
 `tests/llm/test_media_blocks.py`.
+
+**Images in the owner's message** (October 2026): images the owner attaches to
+a chat message ride the opening user message as the same ref-only blocks
+(`media.image_blocks`; [chat_protocol.md → Attachments](chat_protocol.md#attachments)).
+They have their own gate, `vision.user_images` (`provider_supports_user_images`),
+because their encoders came first: Anthropic puts image blocks ahead of the
+text, OpenAI sends `image_url` parts (a data URL) on Chat Completions and
+`input_image` parts on Responses, Gemini sends `inline_data` parts. A provider
+without the flag reads the user message with each image named and its
+workspace path, so the employee can open it with a tool. Tool-result images
+keep `vision.enabled`. Locked by `tests/llm/test_user_images.py`.

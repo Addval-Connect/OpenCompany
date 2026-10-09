@@ -3,10 +3,16 @@
 The `canvas` node is the platform's viewing surface — the Claude/ChatGPT-Canvas
 analog. Agents and workflow runs push content onto a per-node **board**
 (workspace file references, external URLs, small markdown notes), and the
-board renders in two hosts that share one renderer: the node's full-height
-parameter panel, and a **docked, resizable right-side sidebar** that stays
+board renders in three hosts that share one renderer: the node's full-height
+parameter panel, a **docked, resizable right-side sidebar** that stays
 open while working on the graph, auto-opens when content is pushed, and
-doubles as the click-to-preview surface for workspace files.
+doubles as the click-to-preview surface for workspace files, and the Canvas
+tab of Home's Workspace dock.
+
+The Dev dock now shares Home's Browser / Canvas / Android workspace tabs.
+Canvas retains its board and file-preview behavior; live Chrome sessions use
+the separate [Browser workspace](./browser_workspace.md) surface. URL items
+on a Canvas still render as sandboxed iframe previews, not browser sessions.
 
 Everything here composes existing patterns; the doc records which one each
 piece copies and the few places where a *new* decision had to be made (the
@@ -113,11 +119,28 @@ lone op regardless of `parameters["operation"]`). Item sources, in order:
 An empty call raises `NodeUserError("Nothing to display — pass paths, url,
 or content …")` so the LLM gets a one-line correctable error.
 
+**Revising an item** (`update_id`): with the id of an item already on the
+board (from an earlier result's `added`), the call's one item (one path,
+url or content, of the same kind) becomes that item's next version instead
+of a new item; `mode` is ignored. More than one item, another kind, or an
+id this board does not hold is a `NodeUserError`. The result is `{message,
+revision, added: [{id, kind, title, version}]}`. An update keeps the title
+unless the call passes one.
+
 **Output payload discipline**: the op returns `{message, count, revision,
 added: [{id, kind, title}]}` — ids and counts only, never note bodies and
 never echoed refs, because a node result is persisted three ways, broadcast,
 retained in the status cache, copied into downstream activity inputs, and
 replayed into LLM context every turn.
+
+**Documents in the chat**: when the call comes from the agent answering the
+owner's chat (`ctx.raw["chat_stream"]` is set), each note it writes or
+revises is named on that reply through `services.chat.parts.show_artifact`
+as `{workflow_id, canvas_node_id, item_id, version, title, format}` (title:
+the call's, else the note's first line; format `code` when a language is
+given). The reply shows it as a document card that opens the board on the
+item at that version ([chat_protocol.md](./chat_protocol.md)). Files and
+URLs are not named. Best effort: the board has the item either way.
 
 `source` labeling (`"agent"` vs `"workflow"`) keys on `_tool_config` being
 present in `ctx.raw` — `execute_as_tool` sets it around the op body and
@@ -141,12 +164,25 @@ schema description the model reads. Boundary coercions:
 ### The store — [`_store.py`](../server/nodes/tool/canvas/_store.py)
 
 Plugin-owned tables, mount_store mechanism: importing the plugin registers
-`CanvasBoard` (`canvas_boards`: board id, identity columns, `revision`) and
+`CanvasBoard` (`canvas_boards`: board id, identity columns, `revision`),
 `CanvasItemRow` (`canvas_items`: kind/title/`ref` JSON/url/`content`
-Text/language/source/position) into SQLModel metadata before
-`Database.startup()`'s `create_all`; `ensure_schema()` (per-engine set +
-lock + `checkfirst=True`) covers late importers. No migration framework, no
+Text/language/source/position/`version`/`updated_at`) and
+`CanvasItemVersion` (`canvas_item_versions`: one row per version of an item,
+the current one too) into SQLModel metadata before `Database.startup()`'s
+`create_all`; `ensure_schema()` (per-engine set + lock + `checkfirst=True`)
+covers late importers, and adds `version` / `updated_at` to a
+`canvas_items` table saved before items had versions (`PRAGMA table_info` +
+`ALTER TABLE`, existing items become version 1). No migration framework, no
 `core/database.py` edits.
+
+**Versions**: an item starts at version 1; `update(scope, item_id, item)`
+saves the next one (same kind) and bumps `revision`. Each item keeps its
+newest `CANVAS_MAX_VERSIONS = 50` versions. Removing an item, clearing the
+board, a `replace` and FIFO eviction drop the item's versions with it.
+`versions(scope, item_id)` lists them newest first (`{item_id, versions:
+[{version, title, created_at, source, size_bytes}], latest}`);
+`version(scope, item_id, n)` returns one in the item's wire shape plus
+`latest`.
 
 Scope is `CanvasScope(owner_id, workflow_id, node_id)` with the
 `"unsaved"` workflow fallback; the board id is
@@ -162,7 +198,8 @@ Every mutation is one transaction that bumps `revision`. Caps:
 
 ### Panel WS handlers — [`_handlers.py`](../server/nodes/tool/canvas/_handlers.py)
 
-`canvas_list` / `canvas_remove` / `canvas_clear`, all `@ws_response` (never
+`canvas_list` / `canvas_remove` / `canvas_clear` / `canvas_version` (the last
+reads one saved version of an item), all `@ws_response` (never
 `@ws_handler` — a user-correctable failure must be one WARN line, not an
 ERROR with a traceback), self-registered via `register_ws_handlers` from the
 package `__init__`. Security preamble copied verbatim from simple_memory:
@@ -213,6 +250,8 @@ interface CanvasItem {
   language: string | null;
   source: 'agent' | 'workflow' | string;
   created_at: string | null;
+  version: number;                // 1, then one more per update
+  updated_at: string | null;      // the last update
 }
 ```
 
@@ -221,15 +260,16 @@ interface CanvasItem {
 | `canvas_list {workflow_id, node_id}` | `{success, items: CanvasItem[], revision}` |
 | `canvas_remove {workflow_id, node_id, item_id}` | `{success, removed, revision}` + broadcast |
 | `canvas_clear {workflow_id, node_id}` | `{success, cleared, revision}` + broadcast |
+| `canvas_version {workflow_id, node_id, item_id, version}` | `{success, item: CanvasItem-at-that-version & {latest}}` |
 | broadcast `canvas_updated` | `{type: 'canvas_updated', data: <WorkflowEvent>}`, data.data = `{workflow_id, node_id, revision}` |
-| tool `canvas(title?, paths?, url?, content?, language?, mode)` | flat schema, no `$defs`; `mode: 'append' \| 'replace'` |
+| tool `canvas(title?, paths?, url?, content?, language?, mode, update_id?)` | flat schema, no `$defs`; `mode: 'append' \| 'replace'`; `update_id` revises an item |
 
 Client-side types + query keys live in
 [`client/src/lib/canvasBoard.ts`](../client/src/lib/canvasBoard.ts):
 `canvasBoardQueryKey(workflowId ?? 'unsaved', nodeId)` (todoQuery shape),
 prefix `['canvasBoard']` for broadcast-driven invalidation.
 
-## Frontend — two hosts, one renderer
+## Frontend — three hosts, one renderer
 
 ### Hosts
 
@@ -253,6 +293,20 @@ prefix `['canvasBoard']` for broadcast-driven invalidation.
   string), ephemeral "Preview" badge + Back, close. TopToolbar carries the
   toggle button (Monitor icon, `aria-pressed`, action-tools tokens),
   reading the dock store directly — the state is not Dashboard's to thread.
+- **[`WorkspaceCanvas.tsx`](../client/src/features/home/workspace/WorkspaceCanvas.tsx)**
+  — the Canvas tab of Normal mode's Workspace dock
+  ([normal_mode.md](./normal_mode.md#the-workspace)). It shows one
+  employee's board, named by the employee summary's `canvas_node_id`,
+  loads lazily so the renderer's viewers stay out of Home's chunk, and
+  passes an owner-facing empty hint. Hires get a Canvas node from the
+  Hire builder.
+
+A document card in a chat reply opens its item through the host:
+`homeStore.openCanvasItem` (Home: opens the Workspace on that employee's
+Canvas tab, `workspaceFocus`) and `canvasDockStore.focusItem` (the editor's
+chat: opens the dock on that node's board, `focus`; only for the open
+workflow). Both pass a focus request `{itemId, version, nonce}` to the
+renderer; a new nonce asks again for the same item.
 
 ### Dock state — [`stores/canvasDockStore.ts`](../client/src/stores/canvasDockStore.ts)
 
@@ -287,11 +341,29 @@ back; navigating onto the last item resumes following). Arrow/Home/End keys
 work on the focused `role="group"` only — no document-level listeners,
 which would fight React Flow node nudging.
 
-**Follow-latest** (the browser-automation live view): when the active item
+**Focus**: `focus` (a reply's document card) pins its item once the item is
+on the board (it waits for a board that has not caught up yet), and holds
+it while newer items arrive, until the user moves to another item. `nodeId`
+names the board's Canvas node, which a note's earlier versions are read
+from.
+
+**Notes as documents**
+([`NoteView.tsx`](../client/src/components/parameterPanel/canvas/NoteView.tsx)):
+a note shows with a header: the version stepper ‹ v2/3 › (when it has more
+than one version and the host gave a `nodeId`; an earlier version is read
+once through `canvas_version` and cached, read-only), Preview or Markdown
+(the source in a `pre`), Copy, and Download as a `.md` file (a blob named
+after the title and version). A newer version arriving shows itself unless
+the user stepped back to an earlier one; a focus request opens it at its
+version.
+
+**Follow-latest** (workspace image polling): when the active item
 is a workspace image, a Switch enables a visibility-gated 5 s poll of the
 existing `list_workspace_files` handler on the image's folder, rendering the
 newest image entry in place — zero new backend. Persisted as the dock's
-`followMode` pref.
+`followMode` pref. This is separate from the native Chrome stream in the
+[Browser workspace](./browser_workspace.md), which supports live input and
+explicit takeover without polling screenshot files.
 
 Renderer dispatch is a pure function
 ([`canvasKinds.ts`](../client/src/components/parameterPanel/canvas/canvasKinds.ts)),
@@ -300,7 +372,7 @@ text tiers:
 
 | Verdict | Condition | Renders |
 |---|---|---|
-| `note` | `kind === 'note'` | ReactMarkdown prose (no fetch) |
+| `note` | `kind === 'note'` | `NoteView`: ReactMarkdown prose or the source, versions, Copy, Download (no fetch for the latest) |
 | `web-external` | `kind === 'url'` | sandboxed iframe (below) |
 | `media-image/video/audio` | mime prefix or ref.kind | native element, FilePreviewDialog's honest-fallback idiom |
 | `pdf` | `application/pdf` / `.pdf` | plain same-origin iframe (browser viewer) |
@@ -356,14 +428,14 @@ truncation), `browserHarness` an absolute path under
 The shared helper lands the bytes in the workflow workspace via
 `write_media(kind="image")` so a screenshot becomes a ~400 B `FileRef`:
 
-- `persist_screenshot_from_payload(data, ctx, fmt)` (the `browser` node's
-  `screenshot` op): probes the known inline-base64 keys (only `"base64"` is
-  evidenced in-repo; the rest are tolerated probes) then saved-file-path
-  keys, returns `(ref, consumed_key)` so the caller drops exactly the bulky
-  field from the payload.
-- `persist_screenshot_file(path, ctx, contained_under)` (the harness
-  `screenshot` op): reads **only** files contained under the harness runtime
-  dir — printed process output is not a licence to read arbitrary files.
+- `persist_screenshot_file(path, ctx, contained_under)` is the current native
+  `browser` screenshot path. The CLI writes a temporary PNG in its profile's
+  temporary directory; the node copies it into the workspace, returns it in
+  `BrowserOutput.screenshot`, then removes the temporary file. Reads must stay
+  within that supplied directory.
+- `persist_screenshot_from_payload(data, ctx, fmt)` remains a legacy payload
+  helper with tests for inline-base64 and saved-file-path shapes. It is not
+  the current native node's screenshot dispatch path.
 
 **Tolerance is the contract**: an unrecognized payload shape, a missing
 workspace, or a write failure logs one warning and returns `None`; the
@@ -379,7 +451,7 @@ browser operation itself never breaks over persistence. Sanity bounds
 | `server/config/node_allowlist.json` | `"canvas"` in `enabled_nodes` | Normal-mode palette visibility (positive list) |
 | `server/tests/test_node_spec.py` | `"isCanvasPanel"` in the uiHints `known` set | The test's own failure message instructs this |
 | `server/services/media/preview.py` + `server/tests/routers/test_workspace.py` | `INLINE_EXACT` / `"pdf"` | The PDF surface; `NEVER_INLINE` untouched |
-| `server/nodes/browser/{browser,browser_harness}/__init__.py` | screenshot post-process | Plugin-folder edits of the browser plugins |
+| `server/nodes/browser/browser/__init__.py` | screenshot post-process | Current native Browser plugin; the separate harness plugin is retired |
 | `client/src/{types/INodeProperties.ts, types/workspaceFiles.ts, components/parameterPanel/MiddleSection.tsx, contexts/WebSocketContext.tsx, Dashboard.tsx, components/ui/TopToolbar.tsx, components/ui/ConsolePanel.tsx, components/parameterPanel/gallery/FilePreviewDialog.tsx}` | hint type, `'pdf'` PreviewKind, panel dispatch, `canvas_updated` case, dock mount, toggle, `usePanelResize` extraction, click-to-preview | The standard new-panel checklist + the dock integration |
 
 Notably **not** edited: `routers/websocket.py`, `main.py`,
@@ -392,14 +464,15 @@ write_todos/simple_memory/gallery before it, are out of its scope).
 
 | Surface | File | Locks |
 |---|---|---|
-| Store | [`server/tests/nodes/test_canvas_node.py`](../server/tests/nodes/test_canvas_node.py) | scope isolation, append/replace + revision monotonicity, FIFO eviction, kind rejection, stable wire key set, note truncation, versioned board id |
-| Display op | same | contained ref build (`../` rejected), url scheme, truncation notice, empty-call `NodeUserError`, connected-outputs scan (near-miss dicts skipped, nested refs found), agent/workflow source labeling, replace mode, output payload discipline |
-| Handlers | same | internal-socket denial, owner mismatch, wrong-node-type, list/remove/clear round trip + broadcast-per-mutation |
+| Store | [`server/tests/nodes/test_canvas_node.py`](../server/tests/nodes/test_canvas_node.py) | scope isolation, append/replace + revision monotonicity, FIFO eviction, kind rejection, stable wire key set, note truncation, versioned board id; versions: update + history + one version, kind and board checks, newest 50 kept, remove/clear/replace/eviction drop them, a board saved before versions gets the columns |
+| Display op | same | contained ref build (`../` rejected), url scheme, truncation notice, empty-call `NodeUserError`, connected-outputs scan (near-miss dicts skipped, nested refs found), agent/workflow source labeling, replace mode, output payload discipline, `update_id` (one item of its kind), notes in a chat run named on the reply (files, URLs and runs without a chat are not) |
+| Handlers | same | internal-socket denial, owner mismatch, wrong-node-type, list/remove/clear round trip + broadcast-per-mutation, versions/version reads and their refusals |
 | Event + schema | same | identity-only envelope (`subject`, type, exact data keys), `as_tool_schema()["name"] == "canvas"`, structurally no `$defs`/`$ref`, locked hints/annotations |
 | Screenshots | [`test_browser_screenshots.py`](../server/tests/nodes/test_browser_screenshots.py) | base64/path/unrecognized shapes, size bounds, missing-workspace tolerance, harness containment |
 | FE dispatch | `canvas/__tests__/canvasKinds.test.ts` | full verdict matrix, mime-over-extension, language override |
-| FE carousel + sandbox | `canvas/__tests__/CanvasContent.test.tsx` | follow-newest vs pinned semantics, keyboard, remove; **sandbox regression**: external iframe exactly `allow-scripts allow-forms`, srcDoc lacks `allow-same-origin` and has no `src` |
-| FE dock store | `stores/__tests__/canvasDockStore.test.ts` | notifyPushed truth table, width clamp, prefs round-trip + corrupt-JSON fallback, session-only fields never persisted |
+| FE carousel + sandbox | `canvas/__tests__/CanvasContent.test.tsx` | follow-newest vs pinned semantics, keyboard, remove; **sandbox regression**: external iframe exactly `allow-scripts allow-forms`, srcDoc lacks `allow-same-origin` and has no `src`; notes: preview/source, version stepper (needs a node), following a newer version unless stepped back, an unreadable version, focus (waits for the item, holds, lets go on navigation), Copy and Download |
+| FE dock store | `stores/__tests__/canvasDockStore.test.ts` | notifyPushed truth table, width clamp, prefs round-trip + corrupt-JSON fallback, session-only fields never persisted, `focusItem` |
+| FE document cards | `features/chat/__tests__/artifacts.test.tsx`, `features/home/__tests__/workspace.test.tsx` | reading and merging a reply's documents, the card, a card streaming in and opening through the host; Home's `openCanvasItem` |
 | FE text fetch | `hooks/__tests__/useWorkspaceText.test.ts` | cap + reader cancel, status error, no-body fallback, cookie + buildApiUrl |
 | FE panel | `__tests__/CanvasPanel.test.tsx` | `canvas_list/remove/clear` round trip, no-workflow guard, denied-listing surfacing |
 

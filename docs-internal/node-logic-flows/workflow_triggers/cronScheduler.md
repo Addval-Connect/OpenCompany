@@ -4,7 +4,7 @@
 |------|-------|
 | **Category** | workflow / trigger / tool (dual-purpose) |
 | **Backend handler** | Plugin [`server/nodes/scheduler/cron_scheduler/__init__.py`](../../../server/nodes/scheduler/cron_scheduler/__init__.py) (`CronSchedulerNode`); dispatch via `BaseNode.execute()` + the `@Operation("trigger")` method. Deployed-workflow cron lifecycle lives in `DeploymentManager` (Temporal Schedules canary via `CronTriggerWorkflow`); this op only runs on a manual / AI-tool invocation. |
-| **Tests** | [`server/tests/nodes/test_workflow_triggers.py`](../../../server/tests/nodes/test_workflow_triggers.py) |
+| **Tests** | [`server/tests/nodes/test_workflow_triggers.py`](../../../server/tests/nodes/test_workflow_triggers.py); the deployed Schedule in [`server/tests/test_cron_canary.py`](../../../server/tests/test_cron_canary.py) |
 | **Skill (if any)** | [`server/skills/task_agent/cron-scheduler-skill/SKILL.md`](../../../server/skills/task_agent/cron-scheduler-skill/SKILL.md) |
 | **Dual-purpose tool** | yes - exposed on the `tool` output handle |
 
@@ -33,12 +33,13 @@ call `event_waiter.register()`.
 | `interval_minutes` | number | `5` | no | frequency == `minutes` | Interval in minutes. |
 | `interval_hours` | number | `1` | no | frequency == `hours` | Interval in hours. |
 | `daily_time` | options | `09:00` | no | frequency == `days` | Display-only in the handler. |
+| `weekday_only` | boolean | `false` | no | frequency == `days` | Deployed daily schedules filter deterministically to Monday–Friday. Generated weekday employee routines set this explicitly; existing schedules and owner edits keep their values. Manual delayed invocation only reports the setting. |
 | `weekday` | options | `'1'` (Mon) | no | frequency == `weeks` | Display-only. |
 | `weekly_time` | options | `09:00` | no | frequency == `weeks` | Display-only. |
 | `month_day` | options | `'1'` | no | frequency == `months` | `1`..`28` or `L`. Display-only in this op. |
+| `monthly_time` | string | `09:00` | no | frequency == `months` | `HH:MM`, the time a monthly schedule runs. Free text, unlike the daily and weekly times. Display-only in this op. |
 | `timezone` | options | `UTC` | no | - | Used in the description string only. |
-| `cron_expression` | string | `0 * * * *` | no | - | Vestigial; kept for backward compatibility, unused by the op. |
-| `monthly_time` | string | `09:00` | no | - | Vestigial; kept for backward compatibility, no displayOptions. |
+| `cron_expression` | string | `0 * * * *` | no | hidden | Never read, by this op or the deployed Schedule. Kept for older workflows and hidden from the panel. |
 
 Note: for `days` / `weeks` / `months` the op hard-codes the wait to 24h
 / 7d / ~30d respectively; the `daily_time` / `weekday` / `weekly_time` /
@@ -81,8 +82,7 @@ flowchart TD
   C --> D[_calculate_wait_seconds<br/>maps frequency to seconds]
   D --> E[get_status_broadcaster.update_node_status 'waiting']
   E --> F[await asyncio.sleep wait_seconds]
-  F -- CancelledError --> G[Return success=false<br/>error: Scheduler cancelled]
-  F -- Exception --> H[Return success=false<br/>error: str e]
+  F -- CancelledError --> G[Raise RuntimeError: Scheduler cancelled<br/>BaseNode returns failed envelope]
   F -- ok --> I[Build result_data: timestamp / iteration=1 / frequency / schedule / waited_seconds]
   I --> J{frequency == 'once'?}
   J -- yes --> K[message: 'Triggered after waiting ...']
@@ -105,8 +105,28 @@ flowchart TD
 - **Once vs recurring**: determines whether `next_run` is added to the
   payload and which `message` template is used. Both branches still return
   `success=True`.
-- **Cancellation / exception**: both produce a failed envelope with
-  `success=False`.
+- **Explicit cancellation**: the operation raises `RuntimeError("Scheduler
+  cancelled")`; `BaseNode.execute` turns that failure into its standard
+  envelope. Cooperative generation Stop does not enter this branch.
+
+## Deployed Stop/Resume boundary
+
+For new controlled generations (`execution_control_version=1`), Stop pauses
+the Temporal Schedule and closes producer admission. A cron firing already
+started enrolls with the controller before graph work and respects its current
+revision; Stop waits for any admitted child-start command's start
+acknowledgement. The spawned `MachinaWorkflow` is `ABANDON` and enrolls as an
+independent root, so it remains controlled after the short cron wrapper exits.
+Already-admitted graph work drains through result bookkeeping. Resume releases
+those existing continuations before producer/schedule admission reopens.
+
+The manual or AI-tool operation above remains one regular Activity when
+dispatched through Temporal. Its interval sleep is part of that Activity;
+Stop waits for it to settle under its existing timeout/retry policy before
+acknowledging Stopped. This differs from the workflow's maintenance/control
+sleeps, which are excluded from the drain count. See
+[Workflow control](../../temporal-workflow-control.md) and
+[Temporal Python Schedules](https://docs.temporal.io/develop/python/schedules).
 
 ## Side Effects
 
@@ -131,6 +151,32 @@ flowchart TD
   The manual-run op does not use any of that - it only sleeps for a fixed
   interval. `daily_time`, `weekday`, `weekly_time`, `month_day`,
   `monthly_time`, and `timezone` are **display-only** in this code path.
+- **The deployed Schedule's cron string** comes from
+  `TriggerManager.build_cron_expression` (`services/deployment/triggers.py`):
+  five fields, or seven (second first, year last) for `seconds`. Temporal
+  reads six fields as minute through year, so the builder never emits six.
+  Temporal has no syntax for two settings, so
+  `services/temporal/schedules.py::cron_schedule_spec` translates them:
+  - `once` becomes `@once`: a Schedule with no times that runs once, when
+    it is created (`trigger_immediately`). Re-creating it when the backend
+    restarts updates it in place, so it does not run again.
+  - `month_day` `L` becomes four calendars: the 31st, the 30th of the
+    30-day months, 29 February, and 28 February in the years that are not
+    leap years. Temporal's calendar years end at 2100, so after 2100
+    February has no last-day run.
+
+  Checked against a real Temporal dev server on 2026-10-01 for every
+  frequency.
+- **The panel shows only fields that change the Schedule.** For each
+  frequency it shows exactly the fields `build_cron_expression` reads,
+  plus `frequency` and `timezone`; a new field or frequency has to keep
+  that true (`test_the_panel_shows_the_fields_the_schedule_reads` in
+  `server/tests/test_cron_canary.py`).
+- **A deployed run's `schedule` output** comes from the deploy path's own
+  copy of the description, `DeploymentManager._get_schedule_description`
+  (services never import a plugin folder). `TestScheduleDescription` in
+  `server/tests/test_cron_canary.py` keeps it reading the same as this
+  node's, `Monthly on the last day at 18:00` included.
 - `iteration` is always `1`. The op does not loop; repeated firings
   come from the deployed Schedule firing per tick (deployment mode).
 - `interval`, `interval_minutes`, `interval_hours` are Pydantic-validated

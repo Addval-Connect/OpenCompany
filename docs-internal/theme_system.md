@@ -36,9 +36,18 @@ client/src/contexts/ThemeContext.tsx
 ├── ThemeName = 'light' | 'dark' | 'renaissance' | 'greek' | 'edo' | 'steampunk'
 │             | 'atomic' | 'cyber' | 'wasteland' | 'rot' | 'plague' | 'surveillance'
 ├── DARK_FAMILY = {dark, cyber, wasteland, rot, surveillance, steampunk}
-├── persists to localStorage['opencompany-theme']
+├── persists the CHOSEN theme to localStorage['opencompany-theme']
 ├── migrates legacy 'darkMode' boolean on first load
-└── sets <html data-theme="..."> + .dark class (only for DARK_FAMILY themes)
+├── sets <html data-theme="..."> + .dark class (only for DARK_FAMILY themes)
+└── baseOnly prop: a chosen stylized theme shows as its family's base
+    (familyBaseTheme: dark family -> dark, else light); `theme` is what is on
+    the page, `chosenTheme` what the user picked
+
+client/src/app/ShellThemeProvider.tsx — sets baseOnly while Home (Normal mode)
+                                        is showing: Home is designed for light and
+                                        dark only, so the stylized themes apply in
+                                        Dev mode (the editor). index.html's
+                                        pre-paint script applies the same rule.
 
 client/src/hooks/useAppTheme.ts        — 10-way Colors overlay (canvas + maps)
 client/src/lib/sound.ts                — WebAudio engine, 10 packs × 9 events
@@ -93,7 +102,7 @@ Surface hierarchy across themes; every theme assigns these in its `:root[data-th
 | `tracking-[var(--type-tracking-display)]` | `--type-tracking-display` | Letter-spacing for display headings |
 | `[text-transform:var(--type-uppercase)]` | `--type-uppercase` | Theme-driven uppercase / capitalize / none |
 
-**Note**: values are hex + `color-mix()`. Tailwind v4 composes `/opacity` via `color-mix` for any colour format, so `bg-bg-app/50` *does* work — but prefer a named token (`--bg-overlay`, a `-soft`/`-tint` variant) over ad-hoc surface alpha.
+**Note**: values are hex + `color-mix()`. Tailwind v4 composes `/opacity` via `color-mix` for any colour format, so `bg-bg-app/50` *does* compile and work (to `color-mix(in oklab, var(--bg-app) 50%, transparent)` behind an `@supports` guard) — but opacity arithmetic at call sites is forbidden by the frontend rules; use a named token (`--bg-overlay`, a `-soft`/`-tint` variant) instead.
 
 ### 2. shadcn semantic tokens (preserved for primitives)
 
@@ -115,7 +124,66 @@ Six tokens for canvas identity: `agent / model / skill / tool / trigger / workfl
 
 `--code-*` — the per-theme syntax palette for the code editor, console/output JSON viewers, and chat code blocks. Each theme defines its own `--code-*` block in its own CSS file (`client/src/themes/<theme>.css`): editor chrome (`--code-bg`, `--code-gutter-bg`, `--code-gutter-fg`, `--code-caret`, `--code-border`, `--code-line-active`, `--code-selection`) + syntax roles (`--code-text`, `--code-comment`, `--code-keyword`, `--code-string`, `--code-number`, `--code-boolean`, `--code-function`, `--code-property`, `--code-operator`, `--code-punctuation`, `--code-tag`). The per-theme `--code-*` blocks in `client/src/themes/*.css` are the only home of this tier (the vendored bundle ships no `tokens/code.css` — the tier postdates it); the skins derive syntax from their own role hues — **keyword→trigger, string→success, number→agent, function→model, tag→tool, comment→faint, punctuation→muted** — on an adaptive dark/light code surface (`color-mix(#000 45%, --bg-panel)` dark, `color-mix(#000 5%, --surface-card)` light).
 
-Consumed as `var(--code-*)` in [index.css](../client/src/index.css) (`.code-editor-container`, `.console-json-output`, the `.chat-markdown` dark overrides) and exposed as Tailwind utilities (`text-code-tag`, `bg-code-bg`, …) via the `@theme inline` bridge; the `OutputPanel` `@uiw/react-json-view` viewer reads the same vars. This **replaced the old global dracula-hardcoded `--prism-*` block and the dead `getPrismTokenCSS()` helper** — code/JSON now paints in each theme's palette instead of one dracula scheme everywhere. (`prismjs` is still the tokenizer; only the colours moved to `--code-*`.)
+Consumed as `var(--code-*)` in [index.css](../client/src/index.css) (`.code-editor-container`, `.console-json-output`, and in chat replies `.chat-markdown pre`, whose surface, text and border are `--code-bg` / `--code-text` / `--code-border` on every theme, plus the `.chat-markdown .token.*` colours shared with the editor) and exposed as Tailwind utilities (`text-code-tag`, `bg-code-bg`, …) via the `@theme inline` bridge; the `OutputPanel` `@uiw/react-json-view` viewer reads the same vars. This **replaced the old global dracula-hardcoded `--prism-*` block and the dead `getPrismTokenCSS()` helper** — code/JSON now paints in each theme's palette instead of one dracula scheme everywhere. (`prismjs` is still the tokenizer; only the colours moved to `--code-*`.)
+
+### Home (Normal mode) tokens
+
+Normal mode ([normal_mode.md](./normal_mode.md)) adds its own steps, all in
+[base.css](../client/src/themes/base.css) unless noted, and bridged in
+`index.css` where a Tailwind utility needs them (the layout and duration
+tokens are used directly, as `w-(--w-home-sidebar)` or `duration-(--dur-slow)`):
+
+- **Motion**: `--ease-spring | overshoot | reveal | shake` and the choreography
+  durations (`--dur-intro`, `--dur-view-swap`, `--dur-panel-in/-out`,
+  `--dur-toast-in/-hold/-out`, `--dur-mode-in/-out`, `--dur-theme-reveal`,
+  `--dur-glow`, `--dur-pip-loop`, `--dur-dock-in` for the Workspace dock,
+  `--dur-shake`, …). Web Animations read them through
+  [lib/motion.ts](../client/src/lib/motion.ts), whose fallbacks mirror
+  base.css. It also holds the onboarding presets: `RISE` / `rise(el)` (up from
+  16px, scale .98, a 4px blur, `card-in` on the spring curve) and `shake(el)`
+  (-6, 5, -3, 2px, each swing on `--ease-shake`). The CSS loops beside them in
+  `animations.css` are `.opencompany-caret-blink` (a hard on/off caret) and
+  `.opencompany-spinner-slow` (the `--dur-live-ring` pace), drawn as a ring by
+  `components/ui/ring-spinner.tsx`; both stop under reduced motion.
+- **Radii**: `--radius-row | card | panel | draft | composer`, multiples of each
+  theme's `--radius-lg`, so square themes stay square. The Tailwind
+  `rounded-sm/md/lg/xl` utilities do not follow themes: `index.css` computes
+  them from `--radius`, which no theme overrides, so they are 4/6/8/12px
+  everywhere. `rounded-pill`, these Home radii and CSS reading
+  `var(--radius-*)` directly do follow the theme.
+- **Type and layout**: `--text-meta | row | lead | title | headline | hero` (with
+  `--tracking-hero`, `--leading-hero`; `headline` is 28px, the onboarding
+  headings), and the Home layout constants (`--w-home-sidebar`,
+  `--h-home-header`, `--w-composer`, the orb slot sizes `--size-orb-hire |
+  employee | connecting | login`, the Settings and Welcome guide dialog sizes
+  `--w-settings`/`--h-settings` and `--w-guide`/`--h-guide`). The guide's demo
+  stage is the `.home-welcome-stage` class in `index.css` (two washes of
+  `--node-agent-fill` and `--node-model-soft` over `--bg-app`).
+- **Status**: `--status-{working,ready,paused,attention,waiting}-{dot,fill,border,ink}`
+  for the employee pills and dots. The dot is the raw role colour; light.css
+  keeps the paused dot at the design's mid grey. `--shadow-pip`
+  (`shadow-pip`) is a dot's glow in its own colour: give the dot a
+  `text-status-*-dot` colour and `bg-current`.
+- **Errors**: `--danger-soft` (15%) and `--danger-border` (45%) tint
+  `--destructive` for an error on a Home surface (`bg-danger-soft`,
+  `border-danger-border`).
+- **Per family** (light.css / dark.css): `--shadow-float | popover | dialog |
+  dock` (`dock` is the Workspace's left shadow when it lies over the page),
+  the node-role `-fill / -edge / -hover / -ink` variants, and Home's glows:
+  `--glow-connect | hire | hire-settle | refine | refine-out | task` plus the
+  working pip's `--tint-pip-ring`. Dark keeps the neon; light swaps each neon
+  for its ink at .75 of the alpha and .6 of the blur, the design's rule for
+  white surfaces. The Web Animations that play them name the token
+  (`boxShadow: 'var(--glow-hire)'`), so the colour follows the theme with no
+  script. dark.css restates each one, because light.css's bare `:root` also
+  matches the dark family.
+
+Home shows only the two base themes: `ThemeProvider`'s `baseOnly` (set by
+`app/ShellThemeProvider.tsx` while Home is showing) renders a chosen stylized
+theme as its family's base, and the pre-paint script in `index.html` applies
+the same rule to the first frame. `setTheme(next, { reveal: true, origin })`
+grows the new theme as a circle from `origin` (View Transitions), falls back
+to a short colour fade, and is instant under reduced motion.
 
 ## Migration recipe
 
@@ -217,7 +285,7 @@ Result by theme (display font / tracking / case):
 2. **Whole-store Zustand destructure.** Always `useAppStore((s) => s.x)`, never `{ x } = useAppStore()`.
 3. **Ad-hoc opacity arithmetic on role/surface tokens.** Don't inline alpha (`bg-bg-app/10`, `bg-node-agent/30`, `bg-action-run/25`). Tailwind v4 *can* now color-mix `/opacity` on hex tokens, but the discipline is to reference a NAMED token: add/define a `-soft` / `-hover` / `-border` variant, or a `--tint-*` step in base.css, and use it by name.
 4. **Hardcoded colours.** No `bg-white`, `bg-black`, `text-gray-500`, `style={{ backgroundColor: '#fff' }}`. Use tokens.
-5. **`useAppTheme()` in new files.** Allowed only for surfaces that need JS-side hex values Tailwind can't express: canvas node components (`AIAgentNode`, `SquareNode`, `TriggerNode`, `StartNode`, `ToolkitNode`, `TeamMonitorNode`), `EdgeConditionEditor`, and the Google Maps SDK consumers (`GoogleMapsPicker`, `MapsPreviewPanel`) — note the map
+5. **`useAppTheme()` in new files.** Allowed only for surfaces that need JS-side hex values Tailwind can't express: canvas node components (`AIAgentNode`, `SquareNode`, `TriggerNode`, `StartNode`), `EdgeConditionEditor`, and the Google Maps SDK consumers (`GoogleMapsPicker`, `MapsPreviewPanel`) — note the map
 tiles themselves are deliberately left to Google's own styling; `useAppTheme` here covers only
 the surrounding chrome. Every other surface uses Tailwind + tokens. New themes contribute to `useAppTheme` via a `THEME_OVERRIDES` entry, never by importing `lightColors` / `darkColors` directly.
 6. **Hand-rolled modal backdrops.** Use `<Modal>` from `client/src/components/ui/Modal.tsx`.
@@ -228,11 +296,11 @@ the surrounding chrome. Every other surface uses Tailwind + tokens. New themes c
 
 ### Done
 - **`--node-pulse-color` contract** — executing-node glow color is independent of `--node-color` (the plugin accent). Each decorated skin overrides `--node-pulse-color` to its highest-contrast accent (light/dark deliberately keep the base.css `var(--info)` fallback) (Cyber neon cyan, Surveillance REC red, Renaissance ultramarine `--lapis-bright`, Atomic turquoise, etc.) so the glow stays visible against any canvas background. Defined in [base.css](../client/src/themes/base.css) at `:root`, overridden in each per-theme file. The executing keyframes (`node-pulse` + per-theme `cyber-pulse-exec` / `surv-pulse-exec` / `ren-pulse-exec`) and the per-theme `--pulse-keyframe` / `--pulse-duration` / `--pulse-timing` tokens live in [animations.css](../client/src/themes/animations.css); base.css's `.sq-node[data-executing] .sq-node-box` / `.react-flow__node.executing .{sq-node-box,node}` rule reads `var(--pulse-keyframe, node-pulse)`, so a theme picks its pulse by overriding ONE token (Cyber → `cyber-pulse-exec`, Surveillance → `surv-pulse-exec`, Renaissance → `ren-pulse-exec`) — no high-specificity per-theme animation rule. `node-pulse` is a triple-layer expanding box-shadow (12px ring + 32px mid halo + 56px outer halo) consuming `var(--node-pulse-color)` + the shared `--tint-pulse-*` alphas. Trigger nodes use a separate continuous `.opencompany-trigger-armed` "listening" heartbeat (`trigger-listening` keyframe) while waiting, plus `.opencompany-bolt` on the ⚡ badge — distinct from the one-shot execution pulse. **Never animate `opacity` on whole-node selectors** — it fades the node icon + content, not just the glow.
-- **`data-page-hidden` animation pause** — [Dashboard.tsx](../client/src/Dashboard.tsx) mounts a `visibilitychange` listener that toggles `data-page-hidden` on `<html>`; [base.css](../client/src/themes/base.css) declares `html[data-page-hidden] *, *::before, *::after { animation-play-state: paused !important; }`. Without this, paused CSS keyframes accumulate frames in the compositor queue while the tab is hidden; on tab return all 50+ executing nodes' triple-layer pulses + Cyber's full-viewport `cyber-flicker` / `cyber-roll` resume simultaneously, stalling the GPU compositor 100-200ms and blocking input dispatch (first-click-feels-frozen pattern). The unpause is deferred via `requestAnimationFrame` so input dispatch wins the frame before composite resumes.
+- **`data-page-hidden` animation pause** — `usePageActivitySync()` ([app/usePageActivitySync.ts](../client/src/app/usePageActivitySync.ts)), mounted once in [App.tsx](../client/src/App.tsx), above the sign-in gate, so it covers every screen (sign-in and Connecting included), listens to `visibilitychange` plus window `blur` / `focus` and toggles `data-page-hidden` on `<html>`; [base.css](../client/src/themes/base.css) declares `html[data-page-hidden] *, *::before, *::after { animation-play-state: paused !important; }`. Without this, paused CSS keyframes accumulate frames in the compositor queue while the tab is hidden; on tab return all 50+ executing nodes' triple-layer pulses + Cyber's full-viewport `cyber-flicker` / `cyber-roll` resume simultaneously, stalling the GPU compositor 100-200ms and blocking input dispatch (first-click-feels-frozen pattern). The unpause is deferred two `requestAnimationFrame` ticks so input dispatch wins the frame before composite resumes.
 - **Parameter panel theme contract** — MasterSkillEditor, OutputPanel, MiddleSection, ParameterPanel removed `useAppTheme()`. Every surface renders against Tailwind tokens + new-contract CSS custom props. Section headers carry the display-typography triplet (`font-display tracking-[var(--type-tracking-display)] [text-transform:var(--type-uppercase)] text-fg-default`); action buttons use `<ActionButton intent="run|stop|save|config|tools">`; backgrounds use `bg-bg-elevated` / `bg-bg-panel` / `bg-bg-input` from the surface tier table above. EditableNodeLabel emits both `sq-node-label` and `node-label` classNames so per-theme typography rules fire under either topology. Per-theme scrollbar webkit rules (`::-webkit-scrollbar-thumb` etc.) declared in all 12 themes — gold (Renaissance), square-cornered (Atomic / Edo / Greek / Wasteland / Plague), metallic (Steampunk), phosphor (Rot), neon (Cyber), REC-red (Surveillance), shadcn neutral (Light / Dark).
-- **Canvas-node class topology alignment** (W26) — TriggerNode, StartNode, ToolkitNode migrated from `.node` (rectangular spec-card) topology to `.sq-node` / `.sq-node-box` (square-icon node) topology so per-theme decorations (Steampunk brass rivets, Edo hanko seal, Surveillance REC LED, Renaissance gold emblem) reach them. Status pips, gear buttons, and React Flow handles on every node component now carry `.sq-node-pip` / `.sq-node-gear` / `.sq-node-handle.in/.out` (square nodes) or `.node-pip` / `.node-gear` / `.node-handle.in/.out` (rectangular nodes — AIAgentNode, TeamMonitorNode; the former `GenericNode` was retired with the spec-driven canvas). Pip background is data-driven via `data-status="idle | executing | waiting | success | error"` — base.css picks the colour from shadcn semantic tokens; per-theme files override. Inline JS-computed `backgroundColor` / `border` / `animation` on these elements stripped — CSS owns visuals. Cyber's `.node-trigger` rule extended to dual-target both rectangular and square topologies (`.sq-node.node-trigger .sq-node-box`). Orphan `.node-output` rule removed. EditableNodeLabel now emits both `sq-node-label` and `node-label` classNames so per-theme typography rules fire. StartNode reads `nodeColor` from `definition?.defaults?.color` instead of hardcoded `theme.dracula.cyan`.
+- **Canvas-node class topology alignment** (W26) — TriggerNode, StartNode, ToolkitNode migrated from `.node` (rectangular spec-card) topology to `.sq-node` / `.sq-node-box` (square-icon node) topology so per-theme decorations (Steampunk brass rivets, Edo hanko seal, Surveillance REC LED, Renaissance gold emblem) reach them. Status pips, gear buttons, and React Flow handles on every node component now carry `.sq-node-pip` / `.sq-node-gear` / `.sq-node-handle.in/.out` (square nodes) or `.node-pip` / `.node-gear` / `.node-handle.in/.out` (rectangular nodes — AIAgentNode, TeamMonitorNode; the former `GenericNode` was retired with the spec-driven canvas). Pip background is data-driven via `data-status="idle | executing | waiting | success | error"` — base.css picks the colour from shadcn semantic tokens; per-theme files override. Inline JS-computed `backgroundColor` / `border` / `animation` on these elements stripped — CSS owns visuals. Cyber's `.node-trigger` rule extended to dual-target both rectangular and square topologies (`.sq-node.node-trigger .sq-node-box`). Orphan `.node-output` rule removed. EditableNodeLabel now emits both `sq-node-label` and `node-label` classNames so per-theme typography rules fire. StartNode reads `nodeColor` from `definition?.defaults?.color` instead of hardcoded `theme.dracula.cyan`; the NodeSpec adapter never fills that field, so it resolves to `var(--node-workflow)`.
 - **Audio fix** (W20) — `--sound-pack: chime` typo in `light.css` + `dark.css` was silently falling through to `'none'` (`chime` not in the engine's pack registry), making sound silent for the most-used themes. Renamed `light` → `parchment`, `dark` → `terminal`. Added `Sounds.unlock()` exported from [lib/sound.ts](../client/src/lib/sound.ts) plus a one-shot `pointerdown / keydown / touchstart` capture-phase listener in `useSoundSync()` ([hooks/useSound.ts](../client/src/hooks/useSound.ts)) so the AudioContext resumes on the user's first gesture (Chrome / Safari autoplay policy compliance).
-- **Canvas-node visual contract** (W21) — every node component (`AIAgentNode`, `SquareNode`, `TriggerNode`, `StartNode`, `ToolkitNode`, `TeamMonitorNode`; `GenericNode` at the time, since retired) stripped its inline `background` / `border` / `borderRadius` / `boxShadow` / `animation` props. Each now exposes the per-definition accent hex via `style={{ '--node-color': accentColor }}` on its outer wrapper. Visual styling lives in [base.css](../client/src/themes/base.css) defaults + per-theme overrides; `var(--node-color)` carries the plugin's `visuals.json` accent through CSS without fighting specificity. New `NodeStyle` helper type in [client/src/types/NodeTypes.ts](../client/src/types/NodeTypes.ts) (`React.CSSProperties & Record<\`--${string}\`, string | number>`) makes the inline custom-prop typecheck-clean.
+- **Canvas-node visual contract** (W21) — every node component (`AIAgentNode`, `SquareNode`, `TriggerNode`, `StartNode`, `ToolkitNode`, `TeamMonitorNode`; `GenericNode` at the time, since retired) stripped its inline `background` / `border` / `borderRadius` / `boxShadow` / `animation` props. Each now exposes its accent via `style={{ '--node-color': accentColor }}` on its outer wrapper. Visual styling lives in [base.css](../client/src/themes/base.css) defaults + per-theme overrides; `var(--node-color)` carries that accent through CSS without fighting specificity. Only `AIAgentNode` passes the plugin's own colour (NodeSpec `color`); the other node components pass their role token (see "Canvas-node visual contract" below). New `NodeStyle` helper type in [client/src/types/NodeTypes.ts](../client/src/types/NodeTypes.ts) (`React.CSSProperties & Record<\`--${string}\`, string | number>`) makes the inline custom-prop typecheck-clean.
 - **Icon size is a token** — `NodeIcon` takes `size=` (`theme.nodeSize.squareIcon`, 36px, on every canvas node; a `theme.iconSize.*` step elsewhere) and applies it as width, height and emoji font size together. Sizing classes are never passed: `--text-3xl` is 44px in `base.css`, so a `text-3xl` emoji once dwarfed every SVG-backed node next to it.
 - **Per-theme icons** (W23) — [client/src/assets/icons/themedGlyphs.ts](../client/src/assets/icons/themedGlyphs.ts) ports all 290 SVG glyphs from `design_handoff_machinaos_themes/app/icons.js` (29 keys × 10 themes). [NodeIcon.tsx](../client/src/assets/icons/NodeIcon.tsx) consults `THEMED_GLYPHS[activeTheme][key]` first; falls through to `lucide-react` / `lobehub:` / `asset:` dispatch on miss. Renaissance gets heraldic shields, Cyber wireframe + glow, Plague woodcut hatching, etc. Light + dark themes have no entries — they fall through to existing dispatch.
 - **Canvas grid + cursors** (W24) — `--canvas-grid` and `--cursor-default` slots declared in [base.css](../client/src/themes/base.css) and bound to `.canvas-host`. Per-theme grids: Cyber 24px magenta+cyan grid, Surveillance CCTV crosshair + REC overlay, Renaissance fleur-de-lis cartography, Greek key meander, Steampunk brass bolt grid, Atomic mid-century starburst, Wasteland cracked-earth fissures, Rot flagstone, Plague broadsheet red-X. Custom cursors: Cyber crosshair reticle, Surveillance snooper reticle, Renaissance gold-leaf quill.
@@ -241,7 +309,7 @@ the surrounding chrome. Every other surface uses Tailwind + tokens. New themes c
 - **ThemeProvider** ([client/src/contexts/ThemeContext.tsx](../client/src/contexts/ThemeContext.tsx)) — 12-way `ThemeName`, `DARK_FAMILY` ⊃ `{dark, cyber, wasteland, rot, surveillance, steampunk}`, legacy `darkMode` localStorage migration on first load
 - **ThemeSwitcher** — DropdownMenu grouped into System / Utopian / Dystopian sections, all 12 themes
 - **Tailwind v4 `@theme inline`** exposing new-contract utilities (`bg-bg-app`, `text-fg-default`, `border-border-default`, `font-display`, `font-body`, `rounded-pill`)
-- **Decorative wrappers** — Dashboard root carries `app-frame`, the React Flow host carries `canvas-host` (aliased as `canvas` so handoff selectors resolve), every Modal carries `modal-frame`. Per-theme CSS targets these classes for outer ornaments (gilded corners, scanlines, riveted borders, REC dot, etc.)
+- **Decorative wrappers** — the app shell root ([AppShell.tsx](../client/src/app/AppShell.tsx)) carries `app-frame`, the React Flow host carries `canvas-host` (aliased as `canvas` so handoff selectors resolve), every Modal carries `modal-frame`. Per-theme CSS targets these classes for outer ornaments (gilded corners, scanlines, riveted borders, REC dot, etc.)
 - **Per-component structural classNames** (W15) — every chrome / interactive / canvas component carries the handoff selector co-class so per-theme decorative rules resolve without component-level branching. See [Per-component decorations](#per-component-decorations) for the full list.
 - **Per-theme decorative CSS** (W16) — every per-component rule from `design_handoff_machinaos_themes/themes/*.css` is now ported into `client/src/themes/<theme>.css`. Each theme owns its panel textures, canvas decorations, node pseudo-element overlays, and keyframes. CSS bundle: 145 KB → 244 KB (+99 KB).
 - **Selection state** (W17, shipped as part of W15) — every canvas node component carries the `selected` co-class when React Flow's `selected` prop is true, activating per-theme selection effects (cyber-blink on Cyber sq-nodes, hanko seal on Edo sq-nodes, etc.).
@@ -272,7 +340,8 @@ Wave 15 added structural classNames across the React tree so the handoff CSS sel
 | Top toolbar | `.toolbar` | TopToolbar |
 | Sidebar | `.sidebar` | WorkflowSidebar |
 | Component palette | `.palette` | ComponentPalette |
-| Console / chat panel | `.chat`, `.chat-msg`, `.chat-msg-user`, `.chat-msg-bot` | ConsolePanel |
+| Console / chat panel | `.chat` | ConsolePanel (root) |
+| Chat turns (Home and Dev) | `.chat-msg .chat-msg-user` on the owner's bubble; `.chat-msg .chat-msg-bot` on a reply's text only; `.chat-turn-user`, `.chat-turn-bot` on each turn; `.chat-composer` on the message box; `.chat-approval` on a draft's card; `.chat-genui` on a generated interface | features/chat (`UserTurn`, `AssistantTurn`, `Composer`, `approval/ApprovalCard`, `turns/GeneratedUiBlock`) |
 | Status bar | `.statusbar`, `.pip` (connection dot) | StatusBar |
 | Modal | `.modal`, `.modal-frame`, `.modal-head` | Modal |
 | Collapsible section | `.cat`, `.cat-head`, `.cat-body` | CollapsibleSection |
@@ -284,12 +353,14 @@ Wave 15 added structural classNames across the React tree so the handoff CSS sel
 | Form field | `.input` | input.tsx, textarea.tsx |
 | Dropdown menu | `.menu-pop` (Content), `.menu-pop-item` (Item) | dropdown-menu.tsx |
 | Canvas host | `.canvas-host`, `.canvas` (alias) | Dashboard |
-| Generic canvas node | `.node`, `.selected` | AIAgentNode, GenericNode, TriggerNode, StartNode, ToolkitNode, TeamMonitorNode |
+| Generic canvas node | `.node`, `.selected` | AIAgentNode, GenericNode, TriggerNode, StartNode |
 | Agent node variant | `.node-agent` | AIAgentNode |
 | Trigger node variant | `.node-trigger` | TriggerNode |
 | Square canvas node | `.sq-node`, `.sq-node-box`, `.sq-node-pip`, `.sq-node-gear`, `.sq-node-handle.in`, `.sq-node-handle.out`, `.selected` | SquareNode |
 
 The `.selected` co-class is bound to React Flow's `selected` prop on every canvas node component, activating per-theme selection effects (Cyber `cyber-blink`, Edo hanko seal, Renaissance wax-seal stamp, etc.).
+
+A reply has no bubble in light and dark (design handoff chat): only the owner's message is one. Each stylized theme still paints `.chat-msg-bot` as a bubble, so its rule carries the padding the bare reply lacks (`padding: 8px 12px`); `index.css` keeps the code blocks and tables inside such a bubble free of the theme's text glow.
 
 ### Decorative content per theme
 
@@ -319,7 +390,7 @@ Every canvas-node React component renders against pure CSS for visual styling. T
      style={{ '--node-color': accentColor, /* layout only */ } as NodeStyle}
    >
    ```
-   `accentColor` comes from the plugin's `visuals.json` accent hex via `useNodeSpec(type)`.
+   In `AIAgentNode`, `accentColor` is the plugin's colour from `useNodeSpec(type)` (NodeSpec `color`, from the plugin's `meta.json` or `visuals.json`). `SquareNode`, `TriggerNode` and `StartNode` use `definition?.defaults?.color`, which `nodeSpecToDescription` never fills, so they always fall back to their role token: `var(--node-model)`, `var(--node-trigger)` and `var(--node-workflow)` respectively. Plugin colours therefore do not reach those nodes today.
 
 2. **Keeping ONLY layout inline** — `position`, `padding`, `display`, `flex*`, `gap`, `width`, `height`, `transition`, `cursor`, `fontFamily`, `fontSize`. React Flow `<Handle>` positioning (`position: absolute; left/top/right/bottom`) MUST stay inline.
 
@@ -340,8 +411,8 @@ Two visually distinct node families, each with its own class hooks. Pick the rig
 
 | Family | Outer class | Inner box | Pip | Gear | Handle | Label | Used by |
 |---|---|---|---|---|---|---|---|
-| Square-icon | `.sq-node` | `.sq-node-box` | `.sq-node-pip` | `.sq-node-gear` | `.sq-node-handle.in` / `.sq-node-handle.out` | `.sq-node-label` | SquareNode, TriggerNode, StartNode, ToolkitNode |
-| Rectangular | `.node` (+ optional `.node-agent` / `.node-trigger` co-class for type-specific theming) | (none — single-div card) | `.node-pip` | `.node-gear` | `.node-handle.in` / `.node-handle.out` | `.node-label` | AIAgentNode, GenericNode, TeamMonitorNode |
+| Square-icon | `.sq-node` | `.sq-node-box` | `.sq-node-pip` | `.sq-node-gear` | `.sq-node-handle.in` / `.sq-node-handle.out` | `.sq-node-label` | SquareNode, TriggerNode, StartNode |
+| Rectangular | `.node` (+ optional `.node-agent` / `.node-trigger` co-class for type-specific theming) | (none — single-div card) | `.node-pip` | `.node-gear` | `.node-handle.in` / `.node-handle.out` | `.node-label` | AIAgentNode (GenericNode was retired) |
 
 Both families share the same status-pip data contract:
 
@@ -413,7 +484,7 @@ The hover delegate uses `mouseover` on capture phase + a `relatedTarget` filter 
 `patchToast()` wraps sonner's `toast.success` / `toast.error` once at module load; the guard flag prevents Strict-Mode double-wrap. `withSound(event, handler)` is the convenience HOC exported from [useSound.ts](../client/src/hooks/useSound.ts) for `run` / `save` semantics — fires the sound, then defers to the original handler.
 
 Wiring summary:
-1. Mount `useSoundSync()` once at the Dashboard root — done in [Dashboard.tsx](../client/src/Dashboard.tsx).
+1. Mount `useSoundSync()` once at the app shell — done in [AppShell.tsx](../client/src/app/AppShell.tsx)'s `ShellEffects`, so it runs on both Home and the editor.
 2. Settings panel ships an Audio section with a Switch bound to `useAppStore.soundEnabled`.
 
 Adding a new sound event: extend `SoundEvent` in `lib/sound.ts`, add an entry per pack, fire `play('<event>')` from the handler.
@@ -471,7 +542,7 @@ cd client && bun run dev
 1. `<html data-theme="light">` — clean default, near-white surfaces
 2. `<html data-theme="dark">` — neutral slate + Dracula
 3. `<html data-theme="renaissance">` — parchment, gold accents, Cinzel headings
-4. `<html data-theme="cyber">` — neon over void, JetBrains Mono everywhere
+4. `<html data-theme="cyber">` — neon over void, Space Mono headings, JetBrains Mono body + code
 
 Build + typecheck must stay clean:
 

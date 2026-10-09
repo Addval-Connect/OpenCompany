@@ -161,7 +161,7 @@ tool or crashing.
 
 ## 6. Stage 5 — Dispatch (handlers/tools.py)
 
-[`execute_tool(tool_name, tool_args, config)`](../server/services/handlers/tools.py#L75) at line 75:
+[`execute_tool(tool_name, tool_args, config)`](../server/services/handlers/tools.py) in `services/handlers/tools.py`:
 
 ```python
 1. broadcaster.update_node_status(node_id, "executing", ...)
@@ -173,17 +173,16 @@ tool or crashing.
 4. Return result. Exceptions trigger an "error" broadcast and re-raise.
 ```
 
-[`_dispatch_tool`](../server/services/handlers/tools.py#L146) at line 146 is pure routing — no broadcasting. Routes by `config["node_type"]`:
+[`_dispatch_tool`](../server/services/handlers/tools.py) is pure routing — no broadcasting. It checks `config["node_type"]` in this order:
 
-| Pattern | Handler |
-|---|---|
-| `aiAgent` / `chatAgent` / `<specialized>_agent` | `_execute_delegated_agent` (fire-and-forget background task) |
-| `_builtin_check_delegated_tasks` | `_execute_check_delegated_tasks` |
-| `batteryMonitor` / `wifiAutomation` / ... (16 service types) | `nodes/android/_base.py::execute_android_service_tool` (line 248; imported at `tools.py:227` — snake_case service ID via `SERVICE_ID_MAP` at `_base.py:25`) |
-| `whatsappSend` / `whatsappDb` / `pythonExecutor` / ... | Per-plugin `usable_as_tool=True` handler (the plugin's own `execute()` method) |
-| `calculatorTool` / `currentTimeTool` / `taskManager` / `writeTodos` | `_execute_<name>` direct implementations |
-| `braveSearch` / `serperSearch` / `perplexitySearch` | `handle_<provider>_search` (httpx async, credential resolution, usage tracking) |
-| All else | `_execute_generic` (catch-all) |
+| Order | Pattern | Handler |
+|---|---|---|
+| 1 | `_builtin_skill` | `services.skill_runtime.execute_skill_tool` |
+| 2 | Any registered plugin that is not a registered agent (`get_node_class(node_type)`) | The plugin fast path: `plugin_cls().execute_as_tool(tool_args, node_params, ctx)`. This covers every tool plugin, dual-purpose `usable_as_tool` nodes, the Android services, `taskManager` and `proxyConfig`. A plugin that needs to adjust the model's arguments overrides `execute_as_tool` (see §12). |
+| 3 | `ANDROID_SERVICE_NODE_TYPES`, `taskManager`, `proxyConfig` | Legacy branches (`execute_android_service_tool`, `_execute_task_manager`, `execute_proxy_config`). Each of these types is a registered plugin, so step 2 handles it first and these branches are not reached today. |
+| 4 | `_builtin_check_delegated_tasks` | `_execute_check_delegated_tasks` |
+| 5 | A registered agent (`is_registered_agent`: `AI_AGENT_TYPES` or `supports_delegation`) | `_execute_delegated_agent` (fire-and-forget background task) |
+| 6 | Anything else | `_execute_generic` (catch-all, logs a warning) |
 
 ## 7. Gateway-tool pattern (retired)
 
@@ -196,7 +195,7 @@ connect directly to `input-tools`. Legacy
 `services/workflow_migrations.normalize_legacy_android_toolkit`, and sub-node
 exclusion keys solely on the AI-agent config handles (`input-context` /
 `input-memory` (legacy compatibility) / `input-tools` / `input-skill` /
-`input-teammates`; `execution/models.py:351-359`) — the
+`input-teammates`; `ExecutionContext.create` in `execution/models.py`) — the
 `TOOLKIT_NODE_TYPES` constant is gone.
 
 ## 8. Internal delegation identities (`delegate_to_*`)
@@ -214,7 +213,7 @@ class DelegateToAgentSchema(BaseModel):
     context: Optional[str] = None
 ```
 
-[`_execute_delegated_agent`](../server/services/handlers/tools.py#L314) at line 314:
+[`_execute_delegated_agent`](../server/services/handlers/tools.py) in `services/handlers/tools.py`:
 
 1. Generate a `task_id` (`uuid4().hex`).
 2. Spawn `asyncio.create_task(<child agent execute>)` — fire and forget.
@@ -230,13 +229,15 @@ When `TEMPORAL_PER_TYPE_DISPATCH=true` and the run is happening inside a Tempora
 
 1. `agent.prepare_payload` builds the payload; there is one wire standard
    with no `llm_engine` / `message_wire_version` discriminators (locked by
-   `tests/llm/test_single_wire_standard.py`).
+   `tests/llm/test_single_wire_standard.py`). New controlled generations also
+   record resolved tool bindings and plugin Activity policies here.
 2. `AgentWorkflow` (the F4.B child workflow) gets the LLM's tool-calls list
    back from `agent.execute_llm_step`, whose native branch sends `ToolDef`
    declarations through `ChatUnifier`.
 3. For each tool call, the workflow schedules
    `f"node.{node_type}.v{version}"` as a Temporal activity on the plugin's
-   declared `task_queue`.
+   declared `task_queue` when the run's frozen worker-pool setting is enabled;
+   otherwise the default worker handles the Activity.
 4. The per-type activity body in
    [`server/services/plugin/base.py:as_activity`](../server/services/plugin/base.py)
    runs the same pipeline `execute_tool` would have — broadcasts, plugin
@@ -244,7 +245,39 @@ When `TEMPORAL_PER_TYPE_DISPATCH=true` and the run is happening inside a Tempora
 5. The result returns to the workflow, is appended to the native message
    history, and the next LLM step sees it.
 
-This means tool calls inside an agent loop get Temporal's retry / timeout / heartbeat semantics independently of the parent agent's. A `code-exec` task burns its own retries; a `browser` task survives past the parent's `start_to_close_timeout` via its own heartbeat. See [TEMPORAL_ARCHITECTURE.md](./TEMPORAL_ARCHITECTURE.md).
+Tool calls inside an agent workflow have their own regular Activity boundary.
+For new generations (`execution_control_version=1`), ordinary plugin tools use
+the recorded `start_to_close_timeout`, `heartbeat_timeout`, `retry_policy`,
+and queue declaration. Heartbeats enforce liveness; they do not extend an
+attempt's `start_to_close_timeout` or checkpoint an opaque provider call.
+The parent is a workflow, so it has no Activity `start_to_close_timeout`.
+Existing histories retain their previous policy decisions. See
+[Temporal Architecture](./TEMPORAL_ARCHITECTURE.md) and
+[Node creation](./node_creation.md#temporal-execution-and-stopresume-contract).
+
+### Stop at the next pending tool
+
+The workflow closes admission before each model request, tool, compaction,
+refresh, or child start. An admitted tool finishes under its recorded retry
+policy, and its result/transcript bookkeeping completes even while stopped.
+For a recorded response requesting A then B, Stop during A preserves A's
+result and B's pending call; Resume executes B once without repeating that
+response or A. Already-admitted parallel tools drain concurrently. Permit
+waits and child-result waits are excluded from local drain acknowledgement;
+the attached child is controlled through the execution tree instead.
+
+Clean Continue-As-New boundaries carry the prepared bindings, transcript,
+thinking, iteration, usage, execution identity, and control revision. Stopped
+agents park before rollover. If existing compaction cannot bring the complete
+continuation input under the limit, the versioned path raises
+`AgentContinuationTooLarge` rather than returning to the opening prompt.
+Do not implement a second tool pause flag, blanket heartbeat cursor, or
+rescheduling loop for already-recorded results. External effects before an
+Activity's completion is recorded still depend on the tool's idempotency and
+retry contract. Opaque Claude Code, RLM, and Vertex managed agents have a
+whole-Activity Stop boundary; independently approved sends and Workspace
+tasks retain their own lifecycle. The full topology and messaging protocol
+is in [Workflow control](./temporal-workflow-control.md).
 
 The v1/v2 wire duality was purged; there is no engine-marker refusal path.
 
@@ -252,7 +285,7 @@ The v1/v2 wire duality was purged; there is no engine-marker refusal path.
 
 Some tools bundle a default skill — `writeTodos` ships with `write-todos-skill`, the WhatsApp tools ship with their respective skills. The frontend `useAutoSkillEdges.ts` hook detects these connections at canvas-edit time and auto-creates a phantom skill connection so the LLM gets both the tool schema (for invocation) and the skill instructions (for usage guidance) without the user having to wire two edges.
 
-The `isMasterSkillNode()` helper (`useAutoSkillEdges.ts:35`) resolves via `getCachedNodeSpec(type)?.uiHints?.isMasterSkillEditor === true`, not a hardcoded string match.
+The `isMasterSkillNode()` helper in `useAutoSkillEdges.ts` resolves via `getCachedNodeSpec(type)?.uiHints?.isMasterSkillEditor === true`, not a hardcoded string match.
 
 ## 11. Pytest invariants
 
@@ -271,14 +304,19 @@ server/tests/
 The shortest path:
 
 1. Create the plugin folder: `server/nodes/tool/<plugin>/__init__.py` extending `ToolNode` (or `ActionNode` with `usable_as_tool = True` for dual-purpose).
-2. Declare `type`, `display_name`, `Params` (the schema the LLM sees), `Output`, `@Operation`-decorated `execute()`.
+2. Declare `type`, `display_name`, `Params` (the schema the LLM sees), `Output`, and an `@Operation`-decorated method (for example `@Operation("search") async def search(self, ctx, params)`); `BaseNode.execute` and `execute_as_tool` dispatch to it.
 3. Declare the plugin's `tool_name` and, when the LLM-facing wording differs,
    `tool_description` class variables.
 4. (Optional) Add a special schema clause to `_get_tool_schema` only when the
    plugin's `Params` model is not the correct invocation contract.
-5. (Optional) Add a dispatch clause to `_dispatch_tool` if your plugin needs
-   custom handler logic; otherwise the generic per-plugin path runs
-   `cls.execute()` directly.
+5. (Optional) List settings the model must never choose (an account, a
+   profile, a mount) in `server_controlled_fields`. The framework keeps them
+   out of the model's reach on every path: `execute_as_tool` strips them from
+   the model's arguments, and `NodeExecutor` restores the saved value on the
+   Temporal path. Override `execute_as_tool` only when the model's arguments
+   need some other adjustment. Do not add a clause to `_dispatch_tool`: its
+   plugin fast path already runs `execute_as_tool` for every registered
+   plugin.
 
 Steps 4-5 are usually unnecessary — most new tools are fully described by
 their plugin class.

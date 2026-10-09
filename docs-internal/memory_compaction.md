@@ -71,8 +71,51 @@ delivery and a repeated summarizer request can be billed twice.
 `anthropic_config()`, `anthropic_api_config()`, and `openai_config()` remain
 configuration helpers on `CompactionService`. The current chat and agent
 execution paths do not pass those provider-managed compaction controls to the
-SDK. `AgentWorkflow` currently calls `anthropic_config()` only as a
-provider-agnostic way to calculate its numeric threshold.
+SDK. On the Temporal path, `prepare_agent_payload` (the `agent.prepare_payload`
+activity) calls `anthropic_config()` only as a provider-agnostic way to
+calculate the numeric threshold `AgentWorkflow` compacts at.
+
+## Temporal Stop, Resume, and continuation capacity
+
+New controlled generations record `execution_control_version=1`. Compaction
+is an admitted business Activity in their `AgentWorkflow`: Stop closes the
+gate before a new summarizer starts, while an already-admitted summarizer
+finishes under its existing retry policy and its result is consumed normally.
+Resume continues the suspended loop. It does not repeat a recorded completed
+compaction, model response, or tool call. Controller maintenance and checkpoint
+waits are excluded from business drain counts.
+
+The agent only continues-as-new at a completed-turn boundary with no live
+delegation handles or Task Manager tasks. A stopped agent parks before this
+boundary until Resume; the Workflow waits for control handlers to finish before
+rollover. Version 1 carries the transcript, prepared payload, resolved tool
+bindings and plugin Activity policies, thinking, iteration, usage, execution
+identity, and pause/revision/hold state. Restoring the continuation skips
+`agent.prepare_payload`, so it does not reload a changed model, graph binding,
+or stored conversation to reconstruct the current turn.
+
+Transcript relief and compaction remain the existing post-turn mechanisms;
+they are not a second checkpoint store. Before version 1 rollover, the payload
+converter measures the complete next input against `_CAN_INPUT_MAX_BYTES`
+(1,900,000 bytes). This includes the graph and bindings as well as messages.
+If it remains oversized, the agent raises non-retryable
+`AgentContinuationTooLarge` with capacity guidance. It never discards the
+transcript and returns to the opening prompt. Compaction can reduce transcript
+pressure, but cannot guarantee that a very large graph or prepared payload fits.
+
+Legacy generations preserve their previous command path, including preparation
+on continuation and the 1,000,000-byte transcript-only fallback that drops an
+oversized carried transcript. That fallback is not used by version 1.
+`ConversationTooLarge` remains a separate fresh-conversation-load guard.
+
+Stop is not a compaction or heartbeat checkpoint. Provider/tool work remains
+regular Activities with declared retries, heartbeat, timeout, and queue
+policies. Current LLM retries are unlimited, so Stop may stay `pausing` during
+a persistent transient provider failure. External effects lost before Temporal
+records completion remain subject to the tool's retry and idempotency contract.
+See [Temporal workflow control](temporal-workflow-control.md),
+[Agent context flow](agent_context_flow.md), and the official
+[Continue-As-New guidance](https://docs.temporal.io/design-patterns/continue-as-new).
 
 ## Database Schema
 
@@ -291,22 +334,28 @@ paths are unified; do not promise that they disable or override every run.
 
 ### get_compaction_stats
 
-Get token usage statistics for a session:
+Get token usage statistics for a session. `model` and `provider` are optional;
+with both, `threshold` is the model-aware value and `context_length` is the
+model's context window (otherwise `context_length` is 0). A per-session
+`custom_threshold` always wins.
 
 ```javascript
 // Client request
 ws.send(JSON.stringify({
     type: "get_compaction_stats",
-    session_id: "user-session-123"
+    session_id: "user-session-123",
+    model: "claude-haiku-4-5",     // optional; 200K context window
+    provider: "anthropic"          // optional
 }));
 
-// Server response
+// Server response (CompactionService.stats; the ws_handler decorator adds "success")
 {
     "type": "get_compaction_stats",
     "success": true,
     "session_id": "user-session-123",
     "total": 45000,
-    "threshold": 100000,
+    "threshold": 160000,           // 0.8 (default ratio) x 200000
+    "context_length": 200000,
     "count": 0
 }
 ```
@@ -408,13 +457,13 @@ usage = final_state["usage"]
 ### In-Process Persistence Point
 
 In `server/services/ai.py`, the in-process path calls the service only when a
-legacy memory session id was resolved earlier in the run (`session_id` is set
-from `memory_data["session_id"]` at `ai.py:1006`; it stays `None` once a
-Context runtime resolves, because `execute_agent` nulls `memory_data` in that
-case):
+legacy memory session id was resolved earlier in the run (`execute_agent`
+sets `session_id` from `memory_data["session_id"]` while building the initial
+messages; it stays `None` once a Context runtime resolves, because
+`execute_agent` nulls `memory_data` in that case):
 
 ```python
-# ai.py:1430-1446 — after native agent-loop execution, before memory save
+# execute_agent in ai.py — after native agent-loop execution, before memory save
 if session_id and ai_response:
     compaction_result = await self._track_token_usage(
         session_id=session_id,
@@ -442,7 +491,7 @@ if session_id and ai_response:
 | `server/core/database.py` | CRUD methods for metrics and events |
 | `server/core/config.py` | Environment variable configuration |
 | `server/core/container.py` | Dependency injection setup |
-| `server/services/settings/handlers.py` | WebSocket handlers `get_compaction_stats` (line 215) and `configure_compaction` (line 233); registered into `MESSAGE_HANDLERS` by `routers/websocket.py` |
+| `server/services/settings/handlers.py` | WebSocket handlers `get_compaction_stats` (`handle_get_compaction_stats`) and `configure_compaction` (`handle_configure_compaction`); listed in its `WS_HANDLERS` dict, which `server/services/settings/__init__.py` registers through `services.ws_handler_registry.register_ws_handlers` on import (not the core `MESSAGE_HANDLERS` dict) |
 | `server/main.py` | Service initialization on startup |
 
 ## Design Decisions

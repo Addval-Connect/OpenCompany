@@ -2,9 +2,10 @@
 
 This doc is the single home for OpenCompany deployment topology. The **current** path is the
 `company deploy` self-deploy CLI (top section). The **Docker Compose** path below it is a
-**legacy reference only** — the compose files, `docker/` directory, and `scripts/docker.js`
-wrapper have all been removed from the repo. It is retained solely as documentation of the
-historical container topology.
+**legacy reference only** — that topology's compose files, `docker/` directory, and
+`scripts/docker.js` wrapper were removed from the repo. It is retained solely as documentation
+of the historical container topology. The current container path is a single self-hosting
+image built from source: see [docker.md](./docker.md).
 
 ---
 
@@ -16,8 +17,16 @@ One command provisions a login-gated OpenCompany VM on a cloud provider. Two sta
    ADC verification + API enablement.
 2. **Terraform** (`cli/terraform/gcp/`) owns all resources — new VMs use the
    `opencompany` resource id,
-   firewall, artifact bucket (local `npm pack` source), service account, and a cloud-init startup
-   script that installs Node 22 + uv + the package and runs `company serve` under systemd.
+   firewall, artifact bucket (local `bun pm pack` source), service account, and a cloud-init startup
+   script (`startup.sh.tftpl`) that installs bun + uv (no Node, no npm), `bun add -g`s the package,
+   provisions its Python side with `company provision`, and runs `company serve` under systemd.
+
+> **Known issue in 0.2.0 and 0.2.1 ([errors.md #25 and #26](./errors.md))**: on a registry
+> install, `company serve` stops with `Project not built. Run "company build" first.`, so the
+> VM's systemd service fails and keeps restarting, and the package also lacks the JS executor
+> sidecar bundle. Until the fix ships, run `company build` once on the VM as root (the startup
+> script's user), which fixes both, then `systemctl restart opencompany` (`machinaos` on a
+> pre-rebrand deployment).
 
 Login gate = built-in auth (`VITE_AUTH_ENABLED=true`, `AUTH_MODE=single`) with the owner
 credential generated at deploy time and seeded on first boot. `build_app_env`
@@ -34,7 +43,7 @@ company deploy destroy                                           # terraform des
 
 | Path | Responsibility |
 |------|----------------|
-| `cli/commands/serve.py` | Single-port runtime: uvicorn fronts API + WS + built SPA. `serve` supervises exactly one process — the Node.js code-exec sidecar, WhatsApp and the Temporal dev server are backend-owned and spawn on demand |
+| `cli/commands/serve.py` | Single-port runtime: uvicorn fronts API + WS + built SPA. `serve` supervises exactly one process — the JS code-exec sidecar (on bun), WhatsApp and the Temporal dev server are backend-owned and spawn on demand |
 | `cli/commands/deploy/` | Verbs (`up.py` / `status.py` / `destroy.py`), `_secrets.py`, `_state.py`, `_terraform.py` (Terraform driver), `providers/` (`gcp.py` / `aws.py` provider CLI adapters) |
 | `cli/terraform/gcp/` | HCL module (`main.tf` / `variables.tf` / `outputs.tf`) + `startup.sh.tftpl` cloud-init template |
 
@@ -58,10 +67,12 @@ The legacy `deploy.sh` (docker-compose images over SCP to a GCE box) was removed
 
 ## Docker Deployment (LEGACY REFERENCE — removed from repo)
 
-> **Legacy reference only.** The compose files (`docker-compose.yml`, `docker-compose.prod.yml`),
-> the `docker/` directory (incl. `docker/Dockerfile.whatsapp`), `client/Dockerfile`,
-> `server/Dockerfile`, and `scripts/docker.js` are **no longer in the repository**. This section
-> documents the historical 4-container topology for reference; it is not a runnable path today.
+> **Legacy reference only.** The 4-container stack's files (its `docker-compose.yml` and
+> `docker-compose.prod.yml`, `docker/Dockerfile.whatsapp`, `client/Dockerfile`,
+> `server/Dockerfile`, and `scripts/docker.js`) are **no longer in the repository**. This section
+> documents that historical topology for reference; it is not a runnable path today. The
+> `docker-compose.yml` and `docker/` in the repo now are the one-container self-hosting image
+> described in [docker.md](./docker.md).
 
 The project previously deployed using Docker Compose with an nginx reverse proxy.
 
@@ -111,7 +122,7 @@ serial port block once in `.env.template` (`PYTHON_BACKEND_PORT`, `NODEJS_EXECUT
 - Persistent volume: `redis_data`
 - No authentication (internal network only)
 
-**Development Compose (`docker-compose.yml`):**
+**Development Compose (the legacy `docker-compose.yml`):**
 ```yaml
 services:
   # Redis uses profiles - only starts when REDIS_ENABLED=true
@@ -325,7 +336,7 @@ docker-compose -f docker-compose.prod.yml down -v
 ## Local Development Build (current, non-Docker)
 
 ```bash
-# Full production build (company build: bun install, client, sidecar, uv sync, bytecode, Temporal binary)
+# Full production build (company build: bun install, client, sidecar, uv sync --extra docs, bytecode, Temporal binary)
 bun run build
 
 # Serve the built SPA + API on one port, exactly as a deployed VM does

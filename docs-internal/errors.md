@@ -256,7 +256,7 @@ Failed to check auth status (attempt 4/6): TypeError: Failed to fetch
 
 **Root cause**: An older version of the FastAPI lifespan blocked on Temporal client connection for up to 30 seconds before yielding to uvicorn. During that window, uvicorn was not accepting HTTP connections, so the frontend retry window could exhaust before the backend started serving.
 
-**Status**: fixed. Temporal initialization runs in a background `asyncio.create_task()` ([server/main.py:_init_temporal_background](../server/main.py)) so the lifespan yields immediately. WorkflowService falls back to parallel/sequential execution until Temporal connects in the background.
+**Status**: fixed. The `main.py` lifespan schedules `run_temporal_lifecycle` ([server/services/temporal/lifecycle.py](../server/services/temporal/lifecycle.py)) as a background `asyncio.create_task()` named `temporal-init`, so the lifespan yields immediately. Until Temporal connects, WorkflowService falls back to sequential execution (the parallel executor runs only with `REDIS_ENABLED=true`).
 
 ---
 
@@ -481,11 +481,17 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 
 ## 20. Graceful backend shutdown hangs, then the supervisor tree-kills it (Temporal / node / edgymeow orphaned)
 
+**Historical browser implementation:** the `_service.py` and agent-browser
+driver named below have been retired. The current
+[native browser runtime](./browser.md) owns managed Chrome, CLI daemons and
+live-stream tasks. This incident remains relevant to the rule that shutdown
+must never lazily install or start a runtime.
+
 **Symptom**: `company stop`, Ctrl+C, or the desktop app's quit takes the full grace window and ends in a tree-kill. With the lifespan markers (`Lifespan shutdown: ...` in stdout) the log stops after `proxy stopped`, or never prints `Lifespan shutdown begin` at all.
 
 **Root causes** (two, found while building the desktop shell; the CLI's 5 s grace + tree-kill had masked both):
 
-1. `nodes/browser/_service.py::shutdown_browser_service` called `get_browser_service()`, which lazily runs the `agent-browser@latest` install on first call (`npm install` at the time; `bun add` via `core/js_runtime.add_package` today) — so a process that never used the browser ran a network install *at teardown*, synchronously on the event loop, and every graceful exit wedged there.
+1. `nodes/browser/_service.py::shutdown_browser_service` called `get_browser_service()`, which lazily ran the `agent-browser@latest` install on first call (`npm install` at the time; that retired driver later used `bun add`) — so a process that never used the browser ran a network install *at teardown*, synchronously on the event loop, and every graceful exit wedged there.
 2. uvicorn's `timeout_graceful_shutdown` defaults to `None`: it waits forever for open connections and in-flight handler tasks before sending the lifespan shutdown. A browser WebSocket that disappears with a TCP reset (the tab or window closing) can leave its handler task lingering, and the lifespan teardown — the part that reaps the child daemons — is never reached.
 
 **Fix**: the browser hook reads its module singleton and closes only a service that was actually created; every plugin shutdown hook now runs under `HOOK_TIMEOUT_SECONDS` (10 s, `services/plugin/shutdown_hooks.py`) and names the offender at WARNING; `company serve` / `company start` and the desktop shell pass `--timeout-graceful-shutdown 5` (`cli/_common.py::UVICORN_GRACEFUL_SHUTDOWN_SECONDS`). Note that the hook timeout cannot interrupt a hook that blocks the loop synchronously — keep hooks async.
@@ -588,3 +594,98 @@ Seen 2026-09-05 with a `tikhubAction` tool whose results were about 400,000 char
 Locked by `server/tests/services/test_tool_output.py`, `server/tests/temporal/test_agent_context_pressure.py`, `server/tests/temporal/test_agent_workflow_pressure.py` and `server/tests/temporal/test_prepare_payload_pressure.py`. Design record: [ARCHIVE/AGENT_COMPACTION_FIX_PLAN.md](./ARCHIVE/AGENT_COMPACTION_FIX_PLAN.md).
 
 **Recovery for a row saved before the fix**: clear the conversation once from the Context panel (or Reset the deployment). New transcripts stay well under the cap.
+
+## 29. `company stop` crashes on Windows with `SystemError: <class 'int'> returned a result with an exception set`
+
+**Symptom**: `company stop` (or `bun run stop`) frees the ports and kills Temporal, then dies while reaping orphaned processes. The traceback ends inside psutil's `Process.wait`:
+
+```
+OSError: [WinError 87] The parameter is incorrect
+
+The above exception was the direct cause of the following exception:
+...
+SystemError: <class 'int'> returned a result with an exception set
+```
+
+The `OSError` has no traceback of its own. Orphans the reaper had not reached yet stay alive, and the command exits 1. The CLI supervisor's shutdown and the backend's `terminate_then_kill` sent the event the same way and could fail the same way.
+
+**Root cause**: `kill_pid` sent `CTRL_BREAK_EVENT` with `os.kill`. Windows delivers console events only to processes attached to the caller's console, and the services `company stop` reaps run in another terminal's console, so Windows refuses the event (error 87 in the reported case, error 6 when the caller has no console). Before CPython 3.12.9 and 3.13.2 ([gh-58689](https://github.com/python/cpython/issues/58689)), `os.kill` does not raise on that refusal: it records the error, falls through to `TerminateProcess` (hard-killing the target), and returns success with the error still set. CPython reports that inconsistency only on its generic call path. Once the `os.kill` call site has been specialized after its first run, release builds skip the check, and the stale error surfaces at the next call that does check: the `int()` inside psutil's `Process.wait`. So the `except SystemError` around `os.kill` covered only the first orphan. The CLI and server venvs here run 3.12.8.
+
+**Fix**: nothing sends console events through `os.kill` any more. `cli/tree.py::send_ctrl_break` (through pywin32) and its server copy in `services/_supervisor/util.py` (through `ctypes`, since the server has no pywin32) call `GenerateConsoleCtrlEvent` only for a process attached to the caller's console, and return whether the event went out. `kill_pid` terminates everything else at once. Before, some console hosts accepted an event for another console, delivered nothing, and `kill_pid` waited out its grace period. `_stop_proc` and `terminate_then_kill` treat an event that did not go out as they treated `os.kill`'s `OSError`. Locked by `cli/tests/test_tree.py`, `cli/tests/test_ports.py`, `cli/tests/test_supervisor.py` and `server/tests/services/test_supervisor.py`; their Windows-only tests send real events to processes they start.
+
+To reproduce the old failure on 3.12.8, run `kill_orphaned_opencompany_processes` from a process with no console against sleepers it started itself, with a root their command lines name: it raises the `SystemError`.
+
+## 30. Scheduled runs fire at the wrong times: "every 5 minutes" runs every fifth hour, weekly schedules never run
+
+**Symptom**: A deployed `cronScheduler` fires, but not when its settings say. This includes every Home employee hired to work on a schedule.
+
+| Setting | When it fired |
+|---|---|
+| every 30 seconds | every 30 minutes |
+| every 5 minutes | at minute 0 of every fifth hour |
+| hourly | once a day at 00:00 |
+| daily at 09:00 | at 00:00 on the 9th of each month |
+| weekly | never |
+| monthly | the day of the month landed in the month field, so once a year at best |
+
+**Root cause**: `TriggerManager.build_cron_expression` (`services/deployment/triggers.py`) built a six-field string with the second first (`0 */5 * * * *`), and `create_cron_schedule` (`services/temporal/schedules.py`) hands the string to Temporal's `ScheduleSpec.cron_expressions` unchanged. Temporal reads five fields as minute, hour, day of month, month and day of week, and six as those five plus a trailing year. Only with seven fields does it read the second first (`ScheduleSpec.cron_string` in temporalio's `api/schedule/v1`). So every field shifted one place. The schedule tests passed hand-written five-field strings, which is why nothing caught it.
+
+**Fix** (`d4caa64e`): the builder emits five fields, or seven (second first, year `*` last) for the seconds frequency. `TestCronExpression` in `server/tests/test_cron_canary.py` reads each expression the way Temporal documents it. It covers every frequency, the node's defaults and the parameters a Home hire sends.
+
+**Deployments started before the fix**: when the backend starts, it re-arms running and paused deployments. Re-arming calls `create_cron_schedule`, which updates the existing Schedule in place and keeps it paused if it was. Reset followed by Start also rebuilds it.
+
+**Two settings that failed at Start**: until a follow-up, a deployment that used either of these never got a Schedule:
+- `once`: the builder returned no expression, and the SDK rejects `None`.
+- `month_day` `L`: the "last day of the month" a Home hire can ask for. Temporal's cron values are integers and month or weekday names only.
+
+The follow-up has `services/temporal/schedules.py::cron_schedule_spec` translate both:
+- `once` becomes a Schedule with no times that runs once, when it is created, and not again when a restart re-creates it.
+- `L` becomes four calendars that land on the last day of each month. Temporal's calendar years end at 2100.
+
+A real Temporal dev server confirmed the matching times for every frequency, and for `once` a single run that re-creating the Schedule does not repeat. See the [cronScheduler card](./node-logic-flows/workflow_triggers/cronScheduler.md).
+
+## 31. A canvas Run says `Workflow failed: Unknown error` when it fails, and `0/0 nodes completed` when it succeeds
+
+**Symptom**: Run a whole workflow.
+- When a node fails, the result dialog says `Workflow failed: Unknown error`, whatever the node's actual error was. With Temporal on (the default), the response's `errors` list is empty too.
+- When the run succeeds, the dialog says `Workflow executed successfully. 0/0 nodes completed.`
+
+**Root cause**: the dialog shows only `error` for a failure and only `completed_nodes` / `total_nodes` for a success, and no execution path filled them in.
+- `MachinaWorkflow.run` stops at the first failed node and returns that failure in `errors`, a list of `{node_id, error, ...}`. Only an empty graph returns a top-level `error`. `TemporalExecutor.execute_workflow` read only the top-level `error`, so it reported no errors, and `WorkflowService._execute_temporal` passed no `error` on at all.
+- Without Temporal, the sequential fallback reported failures only in `node_results`, and the Redis-only parallel path only in `errors`. Neither set `error`.
+- No path set `total_nodes` or `completed_nodes`, so the WebSocket handler's defaults of 0 reached the dialog.
+
+**Fix**:
+- `51774a77`: the Temporal executor keeps the workflow's `errors` and sets `error` to the first message; an empty graph or a failed Temporal call becomes `[{"error": ...}]`. `_execute_temporal` forwards `error`.
+- A follow-up gave the sequential and parallel paths the same `errors` and `error`, and made every path report `total_nodes` and `completed_nodes`. `MachinaWorkflow` now returns its `total_nodes`.
+
+Locked by `server/tests/temporal/test_run_errors.py` and `server/tests/services/test_workflow_run_result.py`. The result contract is in [Temporal Architecture → The run result](./TEMPORAL_ARCHITECTURE.md#4-the-run-result).
+
+## 32. Cloudflare: a DNS record delete reports success, but the record is still there
+
+**Symptom**: `dns_record_delete` on the Cloudflare node (or a `custom` delete such as `kv namespaces delete <id>`) returns success, yet the record or resource still exists. The output's `stderr_tail` ends with:
+```
+? This permanently deletes the resource. Continue?
+  (non-interactive; pass --force to confirm)
+Aborted.
+```
+
+**Root cause**: the `cf` CLI asks before every destructive command. When no terminal is attached, as when the backend runs it, cf prints the question and `Aborted.`, changes nothing, and **exits 0**, so `run_cli_command` reported a successful run. The node never passed `--force`, on cf 0.2.0 or later.
+
+**Fix** (`9a5cd688`): `dns_record_delete` always passes `--force`; choosing the operation is the confirmation. For any other command, `_run` in `nodes/cloudflare/cloudflare_action.py` turns that output into a `NodeUserError` asking for `--force`. Locked by `test_dns_record_delete_forces_and_uses_positional_id` and `test_aborted_confirmation_is_an_error` in `server/tests/test_cloudflare_plugin.py`. Scripts that run cf by hand need `--force` too.
+
+## 33. Cloudflare: `No authentication token found` after the cf 1.0 upgrade, or `More than one account available`
+
+**Symptom**: after updating past `9a5cd688`, the first Cloudflare operation is slow (cf is reinstalled), the Credentials modal shows Cloudflare as not connected, and operations fail with:
+```
+No authentication token found. Either:
+1. Set the CLOUDFLARE_API_TOKEN environment variable
+2. Run 'cf auth login' to authenticate via OAuth
+```
+With a login that can see several Cloudflare accounts, operations fail instead with `More than one account available but unable to select one in non-interactive mode`.
+
+**Root cause**:
+- The node moved from cf 0.2.0 to 1.0.0-beta.12. `ensure_cf_cli` reinstalls when the installed version differs from the pin (the first install downloads about 300 MB). cf 1.0 keeps its login in a new place (`<xdg-config>/cloudflare/config/default.json`; `%APPDATA%\xdg.config\cloudflare\...` on Windows) and does not pick up the login 0.2.0 stored, so the upgrade also clears the catalogue's "connected" marker.
+- cf has no `--account-id` flag on most commands. It takes the account from `CLOUDFLARE_ACCOUNT_ID`, or uses the only one the login can see, and with no terminal to ask it stops when there are several.
+
+**Fix**: log in again (Credentials → Cloudflare → Login: the modal shows a one-time code to approve on Cloudflare's page, from any browser), or paste an API token there. With several accounts, set the node's `account_id` to the account to use; the `whoami` operation lists them. See [Cloudflare Service](./cloudflare_service.md).

@@ -17,7 +17,7 @@ Companion documents: [RFC-0002](../RFC-0002-AGENT-CONTEXT-AND-MEMORY.md)
 
 Context is **plain JSON messages**. One table, `agent_conversations`, keyed
 by **`(workflow_id, generation, agent_node_id)`** → `messages` (a JSON list
-of `MessageWire` dicts) + `updated_at`. A run **loads** the row at start and
+of `MessageWire` dicts) + `updated_at`. A fresh firing **loads** the row at start and
 **saves** the whole live message list back after every turn. Every firing of
 an agent — chat messages AND taskTrigger completion reviews — continues the
 one conversation; a workflow Reset admits a new generation, which is a new
@@ -26,8 +26,10 @@ opt-in switch and the viewing panel, nothing more. This is the industry
 pattern (LangGraph `thread_id`, OpenAI `conversation_id`, Claude Code
 session files): a conversation id maps to a message list, and nothing else.
 
-There are no threads, sessions, epochs, hash chains, checkpoints, blobs, or
-operation ids. Memory (`simpleMemory`) is an ordinary tool — explicit
+The conversation store adds no threads, sessions, epochs, checkpoint tables,
+blobs, or operation IDs. Temporal control revisions and suspended continuations
+live in Workflow history and serve a separate execution contract.
+Memory (`simpleMemory`) is an ordinary tool — explicit
 remember/recall — and plays no automatic part in continuity.
 
 ## The store (`services/agent_context/`)
@@ -85,7 +87,7 @@ thread resolution is involved — there is nothing to route.
 ```mermaid
 flowchart TD
     R[AgentWorkflow run start] --> P{resume marker has<br/>carried transcript?}
-    P -- "yes (continue-as-new)" --> C1["messages = carried transcript verbatim<br/>(exact live conversation, size-guarded ≤ 1 MB)"]
+    P -- "yes (continue-as-new)" --> C1["messages = carried transcript verbatim<br/>(version 1 guards the complete continuation input)"]
     P -- no --> Q{payload carries a stored<br/>conversation? (Context node,<br/>generation > 0, non-empty row)}
     Q -- yes --> C2["system (this firing's)<br/>+ stored wires minus system messages<br/>+ THIS firing's user prompt last"]
     Q -- no --> C3["bare build:<br/>system + memory markdown (legacy) + prompt"]
@@ -94,16 +96,80 @@ flowchart TD
 Precedence is exactly **carried transcript > stored conversation > bare
 build** and is intentional:
 
-- A rollover resumes the *same* run mid-flight — the live transcript is the
-  truth and must win over any store read.
+- A rollover resumes the *same application execution* mid-flight with a new
+  Temporal Run ID — the live transcript is the truth and wins over store reads.
 - A fresh firing with a Context node continues the *conversation* — the
   stored row is the truth.
 - The bare build is the cold-start floor.
 
-The carried transcript caps at ~1 MB serialized
-(`_CAN_TRANSCRIPT_MAX_BYTES`) because Temporal's payload error limit is
-2 MiB for the whole continue-as-new argument; over-cap degrades to the
-opening prompt with a warning — never a failure.
+Version 1 generations carry the prepared payload and resolved tools along with
+the transcript. `AgentWorkflow` restores these values and skips
+`agent.prepare_payload` on continuation, preserving provider/model, tool
+definitions, plugin Activity policies, and explicit in-run binding changes.
+Configuration edited during a pause or restart cannot reconstruct a different
+continuation. Iteration, usage, context usage, thinking, application execution
+identity, and control revision/hold state are carried too.
+
+Rollover happens at a completed-turn boundary without live child handles or
+Task Manager tasks. A stopped agent waits there for Resume and for control
+handlers to finish. Existing result relief and compaction bound the transcript;
+the payload converter then measures the **whole next input** against
+`_CAN_INPUT_MAX_BYTES` (1,900,000 bytes). If it still cannot fit, version 1
+raises non-retryable `AgentContinuationTooLarge`. It never drops the transcript
+or repeats the opening prompt. The graph and prepared binding set count toward
+this limit, so transcript size alone cannot establish that rollover will fit.
+
+Legacy generations retain their recorded path: `agent.prepare_payload` runs
+again at rollover and can resolve current configuration; a carried transcript
+over `_CAN_TRANSCRIPT_MAX_BYTES` (1,000,000 bytes) is dropped with a warning,
+then seeding falls back to the stored row or opening prompt. A stored row over
+the seed cap can still raise `ConversationTooLarge`. These behaviors remain
+for replay compatibility and are not the version 1 continuation contract.
+See [Temporal architecture → Agent continuation](TEMPORAL_ARCHITECTURE.md#agent-continuation-under-history-pressure)
+and [Temporal Continue-As-New](https://docs.temporal.io/design-patterns/continue-as-new).
+
+### Stopped turns and unanswered calls
+
+For a chat run owned by a version 1 generation, Stop suspends the generation
+after admitted Activities and their result bookkeeping finish. An admitted
+LLM step completes under its existing retry policy, and its exact assistant
+message and pending tool calls stay in the existing Workflow continuation.
+An admitted tool's result is consumed normally; unstarted tools wait for
+Resume and are not replaced by synthetic "not run" results. Stop does not
+terminalize the reply, release its lane, or start a fresh firing. The watchdog
+does not expire an intentionally stopped controlled run by age; Resume gives
+it a fresh timeout window. See [Chat Protocol → Streaming, steps and Stop](./chat_protocol.md#streaming-steps-and-stop)
+and [Temporal workflow control](./temporal-workflow-control.md).
+
+Legacy/uncontrolled chat Stop keeps the terminal cooperative-stop behavior:
+the LLM step saves the sent list and any partial answer (text metadata
+`{"stopped": true}`), and an unstarted tool receives a "not run" result.
+The legacy grace-period watchdog can cancel an unfinished run. A cancellation
+or other terminal interruption while a tool runs can leave calls without
+results, which no provider will continue from. A later fresh load therefore
+passes the stored row through `close_unanswered_tool_calls`
+(`services/agent_context/conversation.py`), which answers each open call of the
+latest assistant turn with `UNANSWERED_TOOL_RESULT`, after the results the turn
+already has. A closed conversation is returned unchanged. This repair applies
+to a stored row loaded for a new firing; it is not the checkpoint or Resume
+mechanism for a suspended version 1 agent.
+
+### Chat branches rewind and restore
+
+Editing the owner's message, trying an answer again or switching to another
+version of the chat changes what the agent should remember
+([Chat Protocol → Branches](./chat_protocol.md#branches)). When a chat run's
+agent is prepared, `agent.prepare_payload` records on the run where the stored
+conversation stood (`chat_runs.context_cursors`: its length and a digest that
+leaves out the `ts` stamps), the stored row as loaded, before
+`close_unanswered_tool_calls`. A branch move then writes the conversation
+directly, under `conversation_lock` (the lock `save_conversation` holds) and
+inside the move's reserved transaction: back to the cursor of the first run on
+the part of the chat being left (refused when the stored row no longer starts
+with what the cursor recorded, as after a compaction), or, for a switch, to the
+conversation kept for the branch moved to (`chat_branch_snapshots`). Turns other
+firings added after that point go with the branch. The Context listeners hear
+of each conversation changed, as after a save.
 
 ## Transcript size: capped results, cleared old results
 
@@ -184,7 +250,10 @@ only grow until the provider rejected it.
   Running on silently instead would burn tokens on an amnesiac prompt — the
   exact failure mode this design replaced. With the cap and the byte budget
   above, new transcripts stay far below the limit; a row saved before them
-  needs one clear.
+  needs one clear. Both error types and the 1 MB cap exist only on the
+  Temporal path. The in-process `_prepare_context` (`services/ai.py`) and
+  `SpecializedAgentContextBridge.resolve` also refuse to run after a failed
+  load, but raise a plain `ValueError`, and they load a row of any size.
 - **Save failures warn and continue.** The save happens *after* the
   provider was called and billed, so raising there would fail a completed
   turn over a bookkeeping write. `_save_conversation`
@@ -216,11 +285,18 @@ time, and a same-generation panel Clear terminates them explicitly
 `nodes/context/` owns the opt-in descriptor (`_descriptor.py`), two WS
 handlers (`get_agent_context` returns the **live generation only** —
 `{conversations, generation, agent_node_id, updated_at, message_count,
-messages}`, with an `agent_node_id` selector for nodes shared by several
-agents; `clear_agent_context` deletes rows and fences warm claude
-processes), and one CloudEvents broadcast (`context.updated`, fired from the
+messages}`, where `messages` is the requested `agent_node_id`'s transcript,
+else the newest row's; `clear_agent_context` deletes rows and fences warm
+claude processes), and one CloudEvents broadcast (`context.updated`, fired from the
 registered save listener; payload is identity + count only — the panel
-refetches through the authorized handler). The node declares **no
+refetches through the authorized handler). Both ways of forgetting share
+`_handlers.forget_conversations` (delete, fence warm claude processes,
+announce). The plugin also registers `on_chat_cleared` with
+`services/chat_thread.register_chat_cleared_listener`: when the owner clears
+a workflow's chat (`clear_chat_messages` → `clear_chat_session`), every
+conversation of that workflow goes too, so the agent starts over with the
+chat. A Reset forgets them through the node's `reset_execution_state`, and
+clears the chat thread through the chat nodes' own Reset hook. The node declares **no
 parameters**; the connection is the whole configuration.
 
 The node is optional and user-owned. `normalize_workflow_graph` never
@@ -228,7 +304,18 @@ creates, reconnects or deletes one; rewriting a legacy
 `simpleMemory -> input-memory` edge is the one exception. Save never restores
 a deleted Context, and `workflow_validator` accepts an agent without one: it
 checks only the Context edges that exist (`INVALID_CONTEXT_EDGE`,
-`MULTIPLE_CONTEXTS`, `SHARED_CONTEXT`). Deleting the node is the opt-out.
+`MULTIPLE_CONTEXTS`, `SHARED_CONTEXT`), and `handle_save_workflow` refuses a
+graph with any of them (`invalid_context_topology`). A Context node therefore
+serves exactly one agent. A leftover `simpleMemory -> input-memory` edge only
+produces a `LEGACY_MEMORY_EDGE` warning. Deleting the node is the opt-out.
+
+**Known gap: the panel is not narrowed to its own agent.** `get_agent_context`
+lists every stored conversation in the workflow's live generation, not only
+the one for the agent wired to this Context node. In a workflow with two
+agents, each on its own Context node, each panel lists both agents in its
+selector and opens on the newest row, which can be the other agent's; the
+badge shows whose conversation it is. Clearing from the panel clears the
+agent currently shown.
 
 The panel ([`ContextPanel.tsx`](../client/src/components/parameterPanel/ContextPanel.tsx))
 renders role-tinted message cards with per-message `ts` timestamps, routes
@@ -260,13 +347,15 @@ workflow, not only the removed Context's agent.
 | 1 | The store observes; it never steers. Requests are always built from `messages`; `conversation_key` only says where to save. | The original `context_ref` regression made attaching a Context node change what the agent sent. |
 | 2 | One key per agent per generation: `(workflow_id, generation, agent_node_id)`. Every firing — chat or task review — continues that one conversation. | Per-firing/per-session keys are how the lead came back amnesiac (`messages=2`). |
 | 3 | Seeding precedence: carried transcript > stored conversation > bare build. | Rollover mid-run truth beats the store; the store beats cold start. |
-| 4 | Load failures are LOUD (`ConversationLoadFailed` / `ConversationTooLarge`); save failures are best-effort. | Never burn tokens on an amnesiac prompt; never fail a billed turn over bookkeeping. |
+| 4 | Load failures are LOUD (`ConversationLoadFailed` / `ConversationTooLarge` on Temporal; a `ValueError` on the in-process and specialized paths, which have no size cap); save failures are best-effort. | Never burn tokens on an amnesiac prompt; never fail a billed turn over bookkeeping. |
 | 5 | Save the exact sent list, after the provider call. Nothing writes to the store before a request exists. | The journal's `prepare_context` wrote fabricated requests assembled from configuration. |
 | 6 | Reset = new generation = new key, AND the Context node's reset hook clears the workflow's stored rows. | The panel shows the newest stored generation, so surviving rows make Reset look like a no-op. |
-| 7 | `input-memory` is retired; the conversation store is the continuity carrier. Do not resurrect markdown seeding. | `normalize_workflow_graph` migrates it away and the validator rejects it; two carriers would drift. |
+| 7 | `input-memory` is retired; the conversation store is the continuity carrier. Do not resurrect markdown seeding. | `normalize_workflow_graph` migrates it away and the validator warns on any left (`LEGACY_MEMORY_EDGE`); two carriers would drift. |
 | 8 | Specialized bridges record the ORIGINAL prompt, never the augmented one. | Recording the rendered transcript nests the conversation inside itself and grows without bound. |
 | 9 | The store never imports `nodes/`; the plugin registers its broadcaster via `register_conversation_listener`, and a listener failure can never fail a save. | Same layering rule as every plugin registry; a UI notification must not break execution. |
 | 10 | External tool results are capped before they enter the transcript; the latest turn is never cleared or summarized; the pressure rules are chosen by the recorded `context_pressure_version`. | Uncapped results bricked every later firing (`errors.md` #28); an unread turn summarized away loses what the model asked for; a replay must schedule the commands it recorded. |
+| 11 | Version 1 Stop retains the live continuation and drains admitted results; a new stored-row load repairs calls left open by terminal interruptions. Legacy Stop saves the partial turn. | Suspension must preserve pending calls, while a later fresh firing must not send an unanswered-call conversation to the provider. |
+| 12 | Only `save_conversation` and a chat branch move (under `conversation_lock`, checked against the run's cursor) rewrite a stored conversation. | A move that ignored the lock or the cursor would cut a turn being saved, or cut a summarized conversation at the wrong place. |
 
 ## How this broke (August 2026 regression), and why the journal went away
 

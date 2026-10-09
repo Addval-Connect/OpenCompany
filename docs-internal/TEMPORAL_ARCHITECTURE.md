@@ -1,22 +1,39 @@
 # Temporal Distributed Node Execution Architecture
 
-> **Canonical system design:** See
-> [Temporal Execution Engine RFC](temporal-execution-engine-rfc.md) for the
-> current control-generation, trigger-hub, agent-team, pause/reset, trace, and
-> security architecture. This document remains the detailed node dispatch and
-> activity/worker inventory.
+> **Current control contract:** [Temporal workflow control](temporal-workflow-control.md)
+> defines generation ownership, acknowledged Stop/Resume, Reset, and recovery.
+> This document describes execution, Activity dispatch, worker routing, and
+> continuation. The [original execution-engine RFC](ARCHIVE/temporal-execution-engine-rfc.md)
+> is historical design context; use the current docs and implementation for behavior.
 
 ## Overview
 
-Each workflow node executes as a **Temporal activity** with its own isolated context, enabling horizontal scaling across distributed workers. The orchestrator dispatches in one of three ways depending on settings flags:
+Executable workflow nodes run as **Temporal Activities** or, for supported agents,
+child Workflows. Each receives its own execution context, enabling distributed
+workers to run independent steps. The orchestrator dispatches in one of three
+ways depending on the run's frozen settings flags:
 
 | Dispatch | Trigger | Use case |
 |---|---|---|
 | **Legacy single activity** (`execute_node_activity`) | `TEMPORAL_PER_TYPE_DISPATCH=false` | Every node routed through one dispatcher activity. WebSocket round-trip back to the FastAPI server. Stable since Wave 11; kept as the fallback path. |
-| **Per-type activity** (`node.{type}.v{version}`) | `TEMPORAL_PER_TYPE_DISPATCH=true` (production default) | Each plugin gets its own `@activity.defn`. Per-plugin retry / timeout / heartbeat configs apply. With `TEMPORAL_WORKER_POOL_ENABLED=true` (default since Wave 16.4) the activity also carries `task_queue=cls.task_queue`, landing it on its specialised `TemporalWorkerPool` worker (browser / code-exec / ai-heavy / ...). Shipped in F4.A (commit `8261b05`); queue routing activated in Wave 16. |
-| **Agent-as-child-workflow** (`AgentWorkflow`) | `TEMPORAL_AGENT_WORKFLOW_ENABLED=true` | AI Agents (aiAgent, chatAgent, 11 specialized agents, 2 team leads) run as Temporal child workflows. Each LLM turn = activity; each tool call = per-type activity. Mirrors Temporal's AI Cookbook canonical pattern. F4.B infrastructure shipped (commit `a4d009e`); per-agent migrations follow. |
+| **Per-type activity** (`node.{type}.v{version}`) | `TEMPORAL_PER_TYPE_DISPATCH=true` (production default) | Each plugin gets its own Activity definition. Graph dispatch applies plugin retry and, with the frozen worker-pool flag on, `cls.task_queue`. Ordinary graph timeout/heartbeat remain 24 h / 2 min; Workspace-task patches use plugin values. Version 1 agent-tool dispatch records and uses all declared Activity policies. |
+| **Agent-as-child-workflow** (`AgentWorkflow`) | `TEMPORAL_AGENT_WORKFLOW_ENABLED=true` | Agent types in `AGENT_WORKFLOW_TYPES` in `services/temporal/workflow.py` run as child Workflows. Each LLM turn and ordinary tool call is a regular Activity; direct delegations can start attached agent children and Task Manager assignments start detached runners. |
 
-`rlm_agent`, `claude_code_agent` are intentionally excluded from AgentWorkflow — their externalised loops (RLM REPL / Claude CLI `--resume`) require single-process state continuity.
+`rlm_agent`, `claude_code_agent` and `vertex_managed_agent` are intentionally excluded from AgentWorkflow — their externalised loops (RLM REPL / Claude CLI `--resume` / Vertex Interactions API `previous_interaction_id` chaining) require single-process state continuity. The authoritative list is `AGENT_WORKFLOW_TYPES` in `services/temporal/workflow.py`; any agent type outside it runs as an ordinary per-type activity.
+
+**Routing snapshot (`_temporal_routing_v1`).** The three dispatch flags — `TEMPORAL_PER_TYPE_DISPATCH`, `TEMPORAL_AGENT_WORKFLOW_ENABLED` and `TEMPORAL_WORKER_POOL_ENABLED` (which picks the task queue) — are read once by whoever starts the run and frozen into the workflow input under `_temporal_routing_v1` (`services/temporal/executor.py::capture_temporal_routing_input`). `TemporalExecutor.execute_workflow` captures them per run; `DeploymentManager` captures them when it registers a push/poll listener or creates a cron Schedule, and the listener hands the same snapshot to every run it spawns. `MachinaWorkflow.run` dispatches only from that snapshot (`_frozen_routing_from_input`) and never re-reads `Settings`, so changing a flag affects runs started, and triggers registered, afterwards — never a run already in flight. An input without a snapshot (or with an unknown version) gets `_SAFE_FROZEN_ROUTING`: agent workflow and per-type dispatch on, worker pool off. Locked by `tests/temporal/test_frozen_routing.py`.
+
+**Browser owner routing (`browser_routing_version: 1`).** Distributed starts
+also capture server-resolved `browser_bindings`, including profile, principal,
+owner, runtime epoch and physical queue. The Browser queue overrides the
+general pool switch, including when `TEMPORAL_WORKER_POOL_ENABLED=false`.
+Only the registered backend owner consumes it; generic orchestration workers
+exclude Browser Activities. Ordinary Browser nodes and native Browser Agent
+tools share this path. Preparation can associate a new profile with an already
+registered configured backend, but cannot register an orchestration worker as
+a browser owner. Missing registrations fail admission; unavailable existing
+owners keep their assignment. [Deployment and recovery](browser_agent_deployment.md)
+defines the PostgreSQL, shared storage and external Temporal prerequisites.
 
 ## Execution Routing & Running
 
@@ -37,7 +54,7 @@ company stop             # Stops all services including Temporal
 
 (`bun run start` / `bun run dev` / `bun run stop` are thin wrappers over the same `company` verbs.)
 
-The embedded Temporal worker runs **inside the Python backend** — registered in the `main.py` lifespan via `TemporalWorkerManager`, not as a separate process.
+The embedded Temporal worker runs **inside the Python backend**, not as a separate process. `main.py` only schedules `run_temporal_lifecycle` (task `temporal-init`); [services/temporal/lifecycle.py](../server/services/temporal/lifecycle.py) `_start_execution_engine` creates the `TemporalWorkerManager` and then the `TemporalWorkerPool`.
 
 **Standalone worker** (for horizontal scaling — add more pollers against the same task queue):
 
@@ -46,7 +63,11 @@ cd server
 python -m services.temporal.worker
 ```
 
-This invokes `run_standalone_worker()` from `services/temporal/worker.py`.
+This invokes `run_standalone_worker()` from `services/temporal/worker.py`. It also starts the chat relay
+(`services/chat/relay.py`): the worker has no sockets of its own, so the chat run events and the `chat.updated` /
+`approval_lifecycle` broadcasts its activities make go to the backend over `/ws/internal`
+([Chat Protocol → Standalone workers](./chat_protocol.md#standalone-workers)). Other broadcasts from its activities
+(node status, agent progress) still reach only its own process.
 
 ## System Architecture
 
@@ -90,12 +111,12 @@ This invokes `run_standalone_worker()` from `services/temporal/worker.py`.
 
 ## Key Architecture Principles
 
-### 1. Node = Independent Activity
+### 1. External Work = Independent Activity
 
-Each node runs as a separate Temporal activity with:
+Ordinary nodes and the external steps of agent child Workflows run as Activities with:
 - **Own context** - No shared mutable state between nodes
-- **Own retry policy** - Failed nodes retry independently (up to 3 attempts)
-- **Own timeout** - Long AI nodes don't block short nodes (`_NODE_ACTIVITY_START_TO_CLOSE` = 24 h ceiling in `services/temporal/workflow.py`; liveness comes from the 2-minute heartbeat, not the start-to-close cap)
+- **Own retry policy** - Plugin declarations take precedence over ordinary defaults. Agent LLM steps use unlimited transient retries; a declared one-attempt tool keeps that policy.
+- **Own timeout** - Ordinary graph dispatch uses a 24 h ceiling and 2-minute heartbeat; Workspace-task nodes and version 1 agent-tool dispatch consume plugin values. Different Activities can progress independently.
 - **Own worker** - Can execute on any available worker in the cluster
 
 ### 2. Workflow = Pure Orchestrator
@@ -107,7 +128,9 @@ The workflow ONLY orchestrates:
 - Schedules activities using FIRST_COMPLETED pattern
 - Collects results and routes outputs to dependent nodes
 
-**NO business logic in workflow** - all execution happens in activities.
+Provider requests, tool execution, database access, and external effects happen
+in Activities. Workflow code owns deterministic scheduling, admission gates,
+result bookkeeping, and durable continuation.
 
 ### 3. Context Passing (Immutable)
 
@@ -134,6 +157,96 @@ context = {
     "edges": [...],  # Full list for tool/memory detection
 }
 ```
+
+## Cooperative generation Stop and Resume
+
+New generations record `resource_manifest.execution_control_version=1` and
+propagate that protocol in their Workflow input. The version is a generation
+contract, independent of routing flags. Existing generations keep their prior
+command paths; deployment of new code does not silently give old histories the
+stronger acknowledgement guarantee.
+
+Stop means **finish admitted work, retain its result, and wait before the next
+action**. For a model response with tools A and B, Stop during A lets A finish
+and records its result; B stays pending. Resume admits B from the existing
+continuation. The model response and A are not explicitly scheduled again.
+Already-admitted parallel work drains concurrently under its original retry
+policies. Controller events remain queued while stopped.
+
+`services/temporal/execution_control.py::ExecutionControl` holds the revision,
+pause posture, producer hold, active-action count, and pending child-start
+count in Workflow state. Owners expose completed `set_control_state` and
+`wait_for_checkpoint` Updates and a read-only `execution_control_status` Query.
+Initialization binds the input before early handlers can run; pure validators
+reject malformed or wrong-generation/chain requests before acceptance. The
+helper does not intercept SDK commands: callers use admission gates at their
+existing scheduling boundaries.
+
+The boundary accounting is deliberate:
+
+| Work | Admission and acknowledgement |
+|---|---|
+| Model request, ordinary node/tool, polling fetch, compaction, tool refresh | Gate before scheduling; count admitted work through result consumption and its normal bookkeeping. |
+| Child Workflow start | Gate and count until Temporal acknowledges the start, allowing complete native child enumeration afterward. |
+| Child result or subagent-permit wait | Excluded from local drain count; the child is controlled separately and a waiting parent must not block Stop. |
+| Control enrollment, checkpoint waits, maintenance | Excluded from business-work drain; completed results can still be recorded while stopped. |
+
+The generation controller records only **independent roots**: graph runs,
+cron/job roots, and detached `DelegatedTaskWorkflow` runners that can outlive
+their parent. Roots enroll through an acknowledged controller Update before
+business work; a regular maintenance Activity bridges Workflow code to the
+Temporal client because Workflows cannot directly send Updates. Attached
+agent children inherit the scope and are discovered from native execution
+descriptions. There is no SQL participant registry, recurring participant
+heartbeat, or separate checkpoint store.
+
+`services/deployment/execution_control.py::transition_generation` first holds
+controller producers and fences every reachable Workflow, then waits for
+their checkpoint acknowledgements. Setters acknowledge already-admitted child
+starts before the next Describe call. It reconciles new root registrations
+until the controller membership epoch is stable. `pausing` means Stop has been
+requested; `paused` is published only after admitted business work and
+bookkeeping settle throughout that topology. A request timeout leaves
+`pausing` for reconciliation and does not cancel the draining Activity.
+
+Resume publishes a newer intent with producers held, releases existing
+descendants and independent roots, reconciles membership, and releases the
+controller producers last. Local collectors and schedules reopen through the
+generation control handler. Revisions prevent delayed enrollment replies or
+stale control messages from overriding newer intent. Control uses current
+Workflow-ID handles with first-execution-chain checks, so continue-as-new
+Run-ID changes remain addressable and reused IDs cannot control another chain.
+An unexpectedly lost version 1 controller fails closed; an empty replacement
+root map cannot prove a generation is safely resumable.
+
+`rlm_agent`, `claude_code_agent`, and `vertex_managed_agent` remain whole-node
+Activities. Stop waits for the admitted Activity, including its internal tool
+work, to settle. It does not suspend the CLI, REPL, or cloud agent between
+internal calls. Direct Workspace tasks and separately approved sends have
+their own execution ownership; generation Stop does not control those
+independent executions.
+
+Heartbeats provide liveness and cancellation/progress information when an
+Activity implements that contract. A heartbeat status string cannot checkpoint
+an opaque request or process session. We use regular Activities for provider
+and tool work, preserving retries, heartbeats, and worker routing. The
+[Long-running Activity pattern](https://docs.temporal.io/design-patterns/long-running-activity)
+explains those contracts; [Resumable Activity](https://docs.temporal.io/design-patterns/resumable-activity)
+addresses retrying a failed Activity after corrective input, which is a
+different operation from releasing this suspended continuation. The
+[Python messaging guide](https://docs.temporal.io/develop/python/workflows/message-passing)
+defines the Signal/Update/Query acknowledgement and handler rules used here.
+
+Stop can remain `pausing` during a persistent provider outage because
+`LLM_STEP_RETRY` intentionally has no attempt limit. A worker loss or ambiguous
+external effect before Temporal records completion can still trigger an
+Activity retry according to the tool's policy; external-effect deduplication
+belongs to the tool's idempotency contract. Resume does not promise exactly-once
+delivery to external systems.
+
+For API shapes, chat lifecycle, recovery, and verification, see
+[Temporal workflow control](temporal-workflow-control.md) and
+[Chat protocol](chat_protocol.md).
 
 ## Execution Flow
 
@@ -178,15 +291,22 @@ while True:
             completed.add(node_id)
             continue
 
-        # F4.A: resolve to per-type name + queue when the flag is on,
-        # else fall back to the legacy single dispatcher.
-        activity_name, activity_queue = self._resolve_activity(node_type)
+        # F4.A: resolve to per-type name + queue when the run's frozen
+        # routing snapshot has the flag on, else fall back to the legacy
+        # single dispatcher. (Simplified: the real loop calls
+        # _resolve_dispatch(..., routing_snapshot=frozen_routing), which
+        # also picks the AgentWorkflow child path.)
+        activity_name, activity_queue = self._resolve_activity(
+            node_type,
+            per_type_dispatch_enabled=frozen_routing["per_type_dispatch_enabled"],
+            worker_pool_enabled=frozen_routing["worker_pool_enabled"],
+        )
         start_kwargs = dict(
             args=[context],
             activity_id=node_id,
             # Heartbeat is the liveness mechanism; start_to_close only
-            # bounds a single legitimate step (24h; pre-patch histories
-            # replay against the old 10min cap).
+            # bounds a single legitimate step (24h; unconditional, no
+            # workflow.patched marker).
             start_to_close_timeout=_NODE_ACTIVITY_START_TO_CLOSE,
             heartbeat_timeout=timedelta(minutes=2),
             retry_policy=activity_retry_policy,  # plugin cls.retry_policy wins when declared
@@ -201,6 +321,10 @@ while True:
         break
 
     done_id, result = await self._wait_any_complete(running)
+    if not result.get("success"):
+        # The first failure stops the run (see "4. The run result").
+        errors.append({"node_id": done_id, "error": result.get("error", "Unknown error")})
+        break
     completed.add(done_id)
     outputs[done_id] = result
 ```
@@ -209,7 +333,7 @@ while True:
 
 **Legacy path** (`execute_node_activity`): The activity round-trips through the local WebSocket back to FastAPI, which dispatches to the plugin handler. This was the only path before F4.A.
 
-**Per-type path** (`node.{type}.v{version}`, F4.A): The activity body lives on the plugin class via `BaseNode.as_activity()` and calls `workflow_service.execute_node(...)` **directly** — no WebSocket round-trip. Same DI container (the worker shares the FastAPI process), same broadcasting + parameter-fetch pipeline. Each plugin class declares its own `start_to_close_timeout` / `retry_policy` / `heartbeat_timeout` so they're applied at activity definition time. See `server/services/plugin/base.py:as_activity`.
+**Per-type path** (`node.{type}.v{version}`, F4.A): The Activity body lives on the plugin class via `BaseNode.as_activity()` and calls `workflow_service.execute_node(...)` **directly** — no WebSocket round-trip. Same DI container (the embedded worker shares the FastAPI process), same broadcasting + parameter-fetch pipeline. Activity options are selected by the caller, not the registration decorator. Graph dispatch uses plugin retry/queue with ordinary 24 h / 2 min timeout/heartbeat defaults, except the Workspace-task patch. Version 1 AgentWorkflow tool bindings record and use the plugin's timeout, heartbeat, retry, and queue declarations during payload preparation or explicit refresh. See `server/services/plugin/base.py:as_activity`, `server/services/temporal/workflow.py`, and `server/services/temporal/agent_workflow.py::_execute_plugin_tool_activity`.
 
 ```python
 # F4.A per-type activity body (server/services/plugin/base.py)
@@ -236,6 +360,26 @@ async def _node_activity(context: Dict[str, Any]) -> Dict[str, Any]:
 The 2-minute `heartbeat_timeout` would kill browser or claude_code_agent activities that routinely run 5-10 minutes. Both dispatch paths emit `activity.heartbeat()` at progress points — legacy on every non-matching WebSocket message, per-type at the start of each pipeline stage.
 
 In the legacy path the server broadcasts status updates, tool-glow events, and progress messages continuously during execution, so the WS-read-loop heartbeats keep the activity alive for as long as anything is happening. Start/end heartbeats alone are not enough — any operation longer than 2 minutes would trigger `TIMEOUT_TYPE_HEARTBEAT` and Temporal would retry (or fail) the activity.
+
+### 4. The run result
+
+`MachinaWorkflow.run` returns `{success, outputs, execution_trace, errors, total_nodes}`.
+- `total_nodes` is the size of the executable graph.
+- `execution_trace` lists every node the run completed, skipped or auto-completed.
+- `success` is true only when no node failed and every node in the executable graph completed.
+- The first node that fails stops the run. `errors` then holds that failure as `{node_id, error}`, plus whichever of `hint`, `requires_user_action` and `retryable` the node supplied. It is `None` when nothing failed.
+- Only an empty graph returns a top-level `error` ("No nodes provided") instead.
+
+`TemporalExecutor.execute_workflow` turns that into the Run response, and `WorkflowService._execute_temporal` forwards it:
+- `errors` is the workflow's list unchanged, or `[{"error": ...}]` for an empty graph or a failed Temporal call;
+- `error` is the first entry's message, or `None`;
+- `total_nodes` is the workflow's count, and `completed_nodes` is the length of `execution_trace`.
+
+The in-process paths return the same four fields (`_run_errors` and `_node_failure` in `services/workflow.py`):
+- the sequential fallback counts the nodes reachable from the start node, which leaves out tools and other nodes wired into an agent;
+- the Redis-only parallel engine counts its node executions, which leave out config nodes and agent sub-nodes.
+
+The editor's Run dialog shows `error` when a run fails ("Workflow failed: …") and `completed_nodes` / `total_nodes` when it succeeds ("N/M nodes completed"). Before these fields were set, a failed Run said "Unknown error" and a successful one said "0/0 nodes completed" ([Known Errors #31](./errors.md)). Locked by `server/tests/temporal/test_run_errors.py` and `server/tests/services/test_workflow_run_result.py`.
 
 ## Connection Pooling
 
@@ -288,7 +432,7 @@ Add more workers = handle more concurrent nodes
 
 ### Specialized Worker Pools (Wave 16 — `TEMPORAL_WORKER_POOL_ENABLED`, default on since 16.4)
 
-`TemporalWorkerPool` is wired into the `main.py` lifespan (starts right after `TemporalWorkerManager`, stops before it). One activity-only Worker per plugin-declared queue polls its specialised queue, and `MachinaWorkflow._resolve_activity` returns `(activity_name, cls.task_queue)` so per-type activities land there. Setting `TEMPORAL_WORKER_POOL_ENABLED=false` stops the pool and routes every activity back to the single manager worker on `machina-tasks` — **the flag is the rollback channel** (locked default-on by `test_task_queue_coverage.py::TestWorkerPoolDefaultOn`).
+`TemporalWorkerPool` is started by the Temporal lifecycle task (`services/temporal/lifecycle.py::_start_execution_engine`, right after `TemporalWorkerManager`) and stopped before it by the `main.py` lifespan teardown. One activity-only Worker per plugin-declared queue polls its specialised queue, and `MachinaWorkflow._resolve_activity` returns `(activity_name, cls.task_queue)` when the run's frozen routing snapshot has `worker_pool_enabled` set, so per-type activities land there. Setting `TEMPORAL_WORKER_POOL_ENABLED=false` (then restarting) stops the pool, and runs started afterwards route every activity to the single manager worker on `machina-tasks` — **the flag is the rollback channel** (locked default-on by `test_task_queue_coverage.py::TestWorkerPoolDefaultOn`). It is not retroactive: `_resolve_activity` receives the flag from the run's `_temporal_routing_v1` snapshot rather than reading `Settings`, so a run (or a deployed trigger) that started with the pool on keeps scheduling onto the specialised queues, which have no poller while the pool is off.
 
 ```
 Queue: rest-api         Queue: ai-heavy         Queue: code-exec
@@ -337,11 +481,12 @@ Env overrides: `TEMPORAL_<QUEUE>_CONCURRENCY` (int) and `TEMPORAL_<QUEUE>_RATE_L
 
 ### Agent-as-child-workflow (F4.B)
 
-When `TEMPORAL_AGENT_WORKFLOW_ENABLED=true` and the node type is in the migrating set (`aiAgent` / `chatAgent` / 11 specialized agents / 2 team leads), the orchestrator schedules `AgentWorkflow` as a child workflow instead of an activity. Inside the workflow:
+When `TEMPORAL_AGENT_WORKFLOW_ENABLED=true` and the node type is in `AGENT_WORKFLOW_TYPES` (`aiAgent`, `chatAgent`, the specialized agents and the team leads; `rlm_agent`, `claude_code_agent` and `vertex_managed_agent` are excluded), the orchestrator schedules `AgentWorkflow` as a child workflow instead of an activity. Inside the workflow:
 
 ```
 AgentWorkflow.run(context):
-  0. execute_activity("agent.prepare_payload")
+  0. restore the carried prepared_payload on a version 1 continuation;
+     otherwise execute_activity("agent.prepare_payload")
        resolves the DB-backed payload from the canvas context — runs
        workflow_service._param_resolver.resolve so {{node.field}}
        templates in prompt / system_message become real values BEFORE
@@ -376,7 +521,8 @@ AgentWorkflow.run(context):
                child_context = {**tool_payload,
                                 "parent_node_id": <self>,
                                 "invocation": {"task": …, "context": …}}
-               id = f"{parent_workflow_id}-delegate-{child_node_id}-{iter}"
+               id = _delegation_child_id(...)
+                  # "{agent_workflow_id}-delegate-{tool_node_id}-{iteration+1}-{call_index+1}"
            else:
              execute_activity(f"node.{tool_node_type}.v{version}")
            emit_phase("tool_completed", tool_name=...)
@@ -392,8 +538,10 @@ AgentWorkflow.run(context):
          if payload["auto_rebind_tools"] is True:
            execute_activity("agent.refresh_tools", {operations: …})
               translates add_node ops with component_kind=="tool" OR
-              usable_as_tool=True (minus chat-model plugins) into the
-              same tool_payload shape prepare_agent_payload emits.
+              usable_as_tool=True (minus chat-model plugins and the
+              Skills node, masterSkill, which is tool-kind but feeds
+              input-skill) into the same tool_payload shape
+              prepare_agent_payload emits.
               Reuses ai_service._build_tool_from_node + get_node_class,
               yielding fresh AgentToolSpec / ToolDef declarations.
            tools.extend(refresh_result["tools"])
@@ -436,13 +584,48 @@ request starts.
 
 `emit_phase(phase, status?)` is a thin helper that schedules `agent.broadcast_progress`. The activity emits `WorkflowEvent.agent_progress` (CloudEvents v1.0, `type="com.opencompany.agent.progress"`) for FE consumers; when `status` is supplied it also drives a raw-dict `update_node_status` for the canvas-glow color (executing / success / error). Same dual-channel pattern F4.A's `_node_activity` uses. When this workflow is itself a delegated child (`context["parent_node_id"]` set), every `emit_phase` call ALSO schedules a second broadcast against the parent's `node_id` with `phase="delegating"` — the parent's canvas badge then advances in real time while the child loops, instead of freezing at "executing" glow until the child completes.
 
-Each LLM step is one activity and each ordinary tool call is one per-type activity. Team-lead Task Manager assignments are different: persistence happens first, then the lead starts a deterministic detached `DelegatedTaskWorkflow` with `ParentClosePolicy.ABANDON` and receives `queued` immediately. The runner owns the root-wide permit, claim, child `AgentWorkflow`, terminal result/usage persistence, `taskTrigger`, and permit release, so the assigning lead can return without polling. Direct non-team delegation retains the child-workflow path. Non-agent tools and excluded types (`rlm_agent`, `claude_code_agent`) still go through `execute_activity`. Failures surface as durable task failures and trigger review rather than being lost when the lead invocation closes.
+Each LLM step is one Activity and each ordinary tool call is one per-type
+Activity. In version 1, gates surround model requests, tool admission, tool
+refresh, compaction, and child starts; admitted result and transcript
+bookkeeping finish while stopped. Unstarted calls from a recorded response
+stay in the current Workflow continuation. Stop preserves the existing
+parallel scheduling and never converts child-result waits into drain work.
 
-Durable event listeners retain their deployment graph as a fallback, but each firing resolves the latest persisted workflow graph through `load_persisted_workflow_graph_activity` before filtering downstream nodes. This makes tools added after deployment available to `taskTrigger` and other triggered agent runs. Edge traversal accepts both canonical `targetHandle` and legacy `target_handle`; tool choice remains entirely with the agent and no trigger-specific tool-use prompt is injected.
+Team-lead Task Manager assignments persist first, then the lead starts a
+deterministic detached `DelegatedTaskWorkflow` with
+`ParentClosePolicy.ABANDON` and receives `queued` immediately. The runner owns
+the root-wide permit, claim, child `AgentWorkflow`, terminal result/usage
+persistence, `taskTrigger`, and permit release, so the assigning lead can
+return without polling. A version 1 runner independently enrolls with the
+generation controller; its attached agent child needs no separate enrollment.
+Direct non-team delegation retains the attached child-workflow path.
+Non-agent tools and excluded types (`rlm_agent`, `claude_code_agent`,
+`vertex_managed_agent`) still use `execute_activity`. Failures surface as
+durable task failures and trigger review rather than being lost when the lead
+invocation closes.
 
-**Delegation input contract (input-vs-config separation).** The LLM's `{task, context}` args are per-invocation *input*, not node configuration, and travel as the child workflow input's `invocation` field. `prepare_agent_payload` applies it AFTER its config resolution (`{**node_data, **db_params}` — DB wins for config liveness): `task` → system_message, `context`-or-`task` → prompt — the same semantics as the legacy `handlers.tools._execute_delegated_agent`. Stored node parameters (including the empty default `prompt` the frontend persists on drop) therefore never override the delegated task. A call with both fields empty is rejected at the parent's call boundary (tool-error message to the LLM, no child spawn). Bypass agents dispatched as plain activities (`rlm_agent` / `claude_code_agent`) instead receive the remap directly in `node_data` — their per-type activity consumes `node_data` verbatim with no DB re-merge.
+Which graph a firing runs depends on the deployment kind. Controlled generations (the listener payload carries a `data_scope_id`) execute the graph snapshot carried in their trigger registration on every firing, with no per-firing graph lookup. Legacy uncontrolled deployments (no `data_scope_id`) keep the hot lookup: each push or poll firing in `TriggerListenerWorkflow._spawn_child_run` / `PollingTriggerWorkflow._spawn_child_run` resolves the latest persisted workflow graph through `load_persisted_workflow_graph_activity` before filtering downstream nodes, falling back to the deployment snapshot if the lookup fails; that is what makes tools added after deployment available to `taskTrigger` and other triggered agent runs on those deployments. Edge traversal accepts both canonical `targetHandle` and legacy `target_handle`; tool choice remains entirely with the agent and no trigger-specific tool-use prompt is injected.
 
-**Canvas-aware tools** opt into receiving the parent workflow's `nodes`/`edges` by declaring `needs_canvas: ClassVar[bool] = True` on their `BaseNode` subclass. The F4.B tool dispatch reads this via `services.node_registry.get_node_class(node_type).needs_canvas` and forwards `context.get("nodes")` / `context.get("edges")` into `tool_payload`; default plugins keep the empty-canvas optimisation. Today only `agentBuilder` opts in (it walks edges to resolve its calling agent and mutates the canvas). Operations inside agentBuilder reload via `database.get_workflow(workflow_id)` so in-run duplicate detection sees mutations from earlier calls in the same workflow run — see [agent_builder section in CLAUDE.md](../CLAUDE.md).
+**Delegation input contract (input-vs-config separation).** The LLM's `{task, context}` args are per-invocation *input*, not node configuration, and travel as the child workflow input's `invocation` field. `prepare_agent_payload` applies it AFTER its config resolution (`{**node_data, **db_params}` — DB wins for config liveness): `task` → system_message, `context`-or-`task` → prompt — the same semantics as the legacy `handlers.tools._execute_delegated_agent`. Stored node parameters (including the empty default `prompt` the frontend persists on drop) therefore never override the delegated task. A call with both fields empty is rejected at the parent's call boundary (tool-error message to the LLM, no child spawn). Bypass agents dispatched as plain activities (any type outside `AGENT_WORKFLOW_TYPES`: `rlm_agent` / `claude_code_agent` / `vertex_managed_agent`) instead receive the remap directly in `node_data` — their per-type activity consumes `node_data` verbatim with no DB re-merge.
+
+**Canvas-aware tools** opt into receiving the parent Workflow's `nodes`/`edges`
+with `needs_canvas: ClassVar[bool] = True`. Version 1 records that declaration
+with the resolved tool binding; legacy F4.B reads the plugin class at dispatch.
+Opted-in tools receive the parent's canvas; others keep the empty-canvas
+optimization. `agentBuilder.add_tool` compares the run's canvas with the saved
+graph, so a saved tool missing from the generation snapshot returns a bind-only
+`add_node` operation. Its calling agent is `invoking_agent_node_id`, else
+`parent_node_id`. Operations reload the saved graph for in-run duplicate
+detection; see the [agentBuilder card](./node-logic-flows/ai_tools/agentBuilder.md).
+
+Version 1 also records each ordinary tool's timeout, heartbeat, retry, and
+queue policy in `tool_info.activity_policy`. Both initial preparation and
+explicit refresh produce these bindings; continue-as-new carries the resolved
+set. Scheduling uses those recorded declarations, with specialized queue
+routing only when the frozen worker-pool flag is on. A plugin update during
+Stop or worker restart does not implicitly replace an already-bound policy.
+Legacy histories keep their prior scheduling options, including the existing
+Workspace-task policy patch.
 
 `collect_agent_activities()` registers the agent activities — read the live set
 from that function rather than trusting a count here, which drifts on every
@@ -452,7 +635,7 @@ addition. Seven are the core loop activities:
 |---|---|
 | `agent.prepare_payload` | Resolves the DB-backed payload (provider / model / system_message / user_prompt / `AgentToolSpec`-derived tool definitions / memory_node_id / memory_content / memory_window_size / max_iterations / thinking_config / compaction_threshold / tool_result_max_chars / transcript_budget_bytes / context_pressure_version / auto_rebind_tools), and leaves credential resolution at the LLM activity boundary. Reads `UserSettings.agent_recursion_limit`, `auto_rebind_tools_after_canvas_change`, `tool_result_max_chars`, `max_concurrent_subagents` and `max_delegation_depth`. Recording the three transcript-pressure keys here is what lets a history recorded before them replay the original rules. Applies the optional `invocation` field (delegation children) after config resolution — per-invocation input always beats stored parameters. |
 | `agent.execute_llm_step` | One LLM turn. The native branch decodes Message Wire V2, rebuilds `ToolDef` values, calls `run_native_llm_step(ChatUnifier, ...)` with SDK retries disabled, heartbeats while awaiting the provider, and returns the exact assistant message + tool calls + normalized usage. Guards against un-invokable payloads: post-filter system-only message lists raise `ApplicationError(type="EmptyAgentPrompt", non_retryable=True)`. |
-| `agent.refresh_tools` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
+| `agent.refresh_tools` | Translates `workflow_ops` add_node ops (`component_kind="tool"` OR `usable_as_tool=True`; never a chat model or the Skills node) into fresh `AgentToolSpec`-derived `tool_payload` entries via `_build_tool_from_node`. Workflow extends `tools` + `tool_index` from the result. |
 | `agent.persist_turn` | Appends the latest human/assistant exchange to memory markdown, trims the window, broadcasts `node.parameters.updated`. |
 | `agent.compact_context` | The shared client-side summarizer, run under transcript pressure (step 6 above). Not best-effort: after the activity's retries a failure ends the run with `CompactionError`, because past that point the transcript could only grow until the provider rejected it. |
 | `agent.store_output` | Writes `output_main` / `output_top` / `output_0` so downstream nodes resolve `{{aiAgent.response}}` via `ParameterResolver`. |
@@ -480,8 +663,10 @@ pipeline: `agent.prepare_payload` loads the stored conversation for
 `conversation_key` (load failures are LOUD — `ConversationLoadFailed`
 retryable / `ConversationTooLarge` non-retryable at 1 MB), and
 `agent.execute_llm_step` saves `[...sent, assistant]` best-effort after each
-provider call. A continue-as-new rollover carries the live transcript in its
-resume marker, so nothing reconstructs from the store mid-run. The
+provider call. A version 1 continue-as-new rollover carries the live transcript
+and prepared state, so it does not reload changed configuration or reconstruct
+the continuation from the conversation store. Legacy rollover behavior is
+documented in [agent context flow](agent_context_flow.md#message-seeding-what-a-runs-initial-messages-list-is). The
 journal-era activities (`agent.prepare_context`,
 `agent.reconstruct_context_messages`, `agent.append_context`) are retired;
 `agent.compact_context` (the shared client-side summarizer that bounds the
@@ -500,9 +685,104 @@ the tool-result cap apply whether or not compaction is on (see
 
 **Broadcasts inside the loop** wrap `WorkflowEvent` (CloudEvents v1.0) per RFC §6.4: `agent_progress` events (`com.opencompany.agent.progress`) and `node_parameters_updated` events (`com.opencompany.node.parameters.updated`) flow through the `StatusBroadcaster.broadcast_agent_progress` and `StatusBroadcaster.broadcast_node_parameters_updated` wrappers respectively. The latter is reused by the legacy `routers/websocket.py:handle_save_node_parameters` (user-source) and `services/cli_agent/service.py:_persist_memory` (cli-source) — all three emission sites share the same envelope, distinguished by `source_hint` (`"user"` / `"cli"` / `"agent"`).
 
-`rlm_agent`, `claude_code_agent` are NOT migrated — their internal session state (RLM REPL / Claude CLI `--resume` with stable `cwd`) requires single-process continuity and would break across activity boundaries.
+`rlm_agent`, `claude_code_agent` and `vertex_managed_agent` are NOT migrated (they are absent from `AGENT_WORKFLOW_TYPES`) — their internal session state (RLM REPL / Claude CLI `--resume` with stable `cwd` / Vertex Interactions API `previous_interaction_id` and environment chaining) requires single-process continuity and would break across activity boundaries.
 
 References: [Temporal AI Cookbook](https://docs.temporal.io/ai-cookbook), [`temporal-community/temporal-ai-agent`](https://github.com/temporal-community/temporal-ai-agent), [`temporalio.contrib.openai_agents`](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/openai_agents).
+
+### Agent continuation under history pressure
+
+`AgentWorkflow` rolls over at a clean completed-turn boundary, with no live
+delegation handles or Task Manager tasks. Version 1 parks at that boundary
+while stopped and waits for all control handlers to finish before
+continue-as-new. The next input carries pause/revision/hold state, application
+execution identity, transcript, accumulated thinking, iteration, usage,
+context usage, prepared payload, and the resolved tool bindings. A rollover
+changes Temporal's Run ID while preserving the application's execution scope.
+
+The converter measures the **complete encoded continuation input**, including
+graph, preparation, and bindings, against `_CAN_INPUT_MAX_BYTES` (1,900,000
+bytes). Existing post-turn result relief and compaction run before this clean
+boundary. If the argument still cannot fit, version 1 fails explicitly with
+`AgentContinuationTooLarge`; it never returns to the opening prompt. A large
+graph or binding set can overflow even when the transcript alone fits.
+Legacy histories retain their previous preparation and 1 MB transcript-only
+fallback for replay compatibility. The new capacity guarantee is limited to
+version 1 generations.
+
+The [Continue-As-New guidance](https://docs.temporal.io/design-patterns/continue-as-new)
+motivates bounded histories and explicit carried state. Controller rollover
+can still happen while stopped because it carries pending events and root
+membership; the agent rule above specifically avoids rolling over a live or
+suspended tool/delegation turn.
+
+The focused tests use stubbed business Activities with real Temporal test
+Workflows, including tool drain/continuation, worker restart, actual rollover,
+and replay: [agent execution control](../server/tests/temporal/test_agent_execution_control_integration.py),
+[generation topology](../server/tests/temporal/test_generation_execution_control_integration.py),
+and [execution-control replay](../server/tests/temporal/test_execution_control_replay.py).
+Plugin options and capacity errors are also covered by
+[AgentWorkflow tests](../server/tests/temporal/test_agent_workflow.py).
+These checks do not establish external-tool exactly-once effects or eliminate
+the ingress and duplicate-trigger naming limits recorded in the
+[control guide](temporal-workflow-control.md).
+
+### Direct Workspace tasks
+
+A node class that declares `workspace_task = True` can run a task outside any
+graph run. Phone nodes post to `/api/mobile/{workflow_id}/{node_id}/tasks`
+(`server/nodes/mobile/_router.py`). The dedicated `browser_agent` task panel
+posts to `/api/browser/tasks` (`server/routers/browser_tasks.py`). Both use
+`services/node_invocations.py::submit`. Direct tasks are generation zero,
+independent of deployed Start/Stop/Resume, and have their own Cancel and Reset
+cleanup.
+
+- **Admission.** Each OpenCompany workflow has one long-lived `WorkspaceTaskControllerWorkflow` (`services/temporal/workspace_tasks_workflow.py`, Temporal id from `node_invocations.controller_id`), created on first use through Update-With-Start. Its `submit` Update checks the admission epoch, bounds active tasks, deduplicates the submission UUID and fingerprint, and starts one `NodeInvocationWorkflow` child per task. New Browser payloads carry server-generated `dispatch_version: 1`, `dispatch_kind: native_agent` and `history_version: 1`; their idempotent history admission Activity completes before acceptance is acknowledged. Unversioned payloads retain the original single per-type Activity command path with no retry.
+- **Native Browser execution.** The invocation starts `AgentWorkflow`, using the existing model/tool Activities. Preparation applies the submitted task after saved configuration and templates while preserving system instructions. `native_workspace_version: 1` permits Continue-As-New with generation-zero task identity, frozen tools, policies, owner bindings and transcript, without enrolling direct tasks in generation control or repeating completed turns. The task does not read/write deployed Context or employee chat. Completion is counted once at the invocation parent, including cancellation/error outcomes; agent children and rollover do not add completions.
+- **Browser history.** `WorkspaceTaskRecord` is a projection, not the execution authority. Admission and lifecycle writes are idempotent and terminal states cannot regress. Recent tasks contain prompt, timestamps, bounded safe result/error and authorized relative artifact links, excluding tool transcripts and credentials. Pages default to 20 (maximum 100); terminal records expire after 35 days, while active records and history survive Reset. Workflow authorization protects historical records after node deletion. Retained terminal records also prevent resubmission after controller dedup or Temporal history expiration.
+- **Reset.** The controller's `reset` Update first fences new submissions by advancing the epoch. It then cancels every admitted child and waits for each to close, and runs the `workspace_tasks.reset_runtime` activity (`services/temporal/workspace_task_activities.py::reset_workspace_task_runtime`). That activity cancels invocations started before the controller existed and calls each Workspace-task node's `reset_execution_state`. The Update returns only after that cleanup. If cleanup fails, the fence stays in place, and retrying Reset resumes the same request. The workflow toolbar's Reset reaches the controller through `services/deployment/handlers.py::_reset_workspace_tasks`, even for a workflow that was never started; see [temporal-workflow-control.md](./temporal-workflow-control.md#workspace-tasks).
+- **Registration and rollover.** Both workflow classes are in `worker.py::_framework_workflows`, and every framework worker registers `reset_workspace_task_runtime`. The controller continues-as-new under history pressure, carrying its epoch and its bounded submission and reset records.
+- **Inside graph and agent runs.** Two patch markers give Workspace-task nodes their own activity options. `workspace-node-cancellation-v1` (`MachinaWorkflow`) uses the node class's `start_to_close_timeout` and `heartbeat_timeout`, and makes cancellation wait until the activity has finished cleaning up. `workspace-task-activity-policy-v1` (tool calls in `AgentWorkflow`) does the same and also applies the class's `retry_policy` and, with the worker pool on, its `task_queue`.
+
+Browser tasks hold the profile claim during reasoning, tools and human help.
+Finalization waits for matching-token owner cleanup; stale cancellation cannot
+release a newer task. Queued work has no schedule-to-start or schedule-to-close
+deadline, so an owner outage consumes neither retry attempts nor model turns.
+Start-to-close and heartbeat timeouts apply after pickup. Cancel/Reset can stay
+pending until that owner recovers. Later mutating attempts are refused when the
+prior effect is uncertain; recovery requires fresh observation and confirmation,
+not profile transfer or a reset attempt identity. The active workflow/tool
+association restores viewer access to the frozen profile across edits/restarts.
+
+`tests/temporal/test_browser_workspace_replay.py` uses a native Temporal test
+server with separate orchestration and two owner workers. Its model/browser
+Activities are controlled fixtures. Set `TEMPORAL_TEST_CLI` to a provisioned
+native Temporal executable to run the owner-routing, Continue-As-New,
+cancellation/cleanup and SDK replay gate. Old replay fixtures remain required.
+
+What the user sees is documented in [Mobile workspace](../docs/mobile-workspace.md#resetting-phone-tasks)
+and [Browser workspace](browser_workspace.md#direct-browser-tasks).
+
+### Approved sends
+
+A tool call that sends, made while the workflow asks first, is held as a draft (`services/approvals/tool_calls.py`)
+instead of running. When the owner presses Send, `decide_approval` starts `ApprovedToolCallWorkflow`
+(`services/temporal/approved_tool_call_workflow.py`, id `approval-send-<approval id>-r<revision>`, `payload_version` 1,
+unsandboxed like the other framework workflows):
+
+- it sleeps until the draft's Undo window closes (`grace_until`);
+- `approvals.claim_send` moves the row from approved to sending, only at the revision the workflow was started for,
+  with a claim token derived from the workflow run; an Undo, a newer Send or a cancel moved the row, and the
+  workflow ends with nothing sent. A retried claim by the same run finds its own claim;
+- it runs the node's own `node.<type>.v<n>` activity once (`maximum_attempts=1`), with the call's arguments over the
+  node's settings; the activity runs only under that claim (`approval_execution` in its input);
+- `approvals.record_outcome` records `sent`, `not_sent` (the node said it did not go) or `unknown` (the activity
+  broke off, so it may have gone), and leaves the employee an `[update]` note for its next chat turn.
+
+The bookkeeping activities retry until they land. Both are in every framework worker's activity list
+(`services/approvals/activities.py::APPROVAL_ACTIVITIES`), and the workflow class is in `_framework_workflows`. A
+send that never started (the server stopped between the decision and the start) is started again by the approvals
+reconcile; one that never reported ends `failed` with an unknown outcome. See
+[Chat Protocol, Approvals](./chat_protocol.md#approvals).
 
 ## Config Node Filtering
 
@@ -522,9 +802,10 @@ CONFIG_HANDLES = {
 }
 
 # Trigger node types - event listeners, never scheduled as blocking activities
-# Authoritative list: server/constants.py WORKFLOW_TRIGGER_TYPES (frozenset,
-# 17 entries at the time of writing). Omitting a trigger there is a silent
-# failure: find_trigger_nodes filters on this set, so deploy ignores the node.
+# Authoritative list: server/constants.py WORKFLOW_TRIGGER_TYPES (frozenset;
+# the copy below can fall behind it). Omitting a trigger there
+# is a silent failure: find_trigger_nodes filters on this set, so deploy
+# ignores the node.
 WORKFLOW_TRIGGER_TYPES = frozenset([
     "start", "cronScheduler",
     "webhookTrigger", "whatsappReceive",
@@ -536,8 +817,7 @@ WORKFLOW_TRIGGER_TYPES = frozenset([
 ])
 
 # Android service types (connect directly to agent input-tools) -- authoritative list
-# in server/constants.py ANDROID_SERVICE_NODE_TYPES (16 entries since
-# Wave 11.I).
+# in server/constants.py ANDROID_SERVICE_NODE_TYPES.
 ```
 
 Config nodes are:
@@ -554,10 +834,10 @@ Trigger nodes that aren't the firing trigger are:
 
 | Scenario | Behavior |
 |----------|----------|
-| Ordinary node or agent-support activity fails transiently | Temporal retries up to 3 attempts with backoff unless the error type is non-retryable. |
+| Ordinary node or agent-support Activity fails transiently | The shared ordinary default is 3 attempts with backoff; declared plugin policies and specialized support policies take precedence. |
 | `AgentWorkflow` LLM-step activity fails | `LLM_STEP_RETRY` retries without limit (`maximum_attempts=0`, 5 s → 5 min backoff; `services/temporal/_retry_policies.py`) unless the provider error category is non-retryable (invalid_request, authentication, ...). Provider SDK retries stay disabled so Temporal owns the retry schedule and `retry_after` hints. |
-| Worker crashes mid-execution | Temporal reschedules on another worker |
-| Ordinary node times out | Temporal applies that activity's retry policy; plugin timeouts vary by node type. |
+| Worker crashes mid-execution | Workflow state replays from history; an unfinished Activity retries according to its timeout/retry policy on an eligible worker. Completed recorded work is not explicitly rescheduled by Resume. |
+| A node/tool Activity times out | Temporal applies the scheduled retry policy. Graph timeout/heartbeat defaults and version 1 agent-tool/plugin options differ as described above. |
 | All retries exhausted | Workflow receives failure, stops execution |
 
 ## File Structure
@@ -578,8 +858,14 @@ server/services/temporal/
 │   ├── _find_ready_nodes()        # Dependency resolution
 │   └── _wait_any_complete()       # FIRST_COMPLETED wait
 ├── workflow_control_workflow.py  # WorkflowControlWorkflow (per-generation controller: triggers, signals, polling, pause)
+├── execution_control.py         # Revision-ordered business admission and checkpoint accounting
+├── execution_control_activities.py # Client-side Update bridge for independent-root enrollment
 ├── trigger_listener_workflow.py  # TriggerListenerWorkflow (legacy push-trigger listener)
 ├── polling_trigger_workflow.py   # PollingTriggerWorkflow (legacy polling listener)
+├── workspace_tasks_workflow.py   # WorkspaceTaskControllerWorkflow (per-workflow admission + Reset for direct Workspace tasks)
+├── node_invocation.py            # NodeInvocationWorkflow (one direct Workspace task)
+├── approved_tool_call_workflow.py # ApprovedToolCallWorkflow (sends a held tool call once the owner approved it)
+├── workspace_task_activities.py  # reset_workspace_task_runtime (activity workspace_tasks.reset_runtime)
 ├── schedules.py         # Temporal Schedule creation for cronScheduler
 ├── search_attributes.py # EVENT_SEARCH_ATTRIBUTES (7 custom SAs, incl. ControlEventTypes)
 ├── _retry_policies.py   # DEFAULT_ACTIVITY_RETRY / QUICK_ACTIVITY_RETRY / LLM_STEP_RETRY / PERMIT_WAIT_RETRY / ...
@@ -650,14 +936,26 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 
 **Worker crash-restart (months-long durability)**: the SDK `Worker` is single-use — a second `run()` on the same instance raises `RuntimeError("Already started")`. Both restart loops therefore REBUILD a fresh worker per attempt: `TemporalWorkerManager._run_worker` via `_build_worker()`, and every `TemporalWorkerPool` queue worker runs under `_run_queue_worker` (previously a bare `worker.run()` task — one crash silently killed the queue's only worker and its activities pended forever). Backoff knobs: `TEMPORAL_WORKER_RESTART_BACKOFF_SECONDS` / `_MAX_SECONDS`. Locked by `tests/temporal/test_worker_restart.py`.
 
-**WS surface**: `_handlers.py` registers `temporal_status` / `temporal_start` / `temporal_stop` via `services.ws_handler_registry.register_ws_handlers`. `_refresh.py` registers a WS-connect callback via `services.status_broadcaster.register_service_refresh` so the FE health indicator stays current.
+**WS surface**: `_handlers.py` registers `temporal_status` / `temporal_start` / `temporal_stop` via `services.ws_handler_registry.register_ws_handlers`. `_refresh.py` registers a status-refresh callback via `services.status_broadcaster.register_service_refresh`, which seeds the FE health indicator once at startup (refresh callbacks run once, in a background task, not on each WebSocket connect).
 
-**Months-long durability contract**: running and paused deployments survive backend restarts, are never auto-terminated, and keep executing for months. Mechanisms, each replay-patch-guarded where it changes recorded commands:
+**Months-long durability contract**: running and paused deployments retain their
+Temporal histories across backend restarts. New child starts have no Workflow
+lifetime cap; individual Activities retain their declared attempt timeouts and
+retry limits. History pressure triggers continuation rather than a periodic
+restart. Existing executions can still have timers recorded by an older start;
+removing a timeout from new start options does not erase those timers. The
+poll-interval floor is unconditional, while controller queue and execution
+control changes use the version gates below. The strongest Stop/Resume
+guarantee applies to version 1 generations with their controller chain intact.
 
-- **No lifetime caps on new child runs.** Trigger/cron-spawned `MachinaWorkflow` runs, agent children, and delegated-task runners previously carried 1-2h `execution_timeout`/`run_timeout` — Temporal's timeout timers keep ticking through a cooperative pause, so any pause longer than the cap silently terminated the run (and a timed-out delegated runner skipped its compensation: leaked permit + stuck task row). New executions start children unbounded (no patch marker was retained for this change; the only live `workflow.patched` markers in the tree are `machina-conditional-edges-v1` in `services/temporal/workflow.py` and `machina-trigger-listener-node-filter` in `services/temporal/trigger_listener_workflow.py` — verify with `grep -rn "workflow.patched(" server/services/temporal`). Liveness is the activity layer's job: node activities heartbeat every 30s against a 2-minute `heartbeat_timeout`; their `start_to_close` is a generous 24h ceiling, not 10 minutes. The subagent-permit wait uses `PERMIT_WAIT_RETRY` (unlimited attempts) so a queued delegation waits as long as admission takes instead of failing after ~3h.
-- **History-pressure continue-as-new everywhere.** Temporal terminates any workflow around ~51,200 history events. `WorkflowControlWorkflow` (which multiplexes all of a deployment's triggers into one history) now rolls over on `is_continue_as_new_suggested()` / a 10K-event soft cap, carrying trigger specs, per-trigger provider `seen_ids` (written back into the spec after every poll cycle), queued push events, the bounded dedup baseline, and the control state — a rollover works mid-pause too, since a paused controller still accretes signal history. `TriggerListenerWorkflow`/`PollingTriggerWorkflow` gained the same pressure check (the old `_processed_count >= 16_000` gate was unreachable: real spawns cost ~15-25 events each, and polling counted only emitted events while a quiet mailbox burned ~11 events/cycle — dead in ~3 days at the 60s default). Poll intervals are clamped to a 30s floor on the patched path. Because run ids change on rollover, **controller handles are addressed by workflow id only, never run_id-pinned** (`_controller_handle`, manager `register_trigger`).
+- **No lifetime caps on new child runs.** Trigger/cron-spawned `MachinaWorkflow` runs, agent children, and delegated-task runners previously carried 1-2h `execution_timeout`/`run_timeout` — Temporal's timeout timers keep ticking through a cooperative pause, so any pause longer than the cap silently terminated the run (and a timed-out delegated runner skipped its compensation: leaked permit + stuck task row). New executions start children unbounded (no patch marker was retained for this change). The live `workflow.patched` markers are `machina-conditional-edges-v1`, `machina-run-record-v1`, `machina-chat-run-v1`, `workspace-node-cancellation-v1` and `workflow-node-user-action-error-v1` in `services/temporal/workflow.py`, `machina-trigger-listener-node-filter` in `services/temporal/trigger_listener_workflow.py`, and `workspace-task-activity-policy-v1`, `agent-user-action-error-v1` and `agent-blocked-tool-turn-save-v1` in `services/temporal/agent_workflow.py`; the list grows, so check it with `grep -rn "workflow.patched(" server/services/temporal`. `machina-run-record-v1` gates the `workflow_runs.record_completion` activity that trigger-spawned runs schedule when they finish, for Normal mode's "done today" (see [normal_mode.md](./normal_mode.md#done-today)). `machina-chat-run-v1` gates the `chat_run.start` / `chat_run.finish` activities a run spawned by the owner's chat message schedules to claim and finish its chat run; the run id is read only from an event whose source is `opencompany://services/chat` (see [chat_protocol.md](./chat_protocol.md#runs)). `workflow-node-user-action-error-v1` gates `MachinaWorkflow._node_failure`: when a node's activity or child workflow raises, it follows the error's causes to an `LLMError.*` or `MissingAgentProviderCredential` failure whose details carry `requires_user_action` (a missing or rejected key, billing, quota, permission, an unknown model or a wrong base URL) and returns a `NodeUserError` result with that message, its `hint` and `retryable: false` instead of the bare error text, so `chat_run.finish` records the hint and `workflow_control.pause_on_failure` pauses the deployment on that first failure rather than counting it toward the threshold. `agent-user-action-error-v1` gates the matching stop in `AgentWorkflow`: a tool result (a delegated agent's included) with an `error` and `requires_user_action` ends the run after that tool turn, before another model request or compaction, and the agent clears its active skills, emits `failed` and returns the error as a `NodeUserError`. `agent-blocked-tool-turn-save-v1` gates the `agent.persist_turn` activity that this stop runs first when the agent has a conversation key (a Context node in a started generation): it appends the turn's tool results to the stored conversation (`append_tool_results`), so the conversation does not end on unanswered tool calls. The two `workspace-*` markers are described under [Direct Workspace tasks](#direct-workspace-tasks). Liveness is the activity layer's job: node activities heartbeat every 30s against a 2-minute `heartbeat_timeout`; their `start_to_close` is a generous 24h ceiling, not 10 minutes. The subagent-permit wait uses `PERMIT_WAIT_RETRY` (unlimited attempts) so a queued delegation waits as long as admission takes instead of failing after ~3h.
+- **History-pressure continue-as-new everywhere.** Temporal terminates any workflow around ~51,200 history events. `WorkflowControlWorkflow` (which multiplexes all of a deployment's triggers into one history) now rolls over on `is_continue_as_new_suggested()` / a 10K-event soft cap, carrying trigger specs, per-trigger provider `seen_ids` (written back into the spec after every poll cycle), queued push events, the bounded dedup baseline, and the control state — a rollover works mid-pause too, since a paused controller still accretes signal history. `TriggerListenerWorkflow`/`PollingTriggerWorkflow` gained the same pressure check (the old `_processed_count >= 16_000` gate was unreachable: real spawns cost ~15-25 events each, and polling counted only emitted events while a quiet mailbox burned ~11 events/cycle — dead in ~3 days at the 60s default). Poll intervals are clamped to a 30s floor (`_MIN_POLL_INTERVAL_S` in `polling_trigger_workflow.py` and `workflow_control_workflow.py`), with no patch gate. Because run ids change on rollover, **controller handles are addressed by workflow id only, never run_id-pinned** (`_controller_handle`, manager `register_trigger`).
 - **dispatch.emit controller narrowing.** Controllers advertise their push event types via the `ControlEventTypes` keyword-list Search Attribute (upserted as triggers register); `dispatch.emit` skips controllers with no matching trigger instead of signalling every running controller with every platform event (each unmatched signal was ~4 immutable history events — one busy deployment burned every other controller's rollover budget). Controllers without the attribute (pre-upgrade histories) keep match-all behaviour.
 - **Boot-time reconcile** (`reconcile_active_controls_on_boot`, called from the lifecycle module after workers start): runs the lazy `_reconcile_control` over every active control row, converges `starting` rows a crash left behind (controller alive with triggers registered → `running`; alive-but-empty for a graph that declares triggers → `failed` + controller closed; vanished → `failed`), and re-arms the process-local half of running/paused generations from the persisted graph snapshot — DeploymentManager state, in-process collectors for non-canary trigger types, cron pause posture. Idempotent by construction (controller `register_trigger` keyed by listener id, legacy starts use `USE_EXISTING`, cron creation preserves server-owned pause state).
+
+**Controller event accumulation.** `controller-durable-queue-v2` preserves FIFO across carried events and the existing durable spillway. New execution-control version 1 histories also record `controller-event-accumulator-v1`: pending IDs remain protected beyond the recent-ID window, rollover includes Signals received during spill Activities, and a duplicate deterministic child start cannot block subsequent events. Legacy and pre-marker histories retain their recorded paths. Trigger processing stays immediate; no inactivity batching is added. See [event accumulation during Stop and rollover](./temporal-workflow-control.md#event-accumulation-during-stop-and-rollover) for scope and delivery limits.
+
+**Controller Update traffic.** Fresh version 1 histories record `controller-messaging-v1` so successful Updates can request history-pressure rollover even without event Signals or pollers. The same gate prevents producer-only Safe Apply compatibility messages from reopening a stopped generation. Pure Update validators reject malformed control requests before acceptance; the main loop waits for handlers before rollover. See [workflow messaging review](./temporal-workflow-control.md#workflow-messaging-review).
 
 **Startup sweep (debug-only escape hatch)**: [`TemporalClientWrapper.terminate_running_workflows`](../server/services/temporal/client.py) — gated on `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP` (default **`false`**; keep it false — setting `true` converts every boot into a namespace-wide terminate sweep). Even when enabled, any control row in an active state (the shared `WORKFLOW_CONTROL_ACTIVE_STATES`, which includes `resetting`) vetoes the sweep. History is preserved (UI shows workflows as `Terminated`, not deleted); only active execution stops.
 
@@ -687,14 +985,14 @@ The Temporal binary + persistence are managed in-process by the plugin-folder pa
 | `temporal_sweep_attempts` | `TEMPORAL_SWEEP_ATTEMPTS` | `4` | Boot-time terminate-running sweep: retries for the Visibility query that races shard acquisition ("shard status unknown") before giving up for that boot. Only relevant when `TEMPORAL_TERMINATE_RUNNING_ON_STARTUP=true`. |
 | `temporal_sweep_backoff_seconds` | `TEMPORAL_SWEEP_BACKOFF_SECONDS` | `0.5` | Linear backoff base for the sweep retries (`attempt x base`). |
 | `workflow_control_crash_recovery` | `WORKFLOW_CONTROL_CRASH_RECOVERY` | `pause` | After an UNCLEAN shutdown (kill/crash, dirty-bit marker), boot pauses generations still `running` so the user consciously resumes; `resume` restores them running. Clean restarts always restore as-is. |
-| `workflow_control_missing_controller` | `WORKFLOW_CONTROL_MISSING_CONTROLLER` | `pause` | A live generation whose controller vanished converges to `paused` (Resume rebuilds the controller); `fail` preserves the legacy Reset-only behaviour. |
+| `workflow_control_missing_controller` | `WORKFLOW_CONTROL_MISSING_CONTROLLER` | `pause` | Legacy generations can converge to `paused` and rebuild on Resume; `fail` keeps Reset-only recovery. Version 1 fails closed when its controller is lost because an empty replacement cannot recover authoritative root membership. |
 | `workflow_control_pause_on_failure` | `WORKFLOW_CONTROL_PAUSE_ON_FAILURE` | `true` | Circuit breaker: repeatedly-failing trigger-spawned runs pause their deployment (fix + Resume) instead of firing into the same error indefinitely. Evaluated activity-side; never touches recorded commands. |
 | `workflow_control_pause_on_failure_threshold` | `WORKFLOW_CONTROL_PAUSE_ON_FAILURE_THRESHOLD` | `3` | Failed runs inside the rolling window required to trip the breaker — one node hiccup never pauses a deployment. `1` = pause on the first failure. Resume resets the streak. |
 | `workflow_control_pause_on_failure_window_seconds` | `WORKFLOW_CONTROL_PAUSE_ON_FAILURE_WINDOW_SECONDS` | `600` | Rolling window for the failure streak; older failures age out (streak state lives in the cache table with a matching TTL). |
 
 Full recovery-policy semantics: [temporal-workflow-control.md → Recovery policies](./temporal-workflow-control.md#recovery-policies).
 
-The legacy `TEMPORAL_SERVER_READY_TIMEOUT_SECONDS` knob (CLI-supervised-era readiness wait) was removed — it had no consumer since the backend-owned cutover. The temporary agent-engine cutover variable that was read directly rather than through `Settings` is gone too: the engine selector is now recorded per execution by `agent.prepare_payload` (see above).
+The legacy `TEMPORAL_SERVER_READY_TIMEOUT_SECONDS` knob (CLI-supervised-era readiness wait) was removed — it had no consumer since the backend-owned cutover. The temporary agent-engine cutover variable that was read directly rather than through `Settings` is gone too, and nothing replaced it: there is one engine, and no engine selector is recorded per execution (see the `agent.prepare_payload` note above).
 
 ## Debugging
 

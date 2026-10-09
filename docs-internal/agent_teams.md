@@ -5,6 +5,13 @@ agents connected to their canonical `input-teammates` handle. The topology is
 the authorization boundary: ordinary tool edges and agents belonging to other
 leads cannot receive team tasks.
 
+Managed employee creation and Builder changes give each concrete tool node
+one owning agent. The lead delegates work requiring a specialist's tools
+through Task Manager instead of attaching that same callable node to itself.
+Private utility instances may repeat a node type; their IDs and bindings stay
+separate. This does not restrict intentional custom wiring in existing Dev
+graphs.
+
 ## Runtime model
 
 1. `build_teammate_descriptors()` expands connected agents into stable
@@ -33,6 +40,8 @@ leads cannot receive team tasks.
    selected teammate after persistence but are hidden from the lead's LLM.
 5. Temporal and legacy execution share the durable task lifecycle and use the
    same precreated task ID; neither path creates a second tracking record.
+   The legacy path does not currently start the teammate; see
+   "Known limitations" below.
 
 ## Topology
 
@@ -53,20 +62,33 @@ delegation depth beyond two child layers.
 
 ```text
 blocked -> queued -> running -> submitted -> accepted
-                    |              |
-                    +-> failed     +-> retry/reassign -> queued
-                    +-> cancelled
+                        |
+                        +-> failed
 ```
+
+Lead-driven transitions (`AgentTeamService.mutate_durable_task`):
+
+| Operation | Allowed from | Result |
+|---|---|---|
+| `modify_task` | `blocked`, `queued` | edits title, mission, context or acceptance criteria |
+| `cancel_task` | `blocked`, `queued`, `running` | `cancelled` |
+| `accept_task` | `submitted` | `accepted` |
+| `retry_task` / `reassign_task` | `failed`, `submitted`, `cancelled` | `queued`, as a new attempt |
 
 - `submitted` means the worker finished and the lead must review the result.
 - `accepted` is the completed/Done state shown by Team Monitor.
-- `failed` is unresolved until retried, reassigned, or intentionally cancelled.
+- `failed` is unresolved until retried or reassigned; a failed task cannot be
+  cancelled.
+- `cancelled` is not final: a cancelled task can be retried or reassigned.
 - `finish_team` succeeds only when every task is accepted or cancelled.
 
-Mutations are optimistic and execution-scoped. Callers pass `task_id` and
-`expected_revision`; the service verifies team ownership and current state.
-When exactly one task is submitted, `accept_task` may safely infer its ID and
-current revision. It never guesses among multiple submissions.
+Mutations are optimistic and execution-scoped. Callers pass `task_id` and,
+optionally, `expected_revision`; the service verifies team ownership and
+current state. When `expected_revision` is omitted, Task Manager reads the
+task's current revision first, so the check then only covers the moment
+between that read and the write. When exactly one task is submitted,
+`accept_task` may safely infer its ID and current revision. It never guesses
+among multiple submissions.
 
 ## Parallel scheduling
 
@@ -83,6 +105,38 @@ Each child receives an isolated AgentWorkflow context containing only its
 bounded mission, relevant context, and its own connected tools, skills, and
 memory. The parent receives a compact result; full child output remains
 inspectable through task attempts and execution traces.
+
+## Generation Stop and Resume
+
+New Temporal generations carry `execution_control_version=1`. Detached
+`DelegatedTaskWorkflow` runners enroll independently with the generation
+controller before business work, so Stop still reaches their attached agents
+after the assigning lead completes or the controller rolls over. Attached
+children use their native parent relationships rather than a per-tool registry.
+
+Stop preserves assigned tasks, lane/permit ownership, and existing continuations.
+Already-admitted model/tool Activities and their result bookkeeping drain;
+queued work, later calls, and new child starts wait behind the admission gate.
+Permit waits and child-result waits do not count as local business drain, so
+paused children cannot deadlock the checkpoint. Completion persistence and
+permit release for completed work continue normally. `pausing` describes the
+request/drain phase; `paused` requires topology-wide checkpoint acknowledgement.
+Stop adds no second persisted task pause lifecycle and does not cancel tasks.
+
+Resume applies the next revision with producers held, releases descendants and
+independent roots, reconciles membership, then releases producers. It continues
+the existing task attempt without another model response or completed tool
+being explicitly scheduled. Completion events accumulated while stopped remain
+pending for review; handlers do not batch inactivity or discard them.
+
+Existing generations preserve their legacy protocol. Unlimited LLM retries may
+leave Stop in `pausing` during an outage; a tool's policy/idempotency still governs
+unrecorded external effects. Opaque managed agents finish the whole node
+Activity before acknowledging Stop. Direct Workspace tasks and separately
+approved sends remain independent. See
+[Temporal workflow control](temporal-workflow-control.md),
+[Delegation ownership](agent_delegation.md#generation-stopresume-ownership), and
+[Agent context flow](agent_context_flow.md#stopped-turns-and-unanswered-calls).
 
 ## Completion and events
 
@@ -117,13 +171,25 @@ execution tasks. Its Done count includes accepted tasks, not submitted work.
 | `assign_task` | Persist and dispatch work to a connected teammate |
 | `list_tasks` / `get_task` | Inspect state, result, attempts, and revision |
 | `modify_task` | Edit blocked or queued work |
-| `cancel_task` | Stop queued or running work |
-| `retry_task` | Queue a new attempt |
+| `cancel_task` | Stop blocked, queued or running work |
+| `retry_task` | Queue a new attempt of failed, submitted or cancelled work on the same teammate |
 | `reassign_task` | Queue a new attempt on another connected teammate |
 | `accept_task` | Approve submitted work |
+| `inspect_task_trace` | Read or search the sanitized Temporal events of a task attempt (`detail`: `summary`, `failures`, `timeline` or `search`) |
 | `finish_team` | Complete a fully resolved team execution |
 
 `mark_done` is a deprecated alias for `accept_task` and never deletes history.
+
+## Known limitations
+
+- **Off Temporal, Task Manager does not start teammates.** `assign_task`,
+  `retry_task` and `reassign_task` persist the task as `queued` and return a
+  `delegation_request`, which only `AgentWorkflow` consumes. The in-process
+  branch in `_execute_task_manager` needs `ai_service` and `database` in its
+  config, and the plugin tool path in `services/handlers/tools.py` does not
+  pass them. So when the lead runs in-process (`AIService.execute_agent` /
+  `execute_chat_agent`) rather than as an `AgentWorkflow`, the task stays
+  queued and no teammate runs it.
 
 ## Key files
 
