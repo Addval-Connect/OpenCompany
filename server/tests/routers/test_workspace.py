@@ -52,7 +52,7 @@ def workspace(tmp_path, monkeypatch):
     # patched.
     from services import workspace_locator
 
-    monkeypatch.setattr(workspace_locator, "workspaces_dir", lambda: root)
+    monkeypatch.setattr(workspace_locator, "workspace_base_dir", lambda: root)
     return root / SLUG
 
 
