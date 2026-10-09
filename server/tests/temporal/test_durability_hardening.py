@@ -1210,6 +1210,8 @@ async def test_machina_failure_schedules_the_circuit_breaker_activity(monkeypatc
     assert captured["payload"] == {
         "workflow_id": "wf",
         "reason": "credential expired",
+        # Tested first: None carries the no-customer default namespace.
+        "credential_customer_id": None,
     }
 
     # Manual run (no pre-executed trigger) -> never pauses a deployment.
@@ -1222,6 +1224,14 @@ async def test_machina_failure_schedules_the_circuit_breaker_activity(monkeypatc
     # No workflow_id -> nothing to pause.
     await instance._pause_deployment_on_failure({}, nodes, errors)
     assert captured == {}
+
+    # The credential namespace claim must travel with the breaker payload so
+    # the pause lands in the correct namespace DB.
+    captured.clear()
+    await instance._pause_deployment_on_failure(
+        {"workflow_id": "wf", "credential_customer_id": "cust-9"}, nodes, errors
+    )
+    assert captured["payload"]["credential_customer_id"] == "cust-9"
 
 
 def test_can_edit_capability_is_server_owned():

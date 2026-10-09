@@ -259,11 +259,11 @@ class TestA6DispatchEmitFeatureFlag:
         signal_calls = []
         broadcast_calls = []
 
-        async def fake_signal(event):
-            signal_calls.append(event)
+        async def fake_signal(event, *, namespace=None):
+            signal_calls.append((event, namespace))
 
-        async def fake_broadcast(event, wire_key):
-            broadcast_calls.append((event, wire_key))
+        async def fake_broadcast(event, wire_key, *, namespace=None):
+            broadcast_calls.append((event, wire_key, namespace))
 
         from services.events import dispatch
 
@@ -277,9 +277,9 @@ class TestA6DispatchEmitFeatureFlag:
         await dispatch.emit(event, wire_routing_key="custom_wire_key")
 
         assert len(signal_calls) == 1
-        assert signal_calls[0] is event
+        assert signal_calls[0][0] is event
         assert len(broadcast_calls) == 1
-        assert broadcast_calls[0] == (event, "custom_wire_key")
+        assert broadcast_calls[0][:2] == (event, "custom_wire_key")
 
 
 class TestA7MachinaWorkflowSignalHandler:

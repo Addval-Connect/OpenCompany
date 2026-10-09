@@ -109,7 +109,7 @@ def test_flag_off_returns_default_no_db_call():
 
     settings = _FakeSettings()
     settings.multi_tenant_namespaces = False
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         resolve_tenant_namespace("42", database=CountingDb(), settings=settings)
     )
     assert result == "default"
@@ -124,7 +124,7 @@ def test_no_row_returns_default():
     settings = _FakeSettings()
     settings.multi_tenant_namespaces = True
     db = _FakeDb(row=None)
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         resolve_tenant_namespace("42", database=db, settings=settings)
     )
     assert result == "default"
@@ -138,7 +138,7 @@ def test_provisioning_status_returns_default():
     settings = _FakeSettings()
     settings.multi_tenant_namespaces = True
     db = _FakeDb(row={"user_id": "42", "namespace": "tenant-a", "status": STATUS_PROVISIONING})
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         resolve_tenant_namespace("42", database=db, settings=settings)
     )
     assert result == "default"
@@ -152,7 +152,7 @@ def test_disabled_status_returns_default():
     settings = _FakeSettings()
     settings.multi_tenant_namespaces = True
     db = _FakeDb(row={"user_id": "42", "namespace": "tenant-a", "status": STATUS_DISABLED})
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         resolve_tenant_namespace("42", database=db, settings=settings)
     )
     assert result == "default"
@@ -166,7 +166,7 @@ def test_ready_row_returns_mapped_namespace():
     settings = _FakeSettings()
     settings.multi_tenant_namespaces = True
     db = _FakeDb(row={"user_id": "42", "namespace": "tenant-b", "status": STATUS_READY})
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         resolve_tenant_namespace("42", database=db, settings=settings)
     )
     assert result == "tenant-b"
@@ -182,7 +182,7 @@ def test_db_error_propagates():
     settings.multi_tenant_namespaces = True
     db = _FakeDb(raise_on_get=True)
     with pytest.raises(RuntimeError, match="db exploded"):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             resolve_tenant_namespace("42", database=db, settings=settings)
         )
 

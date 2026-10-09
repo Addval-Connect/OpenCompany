@@ -49,7 +49,11 @@ async def test_allocators_are_atomic_and_execution_ids_are_workflow_scoped(tmp_p
     await database.startup()
     try:
         allocated = await asyncio.gather(*(database.allocate_workflow_id() for _ in range(12)))
-        assert sorted(map(int, allocated)) == list(range(1, 13))
+        # Workflow ids are 32-hex UUIDs (collision-free across namespace DBs
+        # since the multi-tenant change) — assert shape and uniqueness rather
+        # than the legacy per-DB sequence.
+        assert all(len(a) == 32 and set(a) <= set("0123456789abcdef") for a in allocated)
+        assert len(set(allocated)) == 12, "concurrent allocations must not collide"
         executions = await asyncio.gather(*(database.allocate_execution_id("3") for _ in range(4)))
         assert sorted(executions) == [
             "3:execution:1", "3:execution:2", "3:execution:3", "3:execution:4",
