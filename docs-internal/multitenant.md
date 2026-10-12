@@ -212,11 +212,11 @@ credentials:
 | Phase | Scope | Delivered |
 |---|---|---|
 | 1 | This document — contract, inventory, incident log, PR checklist | ✔ |
-| 2 | Edge consolidation: one setter path in auth middleware + WS connect | |
-| 3 | Temporal interceptor seals the ContextVar; per-activity manual sets removed | |
-| 4 | Node de-invasion: the 5 namespace-aware nodes read the ContextVar | |
-| 5 | Event dispatch resolves namespace from context at the edge | |
-| 6 | Cleanup: normalize the credential-ns helpers; final pass | |
+| 2 | Edge consolidation — verified: the HTTP middleware + WS connect handler were already the only in-process setters (plus the operator CLI's own process edge) | ✔ (no code change needed) |
+| 3 | Temporal interceptor seals the ContextVar; per-activity manual sets removed (11 sites + the `_set_payload_namespace` helper); controlled-poll payload gap fixed | ✔ |
+| 4 | Node de-invasion: microsoft.mail_receive, google.gmail_receive, tikhub_action read the ContextVar; the poll pipeline stopped injecting the per-instance attribute; the Connection factory scopes by ContextVar | ✔ |
+| 5 | `dispatch.emit` resolves the namespace from the ContextVar when not passed — every push producer (telegram, whatsapp, discord, webhook, email, twitter, chat, todos, agent tasks) gets tenant-scoped delivery from one change | ✔ |
+| 6 | Cleanup pass: direct `credential_customer_id` reads in the plugin path replaced by the ContextVar; contract tests assert the single-setter shape | ✔ |
 
-Each phase ships and deploys independently; the flag-off guarantee
-(§4) gates every phase.
+Each phase shipped independently; the flag-off guarantee (§4) gates
+every phase.

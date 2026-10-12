@@ -1150,15 +1150,16 @@ def _make_connection_factory(
     node_cls: Type[BaseNode],
     context: Dict[str, Any],
 ) -> Callable[[str], Connection]:
-    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
+    from core.namespace_context import get_active_namespace
 
-    # Credentials are scoped by ``credential_customer_id``, NOT by the
-    # tenancy principal. Reading ``user_id`` here is what made a real
-    # authenticated subject break every OAuth-backed node: tokens are
-    # stored under the installation's customer id, not the logged-in user's.
-    user_id = context.get(
-        "credential_customer_id", DEFAULT_CREDENTIAL_CUSTOMER_ID
-    )
+    # Credentials are scoped by namespace, NOT by the tenancy principal.
+    # Reading ``user_id`` here is what made a real authenticated subject
+    # break every OAuth-backed node: tokens are stored under the
+    # installation's credential namespace, not the logged-in user's.
+    # The namespace comes from the ContextVar — sealed by the HTTP/WS
+    # edge or the tenant activity interceptor from the same payload key
+    # the context dict carries (docs-internal/multitenant.md §7).
+    user_id = get_active_namespace()
     session_id = context.get("session_id", "default")
     node_id = context.get("node_id")
     # Precompute credential lookup once.
