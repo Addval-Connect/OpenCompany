@@ -26,6 +26,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from core.logging import get_logger
+from core.namespace_context import get_active_namespace
 from services.plugin import NodeContext, NodeUserError
 
 from .._credentials import TikHubCredential
@@ -459,7 +460,7 @@ async def make_client(ctx: NodeContext) -> AsyncIterator[Any]:
     ``$TIKHUB_API_KEY`` in the server environment can never authenticate a
     node implicitly.
     """
-    secrets = await TikHubCredential.resolve(user_id=ctx.credential_customer_id)
+    secrets = await TikHubCredential.resolve(user_id=get_active_namespace())
     try:
         from tikhub import AsyncTikHub
     except ImportError as exc:
