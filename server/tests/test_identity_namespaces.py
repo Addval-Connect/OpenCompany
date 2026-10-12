@@ -39,11 +39,16 @@ def test_node_context_keeps_them_independent():
 
 
 def test_connection_factory_scopes_on_the_credential_namespace():
-    """The actual coupling point: this read is what broke OAuth nodes."""
+    """The actual coupling point: this read is what broke OAuth nodes.
+
+    The factory scopes by the active-namespace ContextVar — sealed by
+    the HTTP/WS edge or the tenant activity interceptor from the same
+    payload key (docs-internal/multitenant.md §7). It must never scope
+    by the tenancy principal: that re-points every OAuth token lookup."""
     from services.plugin import base
 
     source = inspect.getsource(base._make_connection_factory)
-    assert "credential_customer_id" in source
+    assert "get_active_namespace()" in source
     assert 'context.get("user_id"' not in source, (
         "the connection factory must not scope credentials by the tenancy "
         "principal — that re-points every OAuth token lookup"

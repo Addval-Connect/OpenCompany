@@ -23,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.logging import get_logger
 from services.plugin import NodeContext, Operation, PollingTriggerNode, TaskQueue
 
+from core.namespace_context import get_active_namespace
+
 from .._base import graph_get_raw, mailbox_base, mark_message_read_raw, track_microsoft_usage
 from .._credentials import MicrosoftCredential
 
@@ -148,14 +150,14 @@ class MailReceiveNode(PollingTriggerNode):
         return params
 
     async def fetch_ids(self, service: Any, params: Dict[str, Any]) -> Set[str]:
-        data = await graph_get_raw(_list_path(params), params=_query(params), user_id=self.credential_customer_id)
+        data = await graph_get_raw(_list_path(params), params=_query(params), user_id=get_active_namespace())
         return {m.get("id") for m in data.get("value", []) if m.get("id")}
 
     async def fetch_detail(self, service: Any, msg_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         msg = await graph_get_raw(
             f"{mailbox_base(params.get('mailbox'))}/messages/{msg_id}",
             params={"$select": _SELECT},
-            user_id=self.credential_customer_id,
+            user_id=get_active_namespace(),
         )
         detail = _summarize(msg)
         detail["id"] = msg_id  # stable cross-cycle dedup key for the workflow
@@ -164,7 +166,7 @@ class MailReceiveNode(PollingTriggerNode):
     async def post_emit(self, service: Any, msg_id: str, params: Dict[str, Any]) -> None:
         if params.get("mark_as_read"):
             try:
-                await mark_message_read_raw(msg_id, mailbox=params.get("mailbox"), user_id=self.credential_customer_id)
+                await mark_message_read_raw(msg_id, mailbox=params.get("mailbox"), user_id=get_active_namespace())
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"[msMailReceive] Failed to mark as read: {exc}")
 

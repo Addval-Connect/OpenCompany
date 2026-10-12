@@ -952,26 +952,11 @@ class BaseNode:
             from core.container import container
             from services.status_broadcaster import get_status_broadcaster
 
-            # Namespace context first — every DB/credential read below
-            # (workflow_service.execute_node and the plugin body) routes by
-            # this ContextVar. Every other activity that touches namespaced
-            # state (prepare_payload, execute_llm_step, finalize_team,
-            # store_node_output, the workflow-control activities) sets it
-            # from ``credential_customer_id`` with this exact idiom; this
-            # wrapper was the one miss, and a tool node touching
-            # namespace-scoped state (task_manager's team resolution) then
-            # silently read the OWNER namespace DB — the team the prepare
-            # activity had just created in the tenant DB did not exist
-            # there ("No team exists for this lead execution").
-            from constants import normalize_credential_ns
-            from core.namespace_context import set_active_namespace
-
-            set_active_namespace(
-                normalize_credential_ns(
-                    context.get("credential_customer_id") or "owner"
-                )
-            )
-
+            # Namespace context: the tenant interceptor
+            # (services/temporal/_interceptors.py) sealed the ContextVar
+            # from the payload's credential_customer_id BEFORE this body
+            # ran — every DB/credential read below routes by it. Do not
+            # set it here; see docs-internal/multitenant.md §7.
             node_id = context["node_id"]
             workflow_id = context.get("workflow_id")
             execution_id = context.get("execution_id")
@@ -1165,15 +1150,16 @@ def _make_connection_factory(
     node_cls: Type[BaseNode],
     context: Dict[str, Any],
 ) -> Callable[[str], Connection]:
-    from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
+    from core.namespace_context import get_active_namespace
 
-    # Credentials are scoped by ``credential_customer_id``, NOT by the
-    # tenancy principal. Reading ``user_id`` here is what made a real
-    # authenticated subject break every OAuth-backed node: tokens are
-    # stored under the installation's customer id, not the logged-in user's.
-    user_id = context.get(
-        "credential_customer_id", DEFAULT_CREDENTIAL_CUSTOMER_ID
-    )
+    # Credentials are scoped by namespace, NOT by the tenancy principal.
+    # Reading ``user_id`` here is what made a real authenticated subject
+    # break every OAuth-backed node: tokens are stored under the
+    # installation's credential namespace, not the logged-in user's.
+    # The namespace comes from the ContextVar — sealed by the HTTP/WS
+    # edge or the tenant activity interceptor from the same payload key
+    # the context dict carries (docs-internal/multitenant.md §7).
+    user_id = get_active_namespace()
     session_id = context.get("session_id", "default")
     node_id = context.get("node_id")
     # Precompute credential lookup once.

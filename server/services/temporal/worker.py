@@ -27,7 +27,7 @@ from temporalio.runtime import LoggingConfig, Runtime, TelemetryConfig
 from temporalio.worker import PollerBehaviorAutoscaling, Worker
 
 from core.logging import get_logger
-from ._interceptors import ObservabilityWorkerInterceptor
+from ._interceptors import ObservabilityWorkerInterceptor, TenantContextWorkerInterceptor
 from .workflow import MachinaWorkflow
 from .trigger_listener_workflow import TriggerListenerWorkflow
 from .polling_trigger_workflow import PollingTriggerWorkflow
@@ -287,7 +287,7 @@ class TemporalWorkerManager:
             # the SDK prepends client interceptors to every worker, so
             # repeating it here double-instruments each Signal / Query /
             # Update / Activity and doubles the emitted spans.
-            interceptors=[ObservabilityWorkerInterceptor()],
+            interceptors=[TenantContextWorkerInterceptor(), ObservabilityWorkerInterceptor()],
             # Wave 18.2: sticky cache sized by deployment mode so
             # cached workflows skip Event-History replay without
             # blowing laptop RAM.
@@ -555,7 +555,7 @@ class TemporalWorkerPool:
             # the SDK prepends client interceptors to every worker, so
             # repeating it here double-instruments each Signal / Query /
             # Update / Activity and doubles the emitted spans.
-            interceptors=[ObservabilityWorkerInterceptor()],
+            interceptors=[TenantContextWorkerInterceptor(), ObservabilityWorkerInterceptor()],
             # Wave 18.1: per-queue activities/second ceiling.
             max_activities_per_second=rate_limit,
             # Wave 18.3: activity-only workers need a small
@@ -765,7 +765,7 @@ async def run_standalone_worker(
             # the SDK prepends client interceptors to every worker, so
             # repeating it here double-instruments each Signal / Query /
             # Update / Activity and doubles the emitted spans.
-            interceptors=[ObservabilityWorkerInterceptor()],
+            interceptors=[TenantContextWorkerInterceptor(), ObservabilityWorkerInterceptor()],
         )
 
         logger.info("Worker running. Press Ctrl+C to stop.")
@@ -843,7 +843,7 @@ async def create_worker(
         # the SDK prepends client interceptors to every worker, so
         # repeating it here double-instruments each Signal / Query /
         # Update / Activity and doubles the emitted spans.
-        interceptors=[ObservabilityWorkerInterceptor()],
+        interceptors=[TenantContextWorkerInterceptor(), ObservabilityWorkerInterceptor()],
     )
 
 

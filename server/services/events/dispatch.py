@@ -72,13 +72,14 @@ async def emit(
             ``cloudevent`` channel; plugin emitters override per their
             existing wire key (e.g. ``"telegram_message_received"``).
         namespace: Temporal namespace to query for running consumers.
-            Defaults to ``Settings().temporal_namespace`` (the server
-            default).  Workflow-less producers (telegram, email,
-            webhook) pass the namespace resolved from the credential
-            owner via :func:`services.tenancy.resolve_tenant_namespace`
-            so that an incoming Telegram message on Tenant A's bot
-            only signals Tenant A's TriggerListenerWorkflows, not every
-            deployed workflow across all namespaces.
+            When omitted, resolved from the active-namespace ContextVar
+            (sealed by the HTTP/WS edge or the tenant activity
+            interceptor — docs-internal/multitenant.md §7): a producer
+            running in tenant X signals tenant X's consumers only.
+            Falls back to ``Settings().temporal_namespace`` when the
+            context carries no tenant ("owner"/"default"). Explicit
+            values always win, so system-level producers can still
+            address the default namespace from inside a tenant context.
 
     Returns:
         The envelope unchanged — callers may chain.
@@ -87,6 +88,16 @@ async def emit(
     default): pass-through no-op. Logged at DEBUG so opt-in dogfooding
     is observable without flipping the flag globally.
     """
+    if namespace is None:
+        # Context-aware default: the producer's active namespace. Every
+        # push producer (telegram, webhook, discord, agent tasks, …)
+        # gets tenant-scoped delivery for free instead of having to
+        # resolve and pass the namespace per call site — the same
+        # single-decision shape as the rest of the tenancy middleware.
+        from core.namespace_context import get_active_namespace
+
+        active = get_active_namespace()
+        namespace = None if active in ("default", "owner") else active
     if not Settings().event_framework_enabled:
         logger.debug(
             f"event-framework disabled — emit no-op for event.id={event.id} " f"type={event.type}",

@@ -469,10 +469,6 @@ async def execute_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     ``heartbeat_timeout``.
     """
 
-    from constants import normalize_credential_ns
-    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
-    from core.namespace_context import set_active_namespace
-    set_active_namespace(tenant_ns)
 
     activity.logger.info(
         f"Agent LLM step: provider={payload.get('provider')} " f"model={payload.get('model')} messages={len(payload.get('messages', []))}"
@@ -514,10 +510,6 @@ async def persist_agent_turn(payload: Dict[str, Any]) -> Dict[str, Any]:
     from core.container import container
     from services.memory.runtime import append_memory_turns_atomic
 
-    from constants import normalize_credential_ns
-    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
-    from core.namespace_context import set_active_namespace
-    set_active_namespace(tenant_ns)
 
     database = container.database()
     mutation_id = payload.get("mutation_id")
@@ -713,10 +705,6 @@ async def store_agent_output(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     from core.container import container
 
-    from constants import normalize_credential_ns
-    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
-    from core.namespace_context import set_active_namespace
-    set_active_namespace(tenant_ns)
 
     workflow_service = container.workflow_service()
     node_id = payload["node_id"]
@@ -809,10 +797,6 @@ async def prepare_agent_payload(context: Dict[str, Any]) -> Dict[str, Any]:
     # we set the namespace from credential_customer_id before any DB or auth
     # access. NamespacedDatabase and NamespacedCredentialsDatabase read
     # get_active_namespace() at call time, so this single set covers both.
-    from constants import normalize_credential_ns
-    tenant_ns = normalize_credential_ns(context.get("credential_customer_id") or "owner")
-    from core.namespace_context import set_active_namespace
-    set_active_namespace(tenant_ns)
 
     database = container.database()
     auth = container.auth_service()
@@ -1476,7 +1460,6 @@ async def begin_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     from services.agent_team import get_agent_team_service
     from temporalio.exceptions import ApplicationError
 
-    _set_payload_namespace(payload)
     team_id = str(payload.get("team_id") or "")
     task_id = str(payload.get("team_task_id") or "")
     child_id = str(payload.get("child_agent_node_id") or "")
@@ -1567,7 +1550,6 @@ async def queue_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Create a pending task before it waits for a root-wide permit."""
     from services.agent_team import get_agent_team_service
 
-    _set_payload_namespace(payload)
     team_id = str(payload.get("team_id") or "")
     task_id = str(payload.get("team_task_id") or "")
     parent_id = str(payload.get("parent_agent_node_id") or "")
@@ -1601,7 +1583,6 @@ async def cancel_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist cancellation as a terminal state without failure requeueing."""
     from services.agent_team import get_agent_team_service
 
-    _set_payload_namespace(payload)
     team_id = str(payload.get("team_id") or "")
     task_id = str(payload.get("team_task_id") or "")
     child_id = str(payload.get("child_agent_node_id") or "")
@@ -1797,7 +1778,6 @@ async def finish_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Idempotently persist a delegated child's terminal result."""
     from services.agent_team import get_agent_team_service
 
-    _set_payload_namespace(payload)
     team_id = str(payload.get("team_id") or "")
     task_id = str(payload.get("team_task_id") or "")
     child_id = str(payload.get("child_agent_node_id") or "")
@@ -1898,7 +1878,6 @@ async def register_task_execution(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist actual runner/child Temporal identities for trace inspection."""
     from services.agent_team import get_agent_team_service
 
-    _set_payload_namespace(payload)
     team_id = str(payload.get("team_id") or "")
     task_id = str(payload.get("team_task_id") or "")
     if not team_id or not task_id:
@@ -1921,33 +1900,11 @@ async def register_task_execution(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"team_id": team_id, "team_task_id": task_id, "registered": True}
 
 
-# ---------------------------------------------------------------------------
-# Namespace context
-# ---------------------------------------------------------------------------
-# Every activity that touches namespace-scoped state (team tasks, permits,
-# credentials) routes through the active-namespace ContextVar. Temporal
-# activities run outside the HTTP request lifecycle, so the ContextVar is
-# never ambient — each activity sets it from the ``credential_customer_id``
-# its workflow payload carried, with this exact idiom. Missing it silently
-# reads the OWNER namespace DB instead of the tenant's (the team exists in
-# one DB and the lookup runs against the other).
-
-
-def _set_payload_namespace(payload: Dict[str, Any]) -> None:
-    from constants import normalize_credential_ns
-    from core.namespace_context import set_active_namespace
-
-    set_active_namespace(
-        normalize_credential_ns(payload.get("credential_customer_id") or "owner")
-    )
-
-
 @activity.defn(name="agent.finalize_team")
 async def finalize_agent_team(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Finalize a lead's team after all delegated tasks become terminal."""
     from services.agent_team import get_agent_team_service
 
-    _set_payload_namespace(payload)
     team_id = str(payload.get("team_id") or "")
     if not team_id:
         raise ValueError("team_id is required")
@@ -2085,10 +2042,6 @@ async def compact_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     from services.compaction import get_compaction_service
     from services.llm.protocol import message_from_wire
 
-    from constants import normalize_credential_ns
-    tenant_ns = normalize_credential_ns(payload.get("credential_customer_id") or "owner")
-    from core.namespace_context import set_active_namespace
-    set_active_namespace(tenant_ns)
 
     activity.heartbeat("Compacting agent context")
     svc = get_compaction_service()

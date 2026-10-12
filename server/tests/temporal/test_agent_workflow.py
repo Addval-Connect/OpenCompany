@@ -94,21 +94,16 @@ class TestDurableTeamDelegationContract:
         assert '"execution_id": context.get("execution_id")' in source
 
     def test_tool_activities_carry_namespace_context(self):
-        """Per-type node activities route every DB/credential read by the
-        active-namespace ContextVar. The tool-call payload must carry
-        ``credential_customer_id`` and ``_node_activity`` must set it
-        before executing — without that, task_manager's team resolution
-        read the OWNER namespace DB and every assign_task failed with
-        "No team exists for this lead execution" even though prepare had
-        just created the team in the tenant DB."""
+        """The tool-call payload must carry ``credential_customer_id`` —
+        the transport that the tenant interceptor turns back into the
+        ContextVar on the worker side (docs-internal/multitenant.md §1).
+        Without it the tool activity ran against the OWNER namespace DB:
+        task_manager's team resolution failed with "No team exists for
+        this lead execution" even though prepare had just created the
+        team in the tenant DB."""
         import inspect
 
-        from services.plugin.base import BaseNode
         from services.temporal.agent_workflow import AgentWorkflow
-
-        activity_source = inspect.getsource(BaseNode.as_activity)
-        assert "set_active_namespace(" in activity_source
-        assert "credential_customer_id" in activity_source
 
         run_source = inspect.getsource(AgentWorkflow.run)
         # tool_payload forwards the namespace context into node.* activities
@@ -122,15 +117,26 @@ class TestDurableTeamDelegationContract:
 
         assert "credential_customer_id" in aw._INHERITED_SCOPE_KEYS
 
-    def test_team_activities_set_namespace_context(self):
-        """Every activity touching team/permit tables routes by
-        credential_customer_id — finalize read the OWNER DB (empty) and
-        then failed its status update there ("Failed to finalize team as
-        completed") while the team lived in the tenant DB."""
+    def test_tenant_interceptor_is_the_single_worker_setter(self):
+        """The tenant interceptor seals the ContextVar from the payload
+        BEFORE the activity body runs, and it is registered FIRST on
+        every Worker construction — the single worker-side setter
+        (multitenant.md §7). Activity bodies must NOT set the namespace
+        themselves: each manual site was a production incident (§6)."""
         import inspect
 
-        from services.temporal import agent_activities
+        from services.temporal import _interceptors, worker as worker_mod, agent_activities
 
+        interceptor_src = inspect.getsource(
+            _interceptors.ActivityTenantContextInterceptor
+        )
+        assert "credential_customer_id" in interceptor_src
+        assert "set_active_namespace" in interceptor_src
+
+        worker_src = inspect.getsource(worker_mod)
+        assert worker_src.count("interceptors=[TenantContextWorkerInterceptor(), ObservabilityWorkerInterceptor()]") >= 4
+
+        # Negative assertions: the bodies the incidents lived in are clean.
         for fn in (
             "finalize_agent_team",
             "register_task_execution",
@@ -140,8 +146,8 @@ class TestDurableTeamDelegationContract:
             "finish_agent_delegation",
         ):
             source = inspect.getsource(getattr(agent_activities, fn))
-            assert "_set_payload_namespace(payload)" in source, (
-                f"{fn} must set the namespace context"
+            assert "set_active_namespace" not in source, (
+                f"{fn} must rely on the tenant interceptor, not set it"
             )
 
 

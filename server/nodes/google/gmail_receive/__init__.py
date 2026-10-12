@@ -19,6 +19,7 @@ from services.plugin import (
 
 from .._credentials import GoogleCredential
 
+from core.namespace_context import get_active_namespace
 from .._base import build_google_service, track_google_usage
 from .._gmail import fetch_email_details, mark_email_as_read, poll_gmail_ids
 
@@ -89,7 +90,7 @@ class GmailReceiveNode(PollingTriggerNode):
         return f"label:{label} {query}" if label and label != "all" else query
 
     async def setup_service(self, params: Dict[str, Any]) -> Any:
-        return await build_google_service("gmail", "v1", params, {"credential_customer_id": self.credential_customer_id})
+        return await build_google_service("gmail", "v1", params, {"credential_customer_id": get_active_namespace()})
 
     async def fetch_ids(self, service: Any, params: Dict[str, Any]) -> Set[str]:
         return await poll_gmail_ids(service, self._build_query(params))
