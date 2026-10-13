@@ -118,11 +118,13 @@ class TestDurableTeamDelegationContract:
         assert "credential_customer_id" in aw._INHERITED_SCOPE_KEYS
 
     def test_tenant_interceptor_is_the_single_worker_setter(self):
-        """The tenant interceptor seals the ContextVar from the payload
-        BEFORE the activity body runs, and it is registered FIRST on
-        every Worker construction — the single worker-side setter
-        (multitenant.md §7). Activity bodies must NOT set the namespace
-        themselves: each manual site was a production incident (§6)."""
+        """The tenant interceptor seals the ContextVar from the TEMPORAL
+        boundary (activity.info().namespace) — with the payload's
+        credential_customer_id as an explicit override — BEFORE the
+        activity body runs, and it is registered FIRST on every Worker
+        construction (multitenant.md §7). Activity bodies must NOT set
+        the namespace themselves: each manual site was a production
+        incident (§6)."""
         import inspect
 
         from services.temporal import _interceptors, worker as worker_mod, agent_activities
@@ -130,7 +132,7 @@ class TestDurableTeamDelegationContract:
         interceptor_src = inspect.getsource(
             _interceptors.ActivityTenantContextInterceptor
         )
-        assert "credential_customer_id" in interceptor_src
+        assert "activity.info().namespace" in interceptor_src
         assert "set_active_namespace" in interceptor_src
 
         worker_src = inspect.getsource(worker_mod)
@@ -149,6 +151,23 @@ class TestDurableTeamDelegationContract:
             assert "set_active_namespace" not in source, (
                 f"{fn} must rely on the tenant interceptor, not set it"
             )
+
+    def test_tenant_ns_resolution(self):
+        """The resolver: payload key overrides; otherwise the TEMPORAL
+        boundary decides — which makes spawn-site plumbing gaps (the
+        polling-trigger child_payload miss, multitenant.md §6) impossible
+        by construction."""
+        from services.temporal._interceptors import _resolve_tenant_ns
+
+        # payload key wins (explicit override)
+        assert _resolve_tenant_ns(
+            ({"credential_customer_id": "addval-tax"},), "default"
+        ) == "addval-tax"
+        # no key -> the Temporal boundary decides, as-is for tenants
+        assert _resolve_tenant_ns(({},), "addval-tax") == "addval-tax"
+        # default namespace -> the owner credential bucket
+        assert _resolve_tenant_ns((), "default") == "owner"
+        assert _resolve_tenant_ns(None, "default") == "owner"
 
 
 class TestCanvasCompletionReviewContract:

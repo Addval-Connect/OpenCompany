@@ -1654,10 +1654,10 @@ async def acquire_subagent_permit(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Poll the durable root coordinator until this delegation is admitted."""
     from services.agent_team import get_agent_team_service
 
-    # Permit rows are keyed by the globally-unique root_execution_id and live
-    # in ONE namespace DB consistently (every acquire/release site omits the
-    # credential_customer_id key on purpose — routing them per-tenant would
-    # split a run's permit state across databases).
+    # Permits route by the active namespace like everything else (the
+    # interceptor seals it from the Temporal boundary): a run and all its
+    # children live in ONE namespace, so the permit rows for a
+    # root_execution_id land in that namespace's DB consistently.
     root_id = str(payload.get("root_execution_id") or "")
     permit_id = str(payload.get("permit_id") or "")
     limit = max(1, int(payload.get("limit") or 3))
