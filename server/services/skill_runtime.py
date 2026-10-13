@@ -117,7 +117,11 @@ def _manifest(skill: Any) -> List[Dict[str, Any]]:
 
 def _resource(skill: Any, path: str) -> str:
     if not skill or not re.fullmatch(r"(?:references|scripts)/[^/\\]+", path or "") or ".." in path:
-        raise SkillRuntimeError("INVALID_SKILL_RESOURCE", "Resource must be a declared text reference or script")
+        raise SkillRuntimeError(
+            "INVALID_SKILL_RESOURCE",
+            f"Resource path must be 'references/<file>' or 'scripts/<file>' — got {path!r}; "
+            "the load result's resources manifest lists the declared paths",
+        )
     folder, name = path.split("/", 1)
     content = (skill.references if folder == "references" else skill.scripts).get(name)
     if content is None:
@@ -225,19 +229,42 @@ async def execute_skill_tool(args: Dict[str, Any], config: Dict[str, Any]) -> Di
         else:
             if _loaded.get(scope) != content_hash:
                 raise SkillRuntimeError("SKILL_NOT_LOADED", "Load the skill before reading its resources")
-            content = _resource(skill, str(args.get("path") or ""))
+            path_arg = str(args.get("path") or "").strip()
             if action == "read_resource":
+                if not path_arg:
+                    raise SkillRuntimeError(
+                        "SKILL_PATH_REQUIRED",
+                        "read_resource requires path — e.g. 'references/<file>' or 'scripts/<file>'; "
+                        "the load result's resources manifest lists the declared paths",
+                    )
+                content = _resource(skill, path_arg)
                 cursor = max(0, int(args.get("cursor") or 0))
                 limit = min(MAX_RESOURCE_CHARS, max(1, int(args.get("limit") or 4000)))
-                result = {"skill_name": name, "path": args.get("path"), "content": content[cursor:cursor + limit],
+                result = {"skill_name": name, "path": path_arg, "content": content[cursor:cursor + limit],
                           "cursor": cursor, "next_cursor": cursor + limit if cursor + limit < len(content) else None}
             elif action == "search_resource":
                 query = str(args.get("query") or "")
                 if not query: raise SkillRuntimeError("INVALID_SKILL_QUERY", "query is required")
-                matches = [{"line": i, "text": line[:500]} for i, line in enumerate(content.splitlines(), 1) if query.lower() in line.lower()]
+                # With a path: search WITHIN that resource. Without one:
+                # search EVERY declared reference + script — the model's
+                # natural expectation (production showed a search_resource
+                # without path burning 9 activity retries on the opaque
+                # INVALID_SKILL_RESOURCE guard). Each match carries its
+                # resource path so the model can read_resource it next.
+                if path_arg:
+                    corpus = {path_arg: _resource(skill, path_arg)}
+                else:
+                    corpus = {f"{folder}/{res_name}": res_content
+                              for folder, values in (("references", skill.references), ("scripts", skill.scripts))
+                              for res_name, res_content in sorted(values.items())}
+                matches = [{"path": res_path, "line": i, "text": line[:500]}
+                           for res_path, content in corpus.items()
+                           for i, line in enumerate(content.splitlines(), 1)
+                           if query.lower() in line.lower()]
                 cursor = max(0, int(args.get("cursor") or 0))
                 limit = min(MAX_SEARCH_MATCHES, max(1, int(args.get("limit") or 20)))
-                result = {"skill_name": name, "path": args.get("path"), "matches": matches[cursor:cursor + limit],
+                result = {"skill_name": name, "query": query, "total_matches": len(matches),
+                          "matches": matches[cursor:cursor + limit],
                           "next_cursor": cursor + limit if cursor + limit < len(matches) else None}
             else:
                 raise SkillRuntimeError("INVALID_SKILL_ACTION", f"Unsupported Skill action: {action}")
