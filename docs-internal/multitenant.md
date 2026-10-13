@@ -25,15 +25,28 @@ channel:
      ┌─────────┴──────────────────────────────────────┐
      │  in-process reads (pools, services, routers)   │
      │  get_active_namespace()                        │
-     └─────────┬──────────────────────────────────────┘
-               │ Temporal boundary: the ContextVar does NOT cross
-               │ (activities run on worker threads, HTTP dies)
+     └────────────────────────────────────────────────┘
+
+               Temporal boundary: the ContextVar does NOT cross
+               (activities run on worker threads, HTTP dies)
+
+        ┌────────────────────────────────────────────────────────┐
+        │  ACTIVITY INTERCEPTOR (the only worker setter)         │
+        │  Source of truth: activity.info().namespace — the      │
+        │  Temporal isolation boundary ITSELF. An activity is    │
+        │  dispatched by the workers of the namespace its        │
+        │  workflow lives in, so the boundary says where the     │
+        │  execution runs with NO help from the scheduler:       │
+        │  polling-spawn, chat, canvas, a feature that forgot    │
+        │  the namespace — all route correctly by construction.  │
+        │                                                        │
+        │  credential_customer_id in the payload = explicit      │
+        │  OVERRIDE (rare; e.g. credential scope differing       │
+        │  from the Temporal namespace). Not a requirement.      │
+        └────────────────────────────────────────────────────────┘
+               │
                ▼
-        payload key `credential_customer_id`
-               │ Activity interceptor (worker side)
-               │   set_active_namespace(<from payload>)  ← the ONLY worker setter
-               ▼
-        ContextVar again — the activity body and everything it calls
+        ContextVar — the activity body and everything it calls
 ```
 
 Two rules fall out of this shape, and both are enforced by the two
@@ -44,11 +57,14 @@ single setters:
    activity interceptor. Every other call site is a bug in waiting —
    the failure mode is a silent read of the wrong tenant's database
    (see §6: this exact bug produced four production incidents).
-2. **The payload key exists for one reason**: the ContextVar cannot
-   cross the Temporal async boundary. `credential_customer_id` rides
-   in the workflow payload, and the interceptor turns it back into a
-   ContextVar on the worker side. It is transport, not an API — service
-   and node code never reads it directly.
+2. **The Temporal namespace is the source of truth on the worker
+   side** — not a payload key. The original design derived the
+   namespace from `credential_customer_id` in the payload, which
+   required every spawn site to plumb it; each missed site was a
+   production incident (§6), and the polling-trigger's spawned-run
+   payload was the last one. Deriving from `activity.info().namespace`
+   makes spawn-site gaps impossible by construction. The payload key
+   survives only as an explicit override.
 
 ## 2. What is physically isolated (not simulated)
 
@@ -155,10 +171,11 @@ layer the refactor removed.
 | taskTrigger review leg never fired (canvas) | Producer dispatched only through Temporal Visibility (deployed consumers); the canvas waiter resolves only via `event_waiter.dispatch` | Producer-side event fan-out was not namespace/two-paths aware |
 | Task-event dispatch missed tenant listeners | `dispatch.emit` queried the DEFAULT namespace's Visibility | `emit` had no namespace parameter plumbed from the producer |
 | OAuth 401 `Invalid token lifetime` on `msMailReceive` | The tenant's credential store was empty; the only Microsoft token lived in the owner store | Credential isolation is per namespace (intended) — operator must connect OAuth **in the tenant's namespace**; documented, not code |
+| Email-triggered runs failed: "API key for provider 'openai' required" (×6 per mailbox batch) | The `PollingTriggerWorkflow` spawned the run without the namespace key → activities stamped "owner" → `prepare` read the OWNER DB, where the node does not exist → the provider fell back to its hard-coded default (`'openai'`, agent_activities.py) → owner's empty store | The spawn-site plumbing class — the LAST one. Eliminated by deriving the namespace from `activity.info().namespace` (§7): the Temporal boundary is the source, spawn sites cannot miss it |
 
-The refactor's promise: a new activity, node, or flow cannot reintroduce
-these classes of bug, because there is no per-site decision left to get
-wrong.
+The refactor's promise, now structural: a new activity, node, or flow
+cannot reintroduce these classes of bug, because there is no per-site
+decision left to get wrong — the Temporal isolation boundary decides.
 
 ## 7. The middleware model (target architecture)
 
@@ -169,20 +186,28 @@ minted at login/switch from the user's namespace assignments; the hot
 path never round-trips the DB (`resolve_namespace_from_state`).
 
 ### Temporal worker — one interceptor
-`services/temporal/_interceptors.py` gains the tenant duty: the
-activity inbound interceptor reads `credential_customer_id` from the
-activity input and stamps the ContextVar before the activity body runs
-— once, for every activity type (per-type `node.*` wrappers, prepare,
-llm-step, finalize, delegation lifecycle, permits, polls, stores).
-Activity interceptors run only on live executions, so there is no
-replay-determinism concern. The observability interceptor already
-registered on both workers is the vehicle.
+`services/temporal/_interceptors.py` carries the tenant duty: the
+activity inbound interceptor resolves the namespace from
+`activity.info().namespace` — the Temporal isolation boundary — with
+the payload's `credential_customer_id` as an explicit override, and
+stamps the ContextVar before the activity body runs — once, for every
+activity type (per-type `node.*` wrappers, prepare, llm-step, finalize,
+delegation lifecycle, permits, polls, stores). Activity interceptors
+run only on live executions, so there is no replay-determinism
+concern. The observability interceptor already registered on both
+workers is the vehicle.
 
-### Propagation rules (unchanged, now explicit)
-- `credential_customer_id` must be present in activity payloads —
-  workflows stamp it from the run context at scheduling time.
-- `_INHERITED_SCOPE_KEYS` carries it to delegated children.
+### Propagation rules (radically simpler)
+- **Nothing must carry the namespace for routing to be correct** — the
+  Temporal boundary guarantees it. Spawn sites (polling trigger, chat,
+  canvas, delegation, upstream features) cannot produce a
+  wrong-namespace run.
+- `credential_customer_id` may still ride in payloads as an explicit
+  override; `_INHERITED_SCOPE_KEYS` carries it to delegated children.
 - Auth methods ignore the ContextVar entirely (they always hit owner).
+- Permits route per namespace like everything else: a run and all its
+  children live in one namespace, so the permit rows for a
+  `root_execution_id` land in that namespace's DB consistently.
 
 ## 8. PR checklist — how not to break multi-tenant
 
@@ -193,9 +218,10 @@ credentials:
       middleware + Temporal activity interceptor).
 - [ ] No service or node code reads `credential_customer_id` directly —
       it reads `get_active_namespace()` or nothing at all.
-- [ ] New activity payload includes `credential_customer_id` if the
-      body touches namespaced state; new child-workflow args inherit it
-      via `_INHERITED_SCOPE_KEYS`.
+- [ ] `credential_customer_id` in payloads is OPTIONAL (the Temporal
+      boundary is the default source) — include it only as an explicit
+      override when the credential scope must differ from the Temporal
+      namespace.
 - [ ] New event producer: dispatched through `dispatch.emit` with the
       namespace resolved from context — and if a canvas-Run waiter
       exists for the event type, through `event_waiter.dispatch` too
@@ -217,6 +243,7 @@ credentials:
 | 4 | Node de-invasion: microsoft.mail_receive, google.gmail_receive, tikhub_action read the ContextVar; the poll pipeline stopped injecting the per-instance attribute; the Connection factory scopes by ContextVar | ✔ |
 | 5 | `dispatch.emit` resolves the namespace from the ContextVar when not passed — every push producer (telegram, whatsapp, discord, webhook, email, twitter, chat, todos, agent tasks) gets tenant-scoped delivery from one change | ✔ |
 | 6 | Cleanup pass: direct `credential_customer_id` reads in the plugin path replaced by the ContextVar; contract tests assert the single-setter shape | ✔ |
+| 7 | **The Temporal boundary becomes the source of truth**: the interceptor resolves from `activity.info().namespace` (payload key demoted to explicit override); permits route per namespace; spawn-site plumbing eliminated by construction (the email-trigger incident, §6) | ✔ |
 
 Each phase shipped independently; the flag-off guarantee (§4) gates
 every phase.

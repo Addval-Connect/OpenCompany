@@ -39,36 +39,53 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _resolve_tenant_ns(args: Any, temporal_ns: str) -> str:
+    """The credential/data namespace this activity routes by.
+
+    Source of truth: the Temporal isolation boundary itself —
+    ``activity.info().namespace``. Every activity of a tenant's workflow
+    is dispatched by that tenant's workers (per-namespace pools polling
+    the same queue names), so the Temporal namespace says where the
+    execution lives with NO help from the scheduler: a run spawned by
+    the polling trigger, the chat, the canvas or a feature that forgot
+    the namespace entirely all route correctly by construction.
+
+    ``credential_customer_id`` in the payload remains as an explicit
+    OVERRIDE for the rare case the credential scope must differ from
+    the Temporal namespace. Everything else (payload presence checks,
+    per-spawner plumbing) is obsolete — see multitenant.md §7.
+    """
+    from constants import normalize_credential_ns
+
+    for arg in args or ():
+        if isinstance(arg, dict) and arg.get("credential_customer_id"):
+            return normalize_credential_ns(arg["credential_customer_id"])
+    return normalize_credential_ns(temporal_ns)
+
+
 class ActivityTenantContextInterceptor(ActivityInboundInterceptor):
     """Seal the tenant-namespace ContextVar for the activity body.
 
     The active-namespace ContextVar does not cross the Temporal
     boundary: activities run on worker threads where no HTTP middleware
-    ever ran. The workflow payload carries ``credential_customer_id``
-    (transport, not an API — see ``docs-internal/multitenant.md`` §1)
-    and this interceptor turns it back into the ContextVar the DB /
-    credential pools read, BEFORE the activity body executes.
+    ever ran. This interceptor resolves the namespace from the Temporal
+    isolation boundary (``activity.info().namespace``) — with the
+    payload's ``credential_customer_id`` as an explicit override — and
+    seals the ContextVar the DB / credential pools read, BEFORE the
+    activity body executes.
 
     This is the single worker-side setter. Activity bodies, services and
     nodes must never set the namespace themselves — every production
     incident logged in multitenant.md §6 was a call site that had to
     remember to do it and didn't.
-
-    Activities whose payload carries no key (progress broadcasts,
-    tool refreshes, skill clears) are stamped with the default — the
-    same ambient value they observed before this interceptor existed.
     """
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        from constants import normalize_credential_ns
         from core.namespace_context import set_active_namespace
 
-        tenant = None
-        for arg in input.args or ():
-            if isinstance(arg, dict) and arg.get("credential_customer_id"):
-                tenant = arg["credential_customer_id"]
-                break
-        set_active_namespace(normalize_credential_ns(tenant))
+        set_active_namespace(
+            _resolve_tenant_ns(input.args, activity.info().namespace)
+        )
         return await self.next.execute_activity(input)
 
 
