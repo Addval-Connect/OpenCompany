@@ -5,6 +5,8 @@ metadata:
   author: opencompany
   version: "1.0"
   category: "statement_import"
+  icon: "📋"
+  color: "#6366F1"
 
 ---
 

@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import sys
 import uuid
@@ -66,7 +65,7 @@ async def test_migrate_user_namespaces_seeds_default(tmp_path):
     db = await _make_db(tmp_path)
     namespaces = await db.list_user_namespaces("owner")  # OWNER_PRINCIPAL_ID
     # 'default' namespace must exist even with no user rows
-    ns_names = [n["namespace"] for n in namespaces]
+    _ns_names = [n["namespace"] for n in namespaces]
     # owner is not a real user row so list may be empty, but the namespaces table must have 'default'
     async with db.engine.connect() as conn:
         from sqlalchemy import text

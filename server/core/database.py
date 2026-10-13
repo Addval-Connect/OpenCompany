@@ -578,7 +578,7 @@ class Database:
                     # Backfill any NULL that slipped through (should be none given
                     # the SQL DEFAULT, but belt-and-suspenders).
                     await conn.execute(text(
-                        f"UPDATE workflows SET owner_user_id = :pid WHERE owner_user_id IS NULL OR owner_user_id = ''"
+                        "UPDATE workflows SET owner_user_id = :pid WHERE owner_user_id IS NULL OR owner_user_id = ''"
                     ), {"pid": OWNER_PRINCIPAL_ID})
                 await conn.execute(text(
                     "CREATE INDEX IF NOT EXISTS ix_workflows_owner_user_id ON workflows(owner_user_id)"

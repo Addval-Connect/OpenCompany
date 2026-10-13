@@ -38,7 +38,6 @@ class PythonExecutorNode(CodeExecutorBase):
         import math
         import random as random_module
         import re as re_module
-        import traceback as tb_module
         from collections import Counter, defaultdict
 
         if not params.code.strip():

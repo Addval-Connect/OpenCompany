@@ -1,6 +1,14 @@
 ---
 name: "if-auditor-tecnico"
 description: "Fundamenta el criterio de auditoría del agente Auditor Técnico: qué significa que una regla dependa únicamente del lenguaje para su cumplimiento, y por qué eso es insuficiente, siguiendo las consideraciones sobre reglas y práctica de las Investigaciones Filosóficas de Wittgenstein."
+
+metadata:
+  author: opencompany
+  version: "1.0"
+  category: assistant
+  icon: "🔧"
+  color: "#10B981"
+
 ---
 
 ### POR QUÉ EL LENGUAJE SOLO NO BASTA
