@@ -1418,7 +1418,8 @@ async def refresh_agent_tools(payload: Dict[str, Any]) -> Dict[str, Any]:
 @activity.defn(name="agent.skill.invoke")
 async def invoke_agent_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Retry-safe, history-recorded progressive skill invocation."""
-    from services.skill_runtime import execute_skill_tool
+    from services.skill_runtime import SkillRuntimeError, execute_skill_tool
+    from temporalio.exceptions import ApplicationError
 
     node_data = dict(payload.get("node_data") or {})
     descriptors = node_data.pop("skill_descriptors", [])
@@ -1427,22 +1428,38 @@ async def invoke_agent_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
         for key in ("action", "skill_name", "path", "query", "cursor", "limit")
         if key in node_data
     }
-    return await execute_skill_tool(
-        action_args,
-        {
-            "parameters": {"skill_descriptors": descriptors, "agent_node_id": payload.get("parent_node_id")},
-            "workflow_id": payload.get("workflow_id"),
-            "execution_id": payload.get("execution_id"),
-            "root_execution_id": payload.get("root_execution_id"),
-            "parent_node_id": payload.get("parent_node_id"),
-            # New histories carry the provider call id. The Temporal activity
-            # id is a stable fallback for pre-marker histories and remains
-            # identical across activity retries.
-            "tool_call_id": payload.get("tool_call_id") or activity.info().activity_id,
-            "provider": payload.get("provider"),
-            "skill_invocation_source": "temporal",
-        },
+    try:
+        return await execute_skill_tool(
+            action_args,
+            {
+                "parameters": {"skill_descriptors": descriptors, "agent_node_id": payload.get("parent_node_id")},
+                "workflow_id": payload.get("workflow_id"),
+                "execution_id": payload.get("execution_id"),
+                "root_execution_id": payload.get("root_execution_id"),
+                "parent_node_id": payload.get("parent_node_id"),
+                # New histories carry the provider call id. The Temporal activity
+                # id is a stable fallback for pre-marker histories and remains
+                # identical across activity retries.
+                "tool_call_id": payload.get("tool_call_id") or activity.info().activity_id,
+                "provider": payload.get("provider"),
+                "skill_invocation_source": "temporal",
+            },
     )
+    except SkillRuntimeError as exc:
+        # A SkillRuntimeError is a DETERMINISTIC model error (bad arguments,
+        # unknown skill, missing path): retrying burns the activity's retry
+        # budget without changing the outcome (observed in production: 9
+        # attempts, ~40s of wall time, on a search_resource the model could
+        # not have shaped correctly). Fail fast back to the model so it
+        # corrects its arguments on the next turn.
+        args = exc.args
+        code = args[0] if args and isinstance(args[0], str) and args[0].isupper() else "SKILL_ERROR"
+        message = args[1] if len(args) > 1 and isinstance(args[1], str) else str(exc)
+        raise ApplicationError(
+            f"{code}: {message}",
+            type="SkillRuntimeError",
+            non_retryable=True,
+        ) from exc
 
 
 @activity.defn(name="agent.skill.clear")

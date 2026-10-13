@@ -204,7 +204,9 @@ async def test_customized_content_wins_and_repeat_load_is_compact(monkeypatch):
         {"action": "search_resource", "skill_name": "todo-skill", "path": "references/guide.md", "query": "needle"},
         config,
     )
-    assert found["matches"] == [{"line": 2, "text": "needle"}]
+    # Each match carries its resource path — the model can read_resource
+    # it next (the skill-wide search contract, multitenant.md §7).
+    assert found["matches"] == [{"path": "references/guide.md", "line": 2, "text": "needle"}]
 
 
 @pytest.mark.asyncio
