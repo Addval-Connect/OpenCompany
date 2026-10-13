@@ -1,5 +1,5 @@
 # Reusable validation workflow. Called by ci.yml and release.yml.
-# Three jobs: client build + lint, backend tests, cross-OS smoke test.
+# Four jobs: client build + lint, Python lint, backend tests, cross-OS smoke test.
 
 name: Predeploy
 
@@ -26,6 +26,22 @@ jobs:
         run: bun run --filter react-flow-client typecheck
       - name: Frontend tests (vitest)
         run: bun run --filter react-flow-client test
+
+  python-lint:
+    name: Python lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: ruff check
+        working-directory: server
+        # Rules + line-length pinned in server/pyproject.toml ([tool.ruff]);
+        # ruff itself comes from the dev dependency-group in the uv lock.
+        run: |
+          uv sync --group dev
+          uv run --group dev ruff check .
 
   backend-tests:
     name: Backend tests

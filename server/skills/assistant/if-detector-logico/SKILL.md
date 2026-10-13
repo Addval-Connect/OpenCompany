@@ -1,6 +1,14 @@
 ---
 name: "if-detector-logico"
 description: "Fundamenta el criterio de evaluación del agente Detector Lógico: qué significa detectar contradicciones y ambigüedades en reglas considerando su uso práctico, siguiendo los conceptos de parecido de familia y gramática profunda de las Investigaciones Filosóficas de Wittgenstein."
+
+metadata:
+  author: opencompany
+  version: "1.0"
+  category: assistant
+  icon: "🧠"
+  color: "#10B981"
+
 ---
 
 ### POR QUÉ EL USO PRÁCTICO Y NO LA FORMA SUPERFICIAL

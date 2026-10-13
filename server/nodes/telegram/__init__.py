@@ -100,5 +100,4 @@ __all__ = [
     "build_telegram_filter",
     "get_telegram_service",
     "precheck_telegram_trigger",
-    "refresh_telegram_status",
-]
+    "refresh_telegram_status", "TelegramSendNode"]

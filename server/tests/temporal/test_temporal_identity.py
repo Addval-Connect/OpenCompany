@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock

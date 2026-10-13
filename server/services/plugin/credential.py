@@ -26,6 +26,8 @@ envelope). Only the probe itself varies. That common scaffold lives on
 from __future__ import annotations
 
 import logging
+
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Sequence
@@ -471,10 +473,10 @@ class ApiKeyCredential(Credential):
             err.auth = cls.auth  # "api_key"
             raise err
         secrets: Dict[str, Any] = {"api_key": api_key}
-        for field in cls.extra_fields:
-            value = await auth_service.get_api_key(field)
+        for extra_field in cls.extra_fields:
+            value = await auth_service.get_api_key(extra_field)
             if value:
-                secrets[field] = value
+                secrets[extra_field] = value
         return secrets
 
     @classmethod

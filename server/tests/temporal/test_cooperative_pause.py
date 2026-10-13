@@ -1,9 +1,8 @@
 """Cooperative pause flags shared by Temporal orchestration workflows."""
 
 import asyncio
-import inspect
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from temporalio.exceptions import ApplicationError

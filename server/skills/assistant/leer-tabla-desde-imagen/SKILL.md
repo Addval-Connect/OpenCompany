@@ -5,6 +5,8 @@ metadata:
   author: opencompany
   version: "1.0"
   category: "assistant"
+  icon: "🔎"
+  color: "#10B981"
 
 ---
 

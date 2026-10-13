@@ -34,7 +34,7 @@ if "DATA_DIR" not in os.environ and (_REPO_ROOT / ".opencompany").exists():
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Prompt
 from rich.table import Table
 from rich import box
 
@@ -75,14 +75,12 @@ def _table(title: str, columns: list[str], rows: list[list[str]]) -> None:
 
 async def _get_services():
     from core.config import Settings
-    from core.database import Database
     from services.user_auth import UserAuthService
     from core.container import container
 
     settings = Settings()
     database = container.database()
     # Ensure owner DB is started
-    from core.db_pool import DatabasePool
     pool = container._database_pool()
     await pool.startup_namespace("owner")
 
@@ -106,7 +104,6 @@ async def list_users(auth, database, settings) -> None:
 
 async def list_namespaces(auth, database, settings) -> None:
     from sqlalchemy import text
-    from core.db_pool import DatabasePool
     pool = container_pool()
     owner_db = pool.get("owner")
     async with owner_db.get_session() as session:
@@ -140,7 +137,6 @@ async def add_user(auth, database, settings) -> None:
 
     user = User(email=email, display_name=name)
     user.set_password(password)
-    from sqlalchemy import text
     pool = container_pool()
     owner_db = pool.get("owner")
     async with owner_db.get_session() as session:
@@ -211,14 +207,14 @@ async def create_namespace(auth, database, settings) -> None:
                 description=f"OpenCompany tenant: {display}",
                 workflow_execution_retention_period=Duration(seconds=7 * 86400),
             ))
-            console.print(f"  [green]✓ Temporal namespace registered[/]")
+            console.print("  [green]✓ Temporal namespace registered[/]")
         except RPCError as exc:
             if exc.status != RPCStatusCode.ALREADY_EXISTS:
                 raise
-            console.print(f"  [yellow]Temporal namespace already exists, reusing[/]")
+            console.print("  [yellow]Temporal namespace already exists, reusing[/]")
 
         await register_search_attributes(client, slug)
-        console.print(f"  [green]✓ Search attributes registered[/]")
+        console.print("  [green]✓ Search attributes registered[/]")
         temporal_provisioned = True
     except Exception as exc:
         console.print(f"  [yellow]Warning: Temporal registration failed: {exc}[/]")

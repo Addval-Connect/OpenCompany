@@ -11,7 +11,7 @@ workflow's own time.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,8 +19,6 @@ from services.plugin import ActionNode, NodeContext, NodeUserError, Operation, T
 
 from ._base import (
     CREDENTIAL_ID,
-    GRAPH_API_VERSION,
-    GRAPH_BASE_URL,
     graph_delete,
     graph_get,
     graph_post,

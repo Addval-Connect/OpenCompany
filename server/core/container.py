@@ -17,10 +17,8 @@ from typing import Any
 from dependency_injector import containers, providers
 
 from core.config import Settings
-from core.database import Database
 from core.cache import CacheService
 from core.encryption import EncryptionService
-from core.credentials_database import CredentialsDatabase
 from core.db_pool import DatabasePool, CredentialsPool
 from core.namespaced_db import NamespacedDatabase, NamespacedCredentialsDatabase
 

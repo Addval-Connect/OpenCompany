@@ -30,7 +30,6 @@ from .._protocol import (
 )
 from ._http import (
     HttpSpeechProvider,
-    drop_none,
     query_flags,
 )
 from .._registry import SttProviderSpec, register_stt_provider

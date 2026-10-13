@@ -267,7 +267,7 @@ class CronSchedulerNode(ActionNode):
     async def trigger(self, ctx: NodeContext, params: CronSchedulerParams) -> CronSchedulerOutput:
         from services.status_broadcaster import get_status_broadcaster
 
-        start_time = time.time()
+        _start_time = time.time()
         p = params.model_dump(by_alias=False)
         frequency = p.get("frequency", "minutes")
         timezone = p.get("timezone", "UTC")

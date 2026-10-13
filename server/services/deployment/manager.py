@@ -709,7 +709,6 @@ class DeploymentManager:
         instead of erroring. Search Attributes provide the registry
         used by :meth:`_cancel_canary_listeners`.
         """
-        from core.container import container
         from temporalio.common import (
             SearchAttributeKey,
             SearchAttributePair,

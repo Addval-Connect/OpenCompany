@@ -8,7 +8,7 @@ semantic (console-panel history, not chat backend).
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 

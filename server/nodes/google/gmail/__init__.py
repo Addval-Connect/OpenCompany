@@ -228,3 +228,5 @@ class GmailNode(ActionNode):
         await track_google_usage("gmail", ctx.node_id, "read", 1, ctx.raw)
         formatted = format_message(result, include_body=(params.format == "full"))
         return GmailOutput(operation="read", **{k: v for k, v in formatted.items() if k != "size_estimate"})
+
+__all__ = ["fetch_email_details", "format_message"]

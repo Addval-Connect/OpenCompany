@@ -3,7 +3,6 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from core.auth_cookies import get_session_token, session_cookie_names
