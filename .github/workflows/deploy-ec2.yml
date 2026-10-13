@@ -1,0 +1,75 @@
+# Deploy OpenCompany to the production EC2 instance, from GitHub.
+#
+# Manual-only (workflow_dispatch): the operator triggers it after merging
+# to main. Runs the full predeploy validation first, then builds, packages
+# and ships the exact tarball deploy.sh ships — via the ops SSH key
+# (deploy/ec2/README.md -> A plain SSH key for ops). The host address and
+# key live in repo variables/secrets; the Elastic IP keeps them stable
+# across stop/starts.
+#
+# Rollback: re-run this workflow on a previous main commit (the tarball is
+# pure code — bootstrap never touches DATA_DIR or .env), or restore the
+# state snapshot on the host (deploy/ec2/README.md -> State and backups).
+
+name: Deploy to EC2
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  predeploy:
+    uses: ./.github/workflows/predeploy.yml
+
+  deploy:
+    needs: predeploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Build client + sidecar (the same build deploy.sh runs)
+        run: bun install --frozen-lockfile && bun run build
+      - name: Package artifact (deploy.sh parity)
+        run: |
+          tar czf /tmp/opencompany-deploy.tar.gz \
+            --exclude='.venv' \
+            --exclude='node_modules' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.pytest_cache' \
+            --exclude='.ruff_cache' \
+            --exclude='server/tests' \
+            --exclude='server/.opencompany' \
+            server client/dist .opencompany/workflows .env.template deploy/ec2
+      - name: Set up SSH (ops key)
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OPENCOMPANY_OPS_KEY }}" > ~/.ssh/opencompany-ops.pem
+          chmod 600 ~/.ssh/opencompany-ops.pem
+          ssh-keyscan -H "${{ vars.OPENCOMPANY_HOST }}" >> ~/.ssh/known_hosts
+      - name: Upload artifact
+        run: |
+          scp -i ~/.ssh/opencompany-ops.pem /tmp/opencompany-deploy.tar.gz \
+            ubuntu@${{ vars.OPENCOMPANY_HOST }}:/tmp/opencompany-deploy.tar.gz
+      - name: Run bootstrap on the host
+        run: |
+          ssh -i ~/.ssh/opencompany-ops.pem ubuntu@${{ vars.OPENCOMPANY_HOST }} bash -s <<'EOF'
+          set -euo pipefail
+          rm -rf /tmp/opencompany-bootstrap
+          mkdir -p /tmp/opencompany-bootstrap
+          tar xzf /tmp/opencompany-deploy.tar.gz -C /tmp/opencompany-bootstrap deploy/ec2
+          chmod +x /tmp/opencompany-bootstrap/deploy/ec2/bootstrap.sh
+          sudo /tmp/opencompany-bootstrap/deploy/ec2/bootstrap.sh --tarball /tmp/opencompany-deploy.tar.gz
+          EOF
+      - name: Health check
+        run: |
+          ssh -i ~/.ssh/opencompany-ops.pem ubuntu@${{ vars.OPENCOMPANY_HOST }} \
+            'curl -fsS http://127.0.0.1:5678/health | grep -o "\"status\":\"[a-z]*\""'
