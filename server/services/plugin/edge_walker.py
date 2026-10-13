@@ -663,12 +663,19 @@ def describe_teammate_capabilities(
 def format_teammate_roster_line(info: Dict[str, Any]) -> str:
     """The one line a lead sees per teammate, shared by both runtimes.
 
-    ``- <node_id>: <label> (<node_type>) - <capabilities>``. The capability
-    clause is what lets a lead match work to the agent holding the right
-    tool; without it a teammate labelled "Web Agent" carrying TikHub is
-    indistinguishable from one carrying nothing.
+    ``- <node_id>: <label> (<node_type>) [<delegate_name>] - <capabilities>``.
+    The capability clause is what lets a lead match work to the agent
+    holding the right tool; without it a teammate labelled "Web Agent"
+    carrying TikHub is indistinguishable from one carrying nothing. The
+    ``[delegate_name]`` clause gives the model a SHORT, stable
+    identifier to pass as ``delegate_name`` — small models mangle the
+    long workflow-prefixed ``node_id`` (observed: "8:task_agent:1"),
+    and the bracketed name is the copy-safe fallback.
     """
     line = f"- {info.get('node_id')}: {info.get('label') or info.get('node_type')} ({info.get('node_type')})"
+    delegate = str(info.get("delegate_tool_name") or "").strip()
+    if delegate:
+        line = f"{line} [{delegate}]"
     capabilities = str(info.get("capabilities") or "").strip()
     return f"{line} - {capabilities}" if capabilities else line
 

@@ -152,7 +152,9 @@ async def test_teammate_capabilities_surface_tools_and_skills():
     assert capabilities == describe_teammate_capabilities(teammate["child_tools"], teammate["child_skills"])
 
     line = format_teammate_roster_line(teammate)
-    assert line.startswith("- web: Web Agent (aiAgent) - tools: TikHub (")
+    # [delegate_name] clause: the copy-safe identifier small models pass
+    # instead of mangling the workflow-prefixed node id (multitenant.md §1).
+    assert line.startswith("- web: Web Agent (aiAgent) [delegate_to_web_agent] - tools: TikHub (")
     assert "skills: tikhub-skill" in line
 
 
