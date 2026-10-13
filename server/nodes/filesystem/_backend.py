@@ -25,6 +25,8 @@ from typing import Any, Callable, Dict, Final, Optional
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
+from services.workspace_locator import workspace_base_dir
+
 
 EMPTY_CONTENT_WARNING = "System reminder: File exists but has empty contents"
 
@@ -1093,7 +1095,6 @@ def get_backend(
     context: Optional[Dict[str, Any]] = None,
 ) -> WorkspaceBackend:
     """Return a native backend rooted at the per-workflow workspace."""
-    from core.config import Settings
     from core.logging import get_logger
 
     parameter_directory = parameters.get("working_directory")
@@ -1101,7 +1102,7 @@ def get_backend(
     root = (
         parameter_directory
         or context_directory
-        or os.path.join(Settings().workspace_base_resolved, "default")
+        or str(workspace_base_dir() / "default")
     )
     os.makedirs(root, exist_ok=True)
     get_logger(__name__).info("[Filesystem] root=%s", root)

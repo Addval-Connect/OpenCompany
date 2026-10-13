@@ -12,6 +12,7 @@ from __future__ import annotations
 import ntpath
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from core.paths import safe_path_component
 from nodes.utility.process_manager import ProcessManagerNode, ProcessManagerParams
@@ -87,10 +88,14 @@ async def test_explicit_cwd_passes_through_unchanged(monkeypatch, tmp_path) -> N
 
 
 async def test_guardrail_rejection_names_the_rejected_path(monkeypatch, tmp_path) -> None:
-    workspace = tmp_path / "workspaces"
-    workspace.mkdir()
-    monkeypatch.setattr("core.config.Settings", lambda: SimpleNamespace(workspace_base_resolved=str(workspace)))
+    """The guard validates against the NAMESPACE-AWARE workspace base
+    (workspace_base_dir() — multitenant.md §7): a cwd outside the active
+    tenant's tree is rejected, with the rejected path named in the error."""
+    from core.namespace_context import set_active_namespace
+
+    monkeypatch.setattr("core.config.Settings", lambda: SimpleNamespace(data_dir=str(tmp_path)))
     monkeypatch.setattr("core.paths.daemons_dir", lambda: tmp_path / "daemons")
+    set_active_namespace("addval-tax")
 
     outside = tmp_path / "elsewhere"
     outside.mkdir()
@@ -99,3 +104,68 @@ async def test_guardrail_rejection_names_the_rejected_path(monkeypatch, tmp_path
     assert result["success"] is False
     assert "elsewhere" in result["error"]
     assert "Omit cwd" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant: the guard must accept a TENANT's workspace cwd — the
+# production incident validated against the single-tenant base
+# (DATA_DIR/workspaces) and rejected every namespaced path. And the
+# cwd-less default must land in the TENANT's tree, never in the shared
+# root (cross-tenant mixing).
+# ---------------------------------------------------------------------------
+
+
+def _tenant_env(monkeypatch, tmp_path, ns: str = "addval-tax"):
+    from core.namespace_context import set_active_namespace
+
+    monkeypatch.setattr(
+        "core.config.Settings",
+        lambda: SimpleNamespace(data_dir=str(tmp_path)),
+    )
+    monkeypatch.setattr("core.paths.daemons_dir", lambda: tmp_path / "daemons")
+    set_active_namespace(ns)
+    return tmp_path / "namespaces" / ns / "workspaces"
+
+
+async def _start_with_fake_spawn(monkeypatch):
+    """Run ProcessService.start with the subprocess spawn faked."""
+    import asyncio
+
+    fake_proc = SimpleNamespace(
+        pid=4242, stdin=None, stdout=None, stderr=None,
+    )
+    spawn = AsyncMock(return_value=fake_proc)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+    reads = AsyncMock(side_effect=lambda *a, **k: None)
+    monkeypatch.setattr("services.process_service.ProcessService._read_stream", reads)
+
+    service = ProcessService()
+    return service, spawn
+
+
+async def test_tenant_workspace_cwd_is_accepted(monkeypatch, tmp_path) -> None:
+    """The production incident: the CORRECT tenant workspace path was
+    rejected because the guard validated against the single-tenant base."""
+    tenant_ws = _tenant_env(monkeypatch, tmp_path)
+    cwd = tenant_ws / "CartolaTax_Statement_Import_1" / "wf_processManager_3"
+    cwd.mkdir(parents=True)
+
+    service, _spawn = await _start_with_fake_spawn(monkeypatch)
+    result = await service.start("web", "python -V", working_directory=str(cwd))
+
+    assert result["success"] is True, result.get("error")
+    assert _spawn.await_args.kwargs["cwd"] == str(cwd)
+
+
+async def test_cwd_less_start_lands_in_tenant_workspaces(monkeypatch, tmp_path) -> None:
+    service, _spawn = await _start_with_fake_spawn(monkeypatch)
+    tenant_ws = _tenant_env(monkeypatch, tmp_path)
+
+    result = await service.start("web", "python -V")
+
+    assert result["success"] is True, result.get("error")
+    wd = Path(_spawn.await_args.kwargs["cwd"])
+    # In the TENANT's tree — never in the shared root (cross-tenant mixing).
+    assert wd.is_relative_to(tenant_ws)
+    assert wd == tenant_ws / "default"

@@ -8,12 +8,10 @@ auto-save chain IS the rename path — no separate rename endpoint.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from core.config import Settings
 from core.container import container
 from core.logging import get_logger
 from services.ws_handler_registry import ws_handler
@@ -141,7 +139,9 @@ def _move_workspace(old_slug: str, new_slug: str) -> None:
     """
     if not old_slug or old_slug == new_slug:
         return
-    base = Path(Settings().workspace_base_resolved)
+    from services.workspace_locator import workspace_base_dir
+
+    base = workspace_base_dir()
     src, dst = base / old_slug, base / new_slug
     if not src.is_dir() or dst.exists():
         return

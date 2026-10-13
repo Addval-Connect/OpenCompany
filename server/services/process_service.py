@@ -148,10 +148,14 @@ class ProcessService:
         argv[0] = resolved
         env = {**os.environ, **(extra_env or {}), "PYTHONUNBUFFERED": "1"}
         requested_ports = self._requested_ports(argv, ports or [], extra_env or {})
-        from core.config import Settings
         from core.paths import daemons_dir
+        from services.workspace_locator import workspace_base_dir
 
-        workspace_base = Path(Settings().workspace_base_resolved).resolve()
+        # Namespace-aware: en multi-tenant el workspace de cada tenant vive
+        # bajo namespaces/<ns>/workspaces (el layout canonico post-#25) — la
+        # raiz single-tenant de Settings rechazaria todo cwd de tenant y, con
+        # cwd omitido, mandaria el proceso al workspace COMPARTIDO.
+        workspace_base = workspace_base_dir().resolve()
         daemon_base = daemons_dir().resolve()
 
         if not working_directory:

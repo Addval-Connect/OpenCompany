@@ -158,9 +158,9 @@ class CodexAgentNode(ActionNode):
 
         workspace_dir = ctx.raw.get("workspace_dir") or params.working_directory
         if workspace_dir is None:
-            from core.config import Settings
+            from services.workspace_locator import workspace_base_dir
 
-            workspace_dir = Path(Settings().workspace_base_resolved) / (workflow_id or "default")
+            workspace_dir = workspace_base_dir() / (workflow_id or "default")
         workspace_dir = Path(workspace_dir)
 
         repo_root = Path(params.working_directory) if params.working_directory else None

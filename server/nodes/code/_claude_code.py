@@ -22,7 +22,6 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from core.config import Settings
 from core.logging import get_logger
 
 from services.cli_agent import ClaudeTaskSpec
@@ -52,7 +51,9 @@ class ClaudeCodeService(ServiceSingleton):
     ) -> Dict[str, Any]:
         """Run a single Claude Code task. Returns legacy dict shape."""
         if not cwd:
-            cwd = os.path.join(Settings().workspace_base_resolved, "default")
+            from services.workspace_locator import workspace_base_dir
+
+            cwd = str(workspace_base_dir() / "default")
             os.makedirs(cwd, exist_ok=True)
 
         # Resume the prior session for this node if we have one
