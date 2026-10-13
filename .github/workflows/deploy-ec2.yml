@@ -26,6 +26,10 @@ permissions:
 jobs:
   predeploy:
     uses: ./.github/workflows/predeploy.yml
+    # The EC2 deploy ships the ubuntu build only: the cross-OS smoke
+    # (windows/macos) exercises platforms production never runs.
+    with:
+      smoke_os: '["ubuntu-latest"]'
 
   deploy:
     needs: predeploy

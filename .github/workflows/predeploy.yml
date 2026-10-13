@@ -5,6 +5,15 @@ name: Predeploy
 
 on:
   workflow_call:
+    inputs:
+      # JSON array of runner OS labels for the cross-OS Build + start
+      # smoke. Default: the full matrix (ci.yml / release.yml keep the
+      # current behaviour). Consumers that target ONE platform pass a
+      # single-entry array — the EC2 deploy only ships the ubuntu build,
+      # so burning windows/macos runners on it buys nothing.
+      smoke_os:
+        type: string
+        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
 
 permissions:
   contents: read
@@ -81,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.smoke_os) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
