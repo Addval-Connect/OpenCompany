@@ -128,13 +128,15 @@ def patched_handlers(recording_db, tmp_path):
     original = sys.modules.get("services.status_broadcaster", sentinel)
     sys.modules["services.status_broadcaster"] = stub_module
 
-    workspace_root = tmp_path / "workspaces"
-    workspace_root.mkdir()
+    # The handler reads workspace_base_dir() — namespace-aware via
+    # core.config.Settings.data_dir (multitenant.md §7).
+    workspace_root = tmp_path / "namespaces" / "owner" / "workspaces"
+    workspace_root.mkdir(parents=True)
     settings_stub = MagicMock()
-    settings_stub.workspace_base_resolved = str(workspace_root)
+    settings_stub.data_dir = str(tmp_path)
 
-    with patch.object(handlers, "container") as mock_container, patch.object(
-        handlers, "Settings", return_value=settings_stub
+    with patch.object(handlers, "container") as mock_container, patch(
+        "core.config.Settings", return_value=settings_stub
     ):
         mock_container.database.return_value = recording_db
         try:

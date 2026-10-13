@@ -71,10 +71,14 @@ def fake_db():
 
 
 @pytest.fixture
-def workspace_root(tmp_path: Path):
-    """Tmpdir as the ``workspace_base_resolved`` for the rename test."""
-    root = tmp_path / "workspaces"
-    root.mkdir()
+def workspace_root(monkeypatch, tmp_path: Path):
+    """Tmpdir as the namespace-aware workspace base for the rename test
+    (the handler reads workspace_base_dir() — multitenant.md §7)."""
+    from core.namespace_context import set_active_namespace
+
+    root = tmp_path / "namespaces" / "owner" / "workspaces"
+    root.mkdir(parents=True)
+    set_active_namespace("owner")
     return root
 
 
@@ -84,7 +88,6 @@ def patched_handler_deps(fake_db, workspace_root):
 
     The handler reaches into:
       * ``core.container.container.database()`` — DB row store
-      * ``core.config.Settings().workspace_base_resolved`` — folder root
       * ``services.status_broadcaster.get_status_broadcaster()`` — broadcast
 
     All three are patched here so the handler runs against the in-memory
@@ -106,10 +109,10 @@ def patched_handler_deps(fake_db, workspace_root):
     sys.modules["services.status_broadcaster"] = stub_module
 
     settings_stub = MagicMock()
-    settings_stub.workspace_base_resolved = str(workspace_root)
+    settings_stub.data_dir = str(workspace_root.parents[2])  # root = <data_dir>/namespaces/<ns>/workspaces
 
     with patch.object(handlers, "container") as mock_container, \
-         patch.object(handlers, "Settings", return_value=settings_stub):
+         patch("core.config.Settings", return_value=settings_stub):
         mock_container.database.return_value = fake_db
         try:
             yield SimpleNamespace(
@@ -214,7 +217,6 @@ async def test_rename_moves_workspace_directory(patched_handler_deps) -> None:
         {"workflow_id": "1", "name": "Cool Bot", "data": {"nodes": []}},
         websocket=None,
     )
-
     new_ws = patched_handler_deps.workspace_root / "Cool_Bot_1"
     assert not old_ws.exists()
     assert new_ws.is_dir()

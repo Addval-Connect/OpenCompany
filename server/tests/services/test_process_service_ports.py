@@ -57,8 +57,11 @@ async def test_start_rejects_occupied_declared_port_before_spawn(monkeypatch) ->
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_spawn)
     workspace = Path.cwd().resolve()
-    monkeypatch.setattr("core.config.Settings", lambda: SimpleNamespace(workspace_base_resolved=str(workspace)))
-    monkeypatch.setattr("core.paths.daemons_dir", lambda: workspace / ".opencompany-test-daemons")
+    from core.namespace_context import set_active_namespace
+
+    set_active_namespace("owner")
+    monkeypatch.setattr("core.config.Settings", lambda: SimpleNamespace(data_dir=str(workspace)))
+    monkeypatch.setattr("core.paths.daemons_dir", lambda: workspace)
     try:
         # The collision check happens before subprocess creation; use an
         # OpenCompany-controlled default cwd supplied by the configured root.
