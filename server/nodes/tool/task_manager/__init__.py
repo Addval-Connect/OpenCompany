@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from services.plugin import NodeContext, Operation, TaskQueue, ToolNode
 
@@ -40,6 +40,18 @@ class TaskManagerParams(BaseModel):
     scan_limit: int = Field(default=250, ge=1, le=500)
     categories: Optional[List[Literal["failure", "activity", "child", "signal", "timer", "workflow"]]] = None
     model_config = ConfigDict(extra="allow")
+
+    @field_validator("context", "acceptance_criteria", mode="before")
+    @classmethod
+    def _coerce_prose_to_object(cls, v: Any, info: ValidationInfo) -> Any:
+        """LLM-robustness: small models send ``context`` as prose instead
+        of an object. Observed cost: the lead burned four iterations
+        learning the shape from the validation error before the first
+        successful assign_task. A bare string wraps into a single-key
+        object instead of failing the whole call."""
+        if isinstance(v, str) and v.strip():
+            return {info.field_name: v.strip()}
+        return v
 
 
 class TaskManagerOutput(BaseModel):
@@ -107,10 +119,37 @@ def _resolve_teammate(config: Dict[str, Any], args: Dict[str, Any]) -> Dict[str,
     lead_id = str(config.get("parent_node_id") or config.get("team_lead_node_id") or "")
     descriptors = build_teammate_descriptors(lead_id, config)
     node_id, delegate_name = args.get("assignee_node_id"), args.get("delegate_name")
-    matches = [d for d in descriptors if (node_id and d["node_id"] == node_id) or (delegate_name and d["delegate_tool_name"] == delegate_name)]
+
+    def _matches(d: Dict[str, Any]) -> bool:
+        if delegate_name and d["delegate_tool_name"] == delegate_name:
+            return True
+        if not node_id:
+            return False
+        candidate = str(node_id).strip()
+        if d["node_id"] == candidate:
+            return True
+        # Model-robustness fallbacks. Small models (glm-class) mangle the
+        # long workflow-prefixed node id — observed shapes: a bogus short
+        # prefix ("8:task_agent:1") and a bare label copy. Match on the
+        # stable TAIL (the last two colon-separated segments,
+        # "<node>:<index>") or on the roster label; two teammates of the
+        # same type make a tail ambiguous, which degrades to the same
+        # "must resolve to exactly one" error instead of guessing.
+        tail = ":".join(candidate.split(":")[-2:])
+        d_tail = ":".join(str(d["node_id"]).split(":")[-2:])
+        if len(tail.split(":")) == 2 and tail == d_tail:
+            return True
+        label = str(d.get("label") or "").strip().lower()
+        return bool(label) and label == candidate.lower()
+
+    matches = [d for d in descriptors if _matches(d)]
     if len(matches) != 1:
         available = [{"node_id": d["node_id"], "delegate_name": d["delegate_tool_name"], "label": d["label"]} for d in descriptors]
-        raise ValueError(f"Assignee must resolve to exactly one connected teammate; available={available}")
+        raise ValueError(
+            "Assignee must resolve to exactly one connected teammate — copy the "
+            "exact assignee_node_id from the list (or its [delegate_name]); "
+            f"available={available}"
+        )
     return matches[0]
 
 

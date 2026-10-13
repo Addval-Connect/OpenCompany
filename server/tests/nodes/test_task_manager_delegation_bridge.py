@@ -165,3 +165,89 @@ async def test_list_tasks_can_include_prior_executions():
     service.list_durable_task_history.assert_awaited_once_with(
         workflow_id="wf-1", team_lead_node_id="lead-1", status=None
     )
+
+
+# ---------------------------------------------------------------------------
+# Model-robustness: small models mangle the assignee id and send `context`
+# as prose. The resolver degrades gracefully instead of burning the lead's
+# iterations (observed: 4-5 retry loops per assign in production).
+# ---------------------------------------------------------------------------
+
+
+def _two_teammate_config():
+    return {
+        "workflow_id": "wf-1", "execution_id": "exec-1", "parent_node_id": "lead-1",
+        "ai_service": None, "database": None,
+        "nodes": [
+            {"id": "lead-1", "type": "orchestrator_agent", "data": {}},
+            {"id": "b9a36cc3f2f84605b2ee1e4d453f739c:task_agent:1", "type": "task_agent", "data": {"label": "A3 — Consolida Informacion"}},
+            {"id": "b9a36cc3f2f84605b2ee1e4d453f739c:tool_agent:1", "type": "tool_agent", "data": {"label": "A4 — Importa a Odoo"}},
+        ],
+        "edges": [
+            {"source": "b9a36cc3f2f84605b2ee1e4d453f739c:task_agent:1", "target": "lead-1", "targetHandle": "input-teammates"},
+            {"source": "b9a36cc3f2f84605b2ee1e4d453f739c:tool_agent:1", "target": "lead-1", "targetHandle": "input-teammates"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_assignee_resolves_from_mangled_short_prefix():
+    """The observed production shape: the model dropped the workflow-prefixed
+    head of the node id ("8:task_agent:1"). The stable TAIL still resolves."""
+    service = SimpleNamespace(assign_durable_task=AsyncMock(return_value={
+        "id": "task-1", "team_id": "team-1", "status": "queued",
+    }))
+    with patch("services.agent_team.get_agent_team_service", return_value=service), patch(
+        "services.handlers.tools._execute_delegated_agent", AsyncMock()
+    ):
+        result = await _execute_task_manager({
+            "operation": "assign_task", "title": "T", "mission": "M",
+            "assignee_node_id": "8:task_agent:1",
+        }, _two_teammate_config())
+    assert result["task"]["id"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_assignee_resolves_from_roster_label():
+    service = SimpleNamespace(assign_durable_task=AsyncMock(return_value={
+        "id": "task-2", "team_id": "team-1", "status": "queued",
+    }))
+    with patch("services.agent_team.get_agent_team_service", return_value=service), patch(
+        "services.handlers.tools._execute_delegated_agent", AsyncMock()
+    ):
+        result = await _execute_task_manager({
+            "operation": "assign_task", "title": "T", "mission": "M",
+            "assignee_node_id": "a4 — importa a odoo",
+        }, _two_teammate_config())
+    assert result["task"]["id"] == "task-2"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_tail_still_errors_instead_of_guessing():
+    """Two teammates of the same type share a tail — the fallback must
+    degrade to the exact-match error, never pick one silently."""
+    from nodes.tool.task_manager import _resolve_teammate
+
+    config = _two_teammate_config()
+    config["nodes"].append({
+        "id": "otherwf:task_agent:1", "type": "task_agent", "data": {"label": "Otro A3"},
+    })
+    config["edges"].append({
+        "source": "otherwf:task_agent:1", "target": "lead-1", "targetHandle": "input-teammates",
+    })
+    with pytest.raises(ValueError, match="must resolve to exactly one"):
+        _resolve_teammate(config, {"assignee_node_id": "8:task_agent:1"})
+
+
+def test_task_manager_params_coerce_prose_context_to_object():
+    """`context`/`acceptance_criteria` arrive as prose from small models;
+    wrap the string instead of failing the whole call."""
+    from nodes.tool.task_manager import TaskManagerParams
+
+    params = TaskManagerParams(operation="assign_task", context="Prueba de conectividad.")
+    assert params.context == {"context": "Prueba de conectividad."}
+    params2 = TaskManagerParams(operation="assign_task", acceptance_criteria="OK o KO con detalle.")
+    assert params2.acceptance_criteria == {"acceptance_criteria": "OK o KO con detalle."}
+    # dict input passes through untouched
+    params3 = TaskManagerParams(operation="assign_task", context={"motivo": "x"})
+    assert params3.context == {"motivo": "x"}

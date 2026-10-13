@@ -1684,12 +1684,15 @@ class AIService:
                     system_message += (
                         "\n\n## Durable Team Delegation\n"
                         "All teammate assignments MUST use task_manager with operation='assign_task'. "
-                        "Supply title, bounded mission, relevant context, acceptance criteria, and one "
-                        "assignee_node_id from the connected list below. Multiple assign_task calls may "
-                        "be issued together for parallel queued execution. Never call delegate_to_* "
-                        "directly. Review submitted tasks using list_tasks/get_task and accept, retry, "
-                        "modify, reassign, or cancel them before the final report. For mutations, copy "
-                        "task.id to task_id and task.revision to expected_revision.\n"
+                        "Supply title, bounded mission, relevant context as a JSON OBJECT ({...}, never "
+                        "a plain string), acceptance criteria as a JSON OBJECT, and one assignee: the "
+                        "full assignee_node_id from the connected list below, or the teammate's "
+                        "[delegate_name] identifier. Copy ids EXACTLY as shown — do not shorten them. "
+                        "Multiple assign_task calls may be issued together for parallel queued "
+                        "execution. Never call delegate_to_* directly. Review submitted tasks using "
+                        "list_tasks/get_task and accept, retry, modify, reassign, or cancel them before "
+                        "the final report. For mutations, copy task.id to task_id and task.revision to "
+                        "expected_revision.\n"
                         f"Connected teammates:\n{teammate_lines}"
                     )
 
