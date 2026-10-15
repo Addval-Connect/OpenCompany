@@ -266,6 +266,85 @@ class TestDocumentParser:
         assert doc["parser"] == "pypdf"
         assert "page text" in doc["content"]
 
+    async def test_tool_surface_keeps_canvas_handles(self):
+        # CartolaTax Fase 2: dual-purpose — invokable as `document_parser`
+        # while staying wirable on the canvas (fileDownloader chains).
+        from services.node_registry import get_node_class
+        from services.node_spec import get_node_spec
+
+        cls = get_node_class("documentParser")
+        assert cls.usable_as_tool is True
+        assert cls.tool_name == "document_parser"
+        assert cls.hide_input_handle is False
+        assert cls.hide_output_handle is False
+
+        handles = get_node_spec("documentParser").get("handles") or []
+        names = {h.get("name") for h in handles}
+        # Canonical tool endpoint required of every invokable tool...
+        assert "output-tool" in names
+        # ...and the canvas handles survive the usable_as_tool auto-hide.
+        assert {"input-main", "output-main"} <= names
+
+    async def test_tool_call_resolves_workspace_relative_path(
+        self, harness, tmp_path
+    ):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "doc.pdf").write_bytes(b"%PDF-FAKE")
+
+        fake_page = SimpleNamespace(extract_text=lambda: "page text")
+        fake_reader = MagicMock()
+        fake_reader.pages = [fake_page]
+        fake_pypdf = MagicMock()
+        fake_pypdf.PdfReader = MagicMock(return_value=fake_reader)
+
+        ctx = harness.build_context(workspace_dir=str(workspace))
+        with patch.dict(sys.modules, {"pypdf": fake_pypdf}):
+            result = await harness.execute(
+                "documentParser",
+                {"file_path": "doc.pdf", "parser": "pypdf"},
+                context=ctx,
+            )
+
+        harness.assert_envelope(result, success=True)
+        doc = result["result"]["documents"][0]
+        assert doc["filename"] == "doc.pdf"
+        assert "page text" in doc["content"]
+
+    async def test_tool_call_refuses_workspace_escape(self, harness, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        ctx = harness.build_context(workspace_dir=str(workspace))
+        result = await harness.execute(
+            "documentParser",
+            {"file_path": "../../secrets.pdf", "parser": "pypdf"},
+            context=ctx,
+        )
+
+        harness.assert_envelope(result, success=False)
+        assert "outside this workflow's workspace" in result["error"]
+
+    async def test_absolute_path_outside_workspace_refused_with_workspace(
+        self, harness, tmp_path
+    ):
+        # With a workspace in context (the agent-tool path) even absolute
+        # paths are contained — same rule as resolve_media elsewhere.
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        outside = tmp_path / "outside.pdf"
+        outside.write_bytes(b"%PDF")
+
+        ctx = harness.build_context(workspace_dir=str(workspace))
+        result = await harness.execute(
+            "documentParser",
+            {"file_path": str(outside), "parser": "pypdf"},
+            context=ctx,
+        )
+
+        harness.assert_envelope(result, success=False)
+        assert "outside this workflow's workspace" in result["error"]
+
 
 # ============================================================================
 # textChunker

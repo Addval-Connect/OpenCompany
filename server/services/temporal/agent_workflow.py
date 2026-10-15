@@ -81,7 +81,7 @@ from .workflow import AGENT_WORKFLOW_TYPES
 # minutes). Tool activities use the plugin-declared
 # ``start_to_close_timeout`` automatically — we only set defaults here
 # for the agent-specific activities.
-LLM_STEP_TIMEOUT = timedelta(minutes=10)
+LLM_STEP_TIMEOUT = timedelta(minutes=30)
 PERSIST_TURN_TIMEOUT = timedelta(seconds=30)
 COMPACT_MEMORY_TIMEOUT = timedelta(minutes=5)
 
@@ -1737,6 +1737,11 @@ class AgentWorkflow:
                     # created in the tenant DB, and credential-scoped tools
                     # read the owner's credentials.db.
                     "credential_customer_id": payload.get("credential_customer_id"),
+                    # Namespace-aware workspace: filesystem tools (fsSearch/
+                    # fileRead/fileModify) root here. Without it get_backend
+                    # falls back to the root-level workspace (no namespaces/
+                    # segment) and every tool sees an empty directory.
+                    "workspace_dir": context.get("workspace_dir") or payload.get("workspace_dir"),
                     "parent_node_id": agent_node_id,
                     "team_lead_node_id": agent_node_id,
                     "team_id": payload.get("team_id") or context.get("team_id"),

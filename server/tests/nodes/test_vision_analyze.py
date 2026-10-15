@@ -17,6 +17,7 @@ from nodes.vision.vision_analyze import (
     VisionAnalyzeNode,
     VisionAnalyzeParams,
     VisionAnalyzeToolInput,
+    VisionProvider,
 )
 from services.media.image_fit import (
     IMAGE_BUDGET_TOKENS,
@@ -97,6 +98,27 @@ class TestSpecInvariants:
             "describe",
             "extract_text",
         }
+
+    def test_every_provider_has_declared_credential(self):
+        # _api_key opens ctx.connection(provider); the connection factory
+        # refuses providers the node does not declare. Regression guard for
+        # the Santander test failure ("did not declare credential
+        # 'openrouter'") — the unit provider-shape tests mock _api_key, so
+        # only this check catches a missing declaration.
+        import typing
+
+        from nodes.model._credentials import ApiKeyCredential
+
+        declared = {
+            c.id
+            for c in VisionAnalyzeNode.credentials
+            if isinstance(c, type) and issubclass(c, ApiKeyCredential)
+        }
+        providers = set(typing.get_args(VisionProvider))
+        assert providers <= declared, (
+            f"VisionAnalyzeNode no declara credenciales para: "
+            f"{providers - declared}"
+        )
 
     def test_tool_input_validation(self):
         with pytest.raises(ValidationError):
@@ -251,6 +273,64 @@ class TestProviderRequestShapes:
         assert captured["model"] == "gemini-3.6-flash"
         # Custom question wins over the canned prompt.
         assert captured["contents"][1] == "What color is it?"
+
+    async def test_openrouter_request_shape(
+        self, tmp_path, monkeypatch, no_api_key_lookup
+    ):
+        # CartolaTax Fase 2 (§9.2): openrouter rides the OpenAI-compatible
+        # request shape with a gateway base_url + attribution headers, and
+        # uses `max_tokens` (not OpenAI's `max_completion_tokens`).
+        captured = {}
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(content="texto de tabla")
+                        )
+                    ]
+                )
+
+        class FakeClient:
+            def __init__(self, api_key=None, base_url=None, **kwargs):
+                captured["api_key"] = api_key
+                captured["base_url"] = str(base_url)
+                captured["client_kwargs"] = kwargs
+                self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        monkeypatch.setattr("openai.AsyncOpenAI", FakeClient)
+        node = VisionAnalyzeNode()
+        ctx = _ctx(tmp_path)
+        ctx.raw["_tool_config"] = VisionAnalyzeParams(
+            provider="openrouter", vision_model="z-ai/glm-5.3-flash"
+        )
+        result = await node.vision(
+            ctx,
+            VisionAnalyzeToolInput(
+                operation="extract_text", image="chart.png"
+            ),
+        )
+        assert result.text == "texto de tabla"
+        assert result.provider == "openrouter"
+        assert result.vision_model == "z-ai/glm-5.3-flash"
+        assert captured["base_url"] == "https://openrouter.ai/api/v1"
+        assert (
+            captured["client_kwargs"]["default_headers"]["X-Title"]
+            == "OpenCompany"
+        )
+        assert captured["api_key"] == "test-key"
+        assert captured["model"] == "z-ai/glm-5.3-flash"
+        assert captured["max_tokens"] == 1024
+        content = captured["messages"][0]["content"]
+        assert "Extract all text" in content[0]["text"]
+        image_part = content[1]
+        assert image_part["type"] == "image_url"
+        assert image_part["image_url"]["detail"] == "auto"
+        assert image_part["image_url"]["url"].startswith(
+            "data:image/jpeg;base64,"
+        )
 
 
 class TestSafety:
