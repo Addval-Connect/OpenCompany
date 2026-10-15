@@ -1,10 +1,10 @@
 ---
 name: jev-decisions
-description: Compose typed questions (choice / score / noul) for the TypeSafe JEV decision model — state in, calibrated structured decisions out, no generated strings.
+description: Compose typed questions (choice / score / noul) for the TypeSafe JEV decision model and read its typed answers — state in, calibrated decisions out, no generated strings.
 allowed-tools: jev
 metadata:
   author: opencompany
-  version: "1.0"
+  version: "1.1"
   category: decision
 
 ---
@@ -19,9 +19,11 @@ complete in 70–500 ms.
 
 ## How It Works
 
-This skill teaches the exact `questions` JSON contract. To execute decisions,
-connect the **JEV** node to the agent's `input-tools` handle and call the
-`jev` tool with `state` + `questions`.
+This skill teaches both halves of the contract: how to **compose** the
+`questions` JSON (and the `state`), and how to **read** the typed answers
+(decisions, confidence, probabilities) so workflow code can branch on them.
+To execute decisions, connect the **JEV** node to the agent's `input-tools`
+handle and call the `jev` tool with `state` + `questions`.
 
 ## The `jev` Tool
 
@@ -109,6 +111,66 @@ direct branching:
   "probabilities": {"department": {"technical": 0.88, "billing": 0.12, "sales": 0.0}}
 }
 ```
+
+### Reading the Raw Answers
+
+`answers` keeps the API's per-id objects — the `type` inside each one tells you
+which fields to read:
+
+```json
+{
+  "department": {
+    "type": "choice",
+    "choice": "technical",
+    "confidence": 0.81,
+    "probabilities": {"technical": 0.88, "billing": 0.12, "sales": 0.0}
+  },
+  "frustration": {
+    "type": "score",
+    "score": 1.05,
+    "confidence": 0.92,
+    "probabilities": {"0": 0.0, "1": 0.95, "2": 0.05},
+    "legend": {"0": "Calm", "1": "Frustrated", "2": "Angry"}
+  },
+  "is_urgent": {"type": "noul", "noul": 0.99}
+}
+```
+
+How to read each primitive:
+
+- **`choice`** — `choice` is the winner (the argmax of `probabilities`); the
+  probabilities show how close the runner-up was. `0.88` vs `0.12` is a clear
+  call; `0.45` vs `0.44` is a coin flip — treat near-ties as "ambiguous" and
+  branch for a human, don't act on the label.
+- **`score`** — the number is a probability-weighted position on the rubric and
+  can land **between** levels: `1.05` on a 0/1/2 rubric reads "solidly
+  Frustrated, edging toward Angry". Use `legend` to translate index →
+  description, and set your threshold on the number (`score >= 2` = top level
+  or beyond), not on the label.
+- **`noul`** — the value IS the probability of yes. `> 0.5` means yes, but pick
+  your own operating threshold per question (see below).
+
+**`probabilities` vs `confidence`**: `probabilities` is the distribution over
+options/levels — the *shape* of the judgment. `confidence` (choice and score
+only) is JEV's calibrated assurance in the top pick; `noul` carries no separate
+confidence because the value itself is the probability. Gate actions on
+`confidence`, inspect `probabilities` to understand *why*.
+
+**Thresholds** (starting points — tune per question, not one global number):
+
+| Confidence | Meaning | Action |
+|-----------|---------|--------|
+| ≥ 0.8 | Clear call | Act automatically |
+| 0.5 – 0.8 | Leaning, not certain | Secondary check, or log and continue |
+| < 0.5 | Ambiguous | Escalate to a human |
+
+Questions in one request are answered **independently and in parallel** — no
+answer sees another's. Read `decisions` per id and combine the values in your
+own code; if one judgment depends on another, make it a second call with the
+first answer folded into the `state`.
+
+On the `openrouter` provider, `usage.cost` (USD) reports the exact cost of the
+call; output tokens are always free.
 
 ## Composition Patterns
 
