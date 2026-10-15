@@ -218,6 +218,9 @@
   "httpScraper": {
     "icon": "🔍"
   },
+  "jev": {
+    "skill": "jev-decisions"
+  },
   "javascriptExecutor": {
     "skill": "javascript-skill"
   },

@@ -23,6 +23,7 @@
     "bedrockChatModel",
     "geminiChatModel",
     "sarvamChatModel",
+    "jev",
 
     "calculatorTool",
     "currentTimeTool",
