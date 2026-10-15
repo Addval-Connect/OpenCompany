@@ -476,3 +476,171 @@ class TestHandlerSecurity:
             result = await handler({}, internal)
             assert result.get("success") is False, name
             assert "authenticated" in str(result.get("error", "")), name
+
+
+class TestBrowseNamespaceFallback:
+    """Multi-tenant browse: workspace degrades Gallery-style, mounts refuse.
+
+    Under MULTI_TENANT_NAMESPACES every namespace DB runs its own workflow-id
+    sequence, so ``get_workflow(id)`` can land on an unrelated row (or the
+    editor has not persisted the node yet) and the strict membership check
+    cannot confirm the Data node. The workspace listing must then behave like
+    the Gallery panel (namespace-aware read, ``default`` tolerated) instead of
+    dying with "Data node does not belong to the requested workflow". Single-
+    namespace deployments keep the strict path: node confirmed → unchanged.
+    """
+
+    @pytest.fixture
+    def ws(self):
+        return SimpleNamespace(
+            scope={"path": "/ws"}, state=SimpleNamespace(user_id="1")
+        )
+
+    @pytest.fixture
+    def workspaces(self, tmp_path, monkeypatch):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+        from services import workspace_locator
+
+        monkeypatch.setattr(
+            workspace_locator, "workspace_base_dir", lambda: root
+        )
+        return root
+
+    def _patch_database(self, monkeypatch, database):
+        import nodes.tool.data_source._handlers as handlers
+
+        monkeypatch.setattr(handlers, "get_database", lambda: database)
+
+    @staticmethod
+    def _graph(*nodes):
+        return SimpleNamespace(data={"nodes": list(nodes), "owner_id": "1"})
+
+    @staticmethod
+    def _workflow(*nodes, slug="Cartola_Test_1"):
+        """Saved-workflow stub: graph + the slug resolve_workspace_root needs."""
+        ns = TestBrowseNamespaceFallback._graph(*nodes)
+        ns.slug = slug
+        return ns
+
+    async def test_unpersisted_node_still_lists_workspace(
+        self, ws, workspaces, monkeypatch
+    ):
+        """The exact multi-tenant failure: saved graph without the node →
+        Gallery-style workspace listing instead of the hard error."""
+        class _Db:
+            async def get_workflow(self, workflow_id):
+                return TestBrowseNamespaceFallback._workflow(
+                    {"id": "n1", "type": "console"}
+                )
+
+            async def get_node_parameters(self, node_id):
+                return {}
+
+        self._patch_database(monkeypatch, _Db())
+        slug_dir = workspaces / "Cartola_Test_1"
+        slug_dir.mkdir(parents=True)
+        (slug_dir / "report.csv").write_text("a,b\n1,2\n")
+
+        result = await WS_HANDLERS["data_browse"](
+            {"workflow_id": "1", "data_node_id": "data-1"}, ws
+        )
+        assert result["success"] is True, result.get("error")
+        assert result["source"] == "workspace"
+        names = [e["name"] for e in result["entries"]]
+        assert "report.csv" in names
+
+    async def test_unresolved_workflow_falls_back_to_default(
+        self, ws, workspaces, monkeypatch
+    ):
+        """get_workflow None (stale tab) → anonymous default workspace, read."""
+        class _Db:
+            async def get_workflow(self, workflow_id):
+                return None
+
+            async def get_node_parameters(self, node_id):
+                return {}
+
+        self._patch_database(monkeypatch, _Db())
+        (workspaces / "default").mkdir()
+        (workspaces / "default" / "note.txt").write_text("hi")
+
+        result = await WS_HANDLERS["data_browse"](
+            {"workflow_id": "404", "data_node_id": "data-1"}, ws
+        )
+        assert result["success"] is True, result.get("error")
+        assert result["source"] == "workspace"
+        assert [e["name"] for e in result["entries"]] == ["note.txt"]
+
+    async def test_mount_browse_without_persisted_node_is_refused(
+        self, ws, workspaces, monkeypatch
+    ):
+        """Mounts need the confirmed node params — fallback refuses them."""
+
+        class _Db:
+            async def get_workflow(self, workflow_id):
+                return TestBrowseNamespaceFallback._graph(
+                    {"id": "n1", "type": "console"}
+                )
+
+            async def get_node_parameters(self, node_id):
+                return {}
+
+        self._patch_database(monkeypatch, _Db())
+
+        result = await WS_HANDLERS["data_browse"](
+            {"workflow_id": "1", "data_node_id": "data-1", "path": "mnt/ro"},
+            ws,
+        )
+        assert result["success"] is False
+        assert "persisted" in str(result.get("error", ""))
+
+    async def test_confirmed_node_keeps_strict_params(
+        self, ws, workspaces, monkeypatch
+    ):
+        """Single-namespace behaviour unchanged: confirmed node → params
+        enforced (a mount not enabled on the node is refused)."""
+
+        class _Db:
+            async def get_workflow(self, workflow_id):
+                return TestBrowseNamespaceFallback._graph(
+                    {"id": "data-1", "type": "dataSource"}
+                )
+
+            async def get_node_parameters(self, node_id):
+                return {"mounts": ["other"]}
+
+        self._patch_database(monkeypatch, _Db())
+
+        result = await WS_HANDLERS["data_browse"](
+            {"workflow_id": "1", "data_node_id": "data-1", "path": "mnt/ro"},
+            ws,
+        )
+        assert result["success"] is False
+        assert "not enabled on this node" in str(result.get("error", ""))
+
+    async def test_owner_denial_still_hard_fails(
+        self, ws, workspaces, monkeypatch
+    ):
+        """A real ownership mismatch is never downgraded to a listing."""
+
+        class _Db:
+            async def get_workflow(self, workflow_id):
+                return SimpleNamespace(
+                    data={"nodes": [], "owner_id": "someone-else"}
+                )
+
+        self._patch_database(monkeypatch, _Db())
+
+        result = await WS_HANDLERS["data_browse"](
+            {"workflow_id": "1", "data_node_id": "data-1"}, ws
+        )
+        assert result["success"] is False
+        assert "access denied" in str(result.get("error", ""))
+
+    async def test_missing_ids_still_hard_fail(self, ws, monkeypatch):
+        self._patch_database(monkeypatch, SimpleNamespace())
+        for payload in ({}, {"workflow_id": "1"}, {"data_node_id": "d"}):
+            result = await WS_HANDLERS["data_browse"](payload, ws)
+            assert result["success"] is False
+            assert "required" in str(result.get("error", ""))
