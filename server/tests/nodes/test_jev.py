@@ -20,6 +20,7 @@ from tests.nodes._mocks import patched_container, patched_pricing
 pytestmark = pytest.mark.node_contract
 
 URL = "https://api.typesafe.ai/v1/systemone"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/systemone"
 
 
 def _mixed_answers():
@@ -253,6 +254,108 @@ class TestHttpErrors:
 
         harness.assert_envelope(result, success=True)
         assert route.call_count == 2
+
+
+class TestProviderRouting:
+    """The provider param picks host + credential pool; contract identical."""
+
+    @respx.mock
+    async def test_openrouter_provider_routes_to_openrouter_url_and_key(self, harness):
+        route = respx.post(OPENROUTER_URL).mock(
+            return_value=httpx.Response(200, json=_mixed_answers())
+        )
+        respx.post(URL).mock(return_value=httpx.Response(500))  # wrong host must not be hit
+
+        with patched_container(
+            auth_api_keys={"openrouter": "or_key"}
+        ), patched_pricing():
+            result = await harness.execute(
+                "jev",
+                {
+                    "state": "s",
+                    "questions": json.dumps(
+                        {"x": {"type": "noul", "instructions": "..."}}
+                    ),
+                    "provider": "openrouter",
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert route.call_count == 1
+        assert route.calls[0].request.headers["Authorization"] == "Bearer or_key"
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["model"] == "jev-latest"
+        assert sent["questions"]["x"]["type"] == "noul"
+
+    @respx.mock
+    async def test_default_provider_stays_typesafe(self, harness):
+        route = respx.post(URL).mock(return_value=httpx.Response(200, json=_mixed_answers()))
+
+        with patched_container(auth_api_keys={"typesafe": "ts_key"}), patched_pricing():
+            result = await harness.execute(
+                "jev",
+                {
+                    "state": "s",
+                    "questions": json.dumps(
+                        {"x": {"type": "noul", "instructions": "..."}}
+                    ),
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert route.calls[0].request.headers["Authorization"] == "Bearer ts_key"
+
+    @respx.mock
+    async def test_openrouter_missing_key_maps_401_actionable(self, harness):
+        respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(401, json={"detail": "no key"}))
+
+        with patched_container(auth_api_keys={}), patched_pricing():
+            result = await harness.execute(
+                "jev",
+                {
+                    "state": "s",
+                    "questions": json.dumps(
+                        {"x": {"type": "noul", "instructions": "..."}}
+                    ),
+                    "provider": "openrouter",
+                },
+            )
+
+        harness.assert_envelope(result, success=False)
+        error = str(result.get("error", ""))
+        assert "openrouter" in error
+        assert "No API key" in error
+
+    @respx.mock
+    async def test_openrouter_429_retries_once_then_succeeds(self, harness):
+        route = respx.post(OPENROUTER_URL).mock(
+            side_effect=[
+                httpx.Response(429, json={"detail": "slow down"}),
+                httpx.Response(200, json=_mixed_answers()),
+            ]
+        )
+        with patched_container(auth_api_keys={"openrouter": "or_key"}), patched_pricing():
+            result = await harness.execute(
+                "jev",
+                {
+                    "state": "s",
+                    "questions": json.dumps(
+                        {"x": {"type": "noul", "instructions": "..."}}
+                    ),
+                    "provider": "openrouter",
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert route.call_count == 2
+
+    def test_provider_is_choice_in_params_schema(self):
+        from services.node_registry import get_node_class
+
+        params_schema = get_node_class("jev").Params.model_json_schema()
+        provider = params_schema["properties"]["provider"]
+        assert provider.get("enum") == ["typesafe", "openrouter"]
+        assert params_schema["properties"]["provider"]["default"] == "typesafe"
 
 
 class TestToolSurface:

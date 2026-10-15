@@ -14,7 +14,20 @@ the answers slot directly into workflow branching.
   contract (how to compose the structured output Jev expects); the tool
   description carries the short version.
 
-Docs: https://docs.typesafe.ai/api — ``POST /v1/systemone``.
+Two providers, same wire contract (``state`` + ``questions`` in, typed
+``answers`` out):
+
+- ``typesafe`` (default) — ``POST https://api.typesafe.ai/v1/systemone``,
+  key from console.typesafe.ai/keys (``TypesafeCredential``).
+- ``openrouter`` — ``POST https://openrouter.ai/api/v1/systemone``, the
+  TypeSafe-SDK-compatible System One surface (the official SDKs point at
+  it by changing the base URL; bare model ids like ``jev-latest`` map onto
+  the ``typesafe/`` namespace), billed to the OpenRouter account
+  (``OpenRouterCredential``). ``jev-router`` is OpenRouter's *chat*
+  routing model — not answerable through this node.
+
+Docs: https://docs.typesafe.ai/api,
+https://openrouter.ai/docs/guides/community/jev.
 Deliberately NOT registered as a chat LLM provider (Jev gives up string
 generation, so it cannot serve as an agent's chat model); it appears in
 the model catalogue (``llm_defaults.json``) and the Credentials modal
@@ -25,7 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,9 +53,21 @@ from services.plugin import (
     TaskQueue,
 )
 
+from .._credentials import OpenRouterCredential
+
 API_BASE = "https://api.typesafe.ai/v1"
 SYSTEMONE_URL = f"{API_BASE}/systemone"
 MODELS_URL = f"{API_BASE}/models"
+# OpenRouter's TypeSafe-SDK-compatible System One surface: same request and
+# response shape, same bearer auth — different host and key pool
+# (openrouter.ai/keys). https://openrouter.ai/docs/guides/community/jev
+OPENROUTER_SYSTEMONE_URL = "https://openrouter.ai/api/v1/systemone"
+
+_PROVIDERS = ("typesafe", "openrouter")
+_PROVIDER_ENDPOINTS = {
+    "typesafe": SYSTEMONE_URL,
+    "openrouter": OPENROUTER_SYSTEMONE_URL,
+}
 
 _QUESTION_TYPES = ("choice", "score", "noul")
 _MAX_CHOICE_OPTIONS = 255
@@ -146,9 +171,25 @@ class JevParams(BaseModel):
         ),
         json_schema_extra={"rows": 8},
     )
-    model: str = Field(
+    # NOT named `model`: with a sibling `provider` field the parameter panel
+    # would overwrite it with the chat-model list (reserved-name magic in
+    # ParameterRenderer.tsx) — same reason visionAnalyze uses `vision_model`.
+    jev_model: str = Field(
         default="jev-latest",
-        description="TypeSafe model id. \"jev-latest\" tracks the flagship release.",
+        description=(
+            'TypeSafe model id. "jev-latest" tracks the flagship release; '
+            '"jev-1.14" / "jev-1.13" pin a release. On the openrouter '
+            "provider, bare ids map onto the typesafe/ namespace."
+        ),
+    )
+    provider: Literal["typesafe", "openrouter"] = Field(
+        default="typesafe",
+        description=(
+            "Who answers the call: 'typesafe' = direct TypeSafe API "
+            "(console.typesafe.ai key), 'openrouter' = the System One "
+            "surface routed through OpenRouter (openrouter.ai key, billed "
+            "to the OpenRouter account). Same questions contract either way."
+        ),
     )
 
     model_config = ConfigDict(extra="ignore")
@@ -331,7 +372,10 @@ class JevNode(ActionNode):
         "typed questions: {\"id\": {\"type\": \"choice\"|\"score\"|\"noul\", "
         "\"instructions\": \"...\", \"criteria\": ...}}). choice = pick one "
         "option from a criteria map (max 255); score = rate on an ordered "
-        "2-10 level rubric; noul = yes/no probability 0-1. Ask ATOMIC questions "
+        "2-10 level rubric; noul = yes/no probability 0-1. `provider` picks "
+        "who answers: 'typesafe' (direct API, console.typesafe.ai key) or "
+        "'openrouter' (routed through OpenRouter, openrouter.ai key) — the "
+        "questions contract is identical. Ask ATOMIC questions "
         "(one judgment each) and combine in code. Returns `decisions` "
         "(id -> value), `confidence` and `probabilities` — branch on the "
         "decision, gate the action on confidence. Use the jev-decisions skill "
@@ -344,7 +388,7 @@ class JevNode(ActionNode):
     )
     annotations = {"destructive": False, "readonly": True, "open_world": True}
     task_queue = TaskQueue.REST_API
-    credentials = (TypesafeCredential,)
+    credentials = (TypesafeCredential, OpenRouterCredential)
 
     Params = JevParams
     Output = JevOutput
@@ -354,11 +398,11 @@ class JevNode(ActionNode):
         questions = _parse_questions(params.questions)
         payload = {
             "state": _parse_state(params.state),
-            "model": params.model or "jev-latest",
+            "model": params.jev_model or "jev-latest",
             "questions": questions,
         }
 
-        data = await self._post_systemone(ctx, payload)
+        data = await self._post_systemone(ctx, payload, params.provider)
 
         answers = data.get("answers") or {}
         if not isinstance(answers, dict):
@@ -378,36 +422,46 @@ class JevNode(ActionNode):
         )
 
     @staticmethod
-    async def _post_systemone(ctx: NodeContext, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """POST /v1/systemone with one polite retry on 429/529 (per the API docs)."""
-        async with ctx.connection("typesafe") as conn:
+    async def _post_systemone(
+        ctx: NodeContext, payload: Dict[str, Any], provider: str = "typesafe"
+    ) -> Dict[str, Any]:
+        """POST the System One surface with one polite retry on 429/529.
+
+        Both providers speak the identical request/response contract — the
+        choice only picks the host and the credential pool (see the module
+        docstring for the two endpoints).
+        """
+        provider = provider if provider in _PROVIDERS else "typesafe"
+        url = _PROVIDER_ENDPOINTS[provider]
+        label = "TypeSafe" if provider == "typesafe" else "OpenRouter"
+        async with ctx.connection(provider) as conn:
             try:
                 response = await conn.post(
-                    SYSTEMONE_URL,
+                    url,
                     json=payload,
                     headers={"Accept": "application/json"},
                 )
                 if response.status_code in (429, 529):
                     await asyncio.sleep(1.0)
                     response = await conn.post(
-                        SYSTEMONE_URL,
+                        url,
                         json=payload,
                         headers={"Accept": "application/json"},
                     )
             except httpx.TimeoutException as exc:
                 raise NodeUserError(
-                    "TypeSafe API timed out after 30s — JEV calls normally take "
-                    "under a second; retry the workflow."
+                    f"{label} API timed out after 30s — JEV calls normally "
+                    "take under a second; retry the workflow."
                 ) from exc
             except httpx.HTTPError as exc:
                 raise NodeUserError(
-                    f"TypeSafe API unreachable: {exc.__class__.__name__}"
+                    f"{label} API unreachable: {exc.__class__.__name__}"
                 ) from exc
 
         if response.status_code == 401:
             raise NodeUserError(
-                "TypeSafe API key invalid or missing (401). Connect it in the "
-                "Credentials modal."
+                f"{label} API key invalid or missing (401). Connect the "
+                f"'{provider}' credential in the Credentials modal."
             )
         if response.status_code >= 400:
             detail = ""
@@ -433,6 +487,7 @@ __all__ = [
     "JevParams",
     "JevOutput",
     "TypesafeCredential",
+    "OPENROUTER_SYSTEMONE_URL",
     "SYSTEMONE_URL",
     "_parse_questions",
     "_parse_state",
