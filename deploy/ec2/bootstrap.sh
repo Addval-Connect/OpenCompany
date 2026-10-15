@@ -57,7 +57,7 @@ apt-get update -qq
 # this script tells the operator to run `certbot --nginx`. Installing certbot
 # does not obtain or install a certificate -- that stays a deliberate manual
 # step, because it needs the domain's A record to already resolve here.
-apt-get install -y -qq nginx supervisor curl ca-certificates git openssl \
+apt-get install -y -qq nginx supervisor curl ca-certificates git openssl unzip \
     certbot python3-certbot-nginx >/dev/null
 
 # Node 22 -- required by the on-demand JS/TS code-execution sidecar
