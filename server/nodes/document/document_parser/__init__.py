@@ -1,4 +1,11 @@
-"""Document Parser — Wave 11.D.7 inlined."""
+"""Document Parser — Wave 11.D.7 inlined.
+
+Dual-purpose since the CartolaTax remediation (2026-10): the node stays a
+first-class graph step (fileDownloader chains) and is also invokable as an
+AI tool (`document_parser`) for quick text verification. Workspace-relative
+paths resolve against the workflow workspace with containment; legacy
+absolute-path behaviour is unchanged when no workspace is in context.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +16,50 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.logging import get_logger
-from services.plugin import ActionNode, NodeContext, Operation, TaskQueue
+from services.plugin import (
+    ActionNode,
+    NodeContext,
+    NodeUserError,
+    Operation,
+    TaskQueue,
+)
 
 logger = get_logger(__name__)
+
+
+def _workspace_root(ctx: NodeContext) -> Optional[Path]:
+    """Workspace directory for this execution, or None when absent.
+
+    Reuses services.media.workspace.workspace_root so the resolution order
+    (typed attr, then ctx.raw) stays identical to every other workspace
+    consumer; its NodeUserError is downgraded to None because the parser
+    still has a legacy no-workspace contract (graph tests, absolute paths).
+    """
+    if ctx is None:
+        return None
+    from services.media.workspace import workspace_root
+
+    try:
+        return workspace_root(ctx)
+    except NodeUserError:
+        return None
+
+
+def _resolve_input_path(ctx: NodeContext, raw: str) -> Path:
+    """Resolve an input path against the workflow workspace when one exists.
+
+    Without a workspace in the execution context the legacy behaviour is
+    untouched: absolute paths pass through and relative paths resolve
+    against the process cwd. With a workspace, every path goes through
+    services.media.resolve_media — no ``..`` / ``~`` / symlink escapes
+    outside the workspace (the same containment rule as file_read / the
+    vision tool).
+    """
+    if _workspace_root(ctx) is None:
+        return Path(raw)
+    from services.media.workspace import resolve_media
+
+    return resolve_media(raw, ctx=ctx)
 
 
 def _parse_file_sync(path: Path, parser: str) -> str:
@@ -48,7 +96,7 @@ class DocumentParserParams(BaseModel):
     )
     file_path: str = Field(
         default="",
-        description="Single file path (takes precedence over input_dir).",
+        description="Single file path (takes precedence over input_dir). Workspace-relative paths resolve inside the workflow workspace.",
     )
     input_dir: str = Field(
         default="",
@@ -74,15 +122,31 @@ class DocumentParserNode(ActionNode):
     type = "documentParser"
     display_name = "Document Parser"
     subtitle = "Parse to Text"
-    group = ("document",)
+    group = ("document", "tool")
     description = "Parse documents to text using configurable parsers"
     component_kind = "square"
+    tool_name = "document_parser"
+    tool_description = (
+        "Extract text from a workspace document (PDF, HTML, DOCX, ...). "
+        "Pass a workspace-relative file_path (e.g. "
+        "'attachments/cartola.pdf') or input_dir + file_pattern. Returns "
+        "the WHOLE document as ONE text block — no per-page split and NO "
+        "OCR: scanned/image-only pages yield empty text (length 0), so "
+        "check lengths before trusting the content. Use for quick text "
+        "verification; page-level indexing belongs to shell tools."
+    )
     handles = (
         {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
         {"name": "output-main", "kind": "output", "position": "right", "label": "Output", "role": "main"},
     )
     annotations = {"destructive": False, "readonly": True, "open_world": False}
     task_queue = TaskQueue.DEFAULT
+    usable_as_tool = True
+    # usable_as_tool auto-hides the canvas handles; this node must stay
+    # wirable on the canvas (fileDownloader chains) as well as callable
+    # as a tool — same opt-out as tikhubAction.
+    hide_input_handle = False
+    hide_output_handle = False
 
     Params = DocumentParserParams
     Output = DocumentParserOutput
@@ -96,9 +160,11 @@ class DocumentParserNode(ActionNode):
 
         paths: list[Path] = []
         if explicit_path:
-            paths.append(Path(explicit_path))
-        if input_dir and Path(input_dir).exists():
-            paths.extend(Path(input_dir).glob(file_pattern))
+            paths.append(_resolve_input_path(ctx, explicit_path))
+        if input_dir:
+            resolved_dir = _resolve_input_path(ctx, input_dir)
+            if resolved_dir.exists():
+                paths.extend(resolved_dir.glob(file_pattern))
 
         if not paths:
             return DocumentParserOutput(documents=[], parsed_count=0, failed=[])
