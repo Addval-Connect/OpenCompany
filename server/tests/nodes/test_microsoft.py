@@ -361,6 +361,204 @@ class TestEnsureFreshToken:
         assert kwargs["refresh_token"] == "rt2"
 
 
+class TestRefreshBlockers:
+    """Refresh failures must be diagnosable (WARNING + reason), not silent.
+
+    Before this contract the refresh path logged at DEBUG, so a dead refresh
+    token surfaced only as a downstream Graph 401 ("no pudo conectarse con
+    Microsoft") with no explanation — exactly the every-deploy re-login loop.
+    """
+
+    @staticmethod
+    def _auth_mock(tokens=None, refresh_token=None, api_keys=None):
+        auth = AsyncMock()
+        auth.get_oauth_tokens = AsyncMock(return_value=tokens)
+        auth.get_oauth_refresh_token = AsyncMock(return_value=refresh_token)
+        auth.get_api_key = AsyncMock(side_effect=lambda k, *a, **kw: (api_keys or {}).get(k))
+        auth.store_oauth_tokens = AsyncMock(return_value=True)
+        return auth
+
+    @staticmethod
+    def _fresh_call(auth, refresh_result=None):
+        from nodes.microsoft import _auth_helper
+
+        _auth_helper._TOKEN_EXPIRY.pop("owner", None)
+        _auth_helper._LAST_REFRESH_BLOCKER.pop("owner", None)
+        patches = [
+            patch("services.plugin.deps.get_auth_service", return_value=auth),
+        ]
+        if refresh_result is not None:
+            patches.append(
+                patch(
+                    "nodes.microsoft._oauth.MicrosoftOAuth.refresh_access_token",
+                    new=AsyncMock(return_value=refresh_result),
+                )
+            )
+        return patches
+
+    async def test_no_refresh_token_records_blocker(self):
+        """Falls back to the stored token (it may still be fresh) but the reason
+        is recorded and surfaced by the 401 path — never silently lost."""
+        from nodes.microsoft import _auth_helper
+
+        auth = self._auth_mock(tokens={"access_token": "tok"}, refresh_token=None)
+        patches = self._fresh_call(auth)
+        with patches[0]:
+            token = await _auth_helper.ensure_fresh_microsoft_token("owner")
+
+        assert token == "tok"
+        assert "offline_access" in _auth_helper._LAST_REFRESH_BLOCKER["owner"]
+
+    async def test_no_client_id_records_blocker(self):
+        from nodes.microsoft import _auth_helper
+
+        auth = self._auth_mock(
+            tokens={"access_token": "tok"},
+            refresh_token="rt",
+            api_keys={},  # no microsoft_client_id
+        )
+        patches = self._fresh_call(auth)
+        with patches[0]:
+            await _auth_helper.ensure_fresh_microsoft_token("owner")
+
+        assert "microsoft_client_id" in _auth_helper._LAST_REFRESH_BLOCKER["owner"]
+
+    async def test_entra_rejection_records_the_real_error(self):
+        from nodes.microsoft import _auth_helper
+
+        auth = self._auth_mock(
+            tokens={"access_token": "tok"},
+            refresh_token="rt",
+            api_keys={"microsoft_client_id": "cid"},
+        )
+        patches = self._fresh_call(
+            auth,
+            refresh_result={"success": False, "error": "invalid_grant: token expired"},
+        )
+        with patches[0], patches[1]:
+            await _auth_helper.ensure_fresh_microsoft_token("owner")
+
+        assert "invalid_grant" in _auth_helper._LAST_REFRESH_BLOCKER["owner"]
+
+    async def test_force_refresh_raises_actionable_error_with_reason(self):
+        from services.plugin import NodeUserError
+
+        from nodes.microsoft import _auth_helper
+
+        auth = self._auth_mock(tokens={"access_token": "tok"}, refresh_token=None)
+        patches = self._fresh_call(auth)
+        with patches[0]:
+            with pytest.raises(NodeUserError) as exc:
+                await _auth_helper.force_refresh_microsoft_token("owner")
+
+        message = str(exc.value)
+        assert "Credentials modal" in message
+        assert "offline_access" in message
+
+    async def test_force_refresh_returns_new_token(self):
+        from nodes.microsoft import _auth_helper
+
+        auth = self._auth_mock(
+            tokens={"access_token": "old", "email": "me@contoso.com", "name": "Me", "scopes": "User.Read"},
+            refresh_token="rt",
+            api_keys={"microsoft_client_id": "cid"},
+        )
+        patches = self._fresh_call(
+            auth,
+            refresh_result={"success": True, "access_token": "new", "refresh_token": "rt2", "expires_in": 3600},
+        )
+        with patches[0], patches[1]:
+            token = await _auth_helper.force_refresh_microsoft_token("owner")
+
+        assert token == "new"
+        # The blocker is cleared on success.
+        assert "owner" not in _auth_helper._LAST_REFRESH_BLOCKER
+
+
+class TestGraphAuthRetry:
+    """A Graph 401 after a deploy restart must self-heal: force one refresh
+    and retry before surfacing an error."""
+
+    @respx.mock
+    async def test_401_triggers_refresh_and_retry(self, harness):
+
+        route = respx.post(f"{GRAPH}/me/sendMail").mock(
+            side_effect=[
+                httpx.Response(401, json={"error": {"code": "InvalidAuthenticationToken", "message": "expired"}}),
+                httpx.Response(202),
+            ]
+        )
+
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing(), patch(
+            "nodes.microsoft._base.force_refresh_microsoft_token",
+            new=AsyncMock(return_value="tok_new"),
+        ):
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "send",
+                    "to": "alice@contoso.com",
+                    "subject": "Hi",
+                    "body": "Hello there",
+                    "body_type": "text",
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert route.call_count == 2
+
+    @respx.mock
+    async def test_401_with_unrefreshable_token_is_actionable(self, harness):
+        from services.plugin import NodeUserError
+
+
+        respx.post(f"{GRAPH}/me/sendMail").mock(
+            return_value=httpx.Response(401, json={"error": {"code": "InvalidAuthenticationToken", "message": "expired"}})
+        )
+
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing(), patch(
+            "nodes.microsoft._base.force_refresh_microsoft_token",
+            new=AsyncMock(side_effect=NodeUserError("cannot refresh (offline_access missing). Reconnect Microsoft in the Credentials modal")),
+        ):
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "send",
+                    "to": "alice@contoso.com",
+                    "subject": "Hi",
+                    "body": "Hello there",
+                    "body_type": "text",
+                },
+            )
+
+        harness.assert_envelope(result, success=False)
+        assert "Credentials modal" in str(result.get("error", ""))
+
+    async def test_raw_get_retries_with_rotated_token(self):
+        from nodes.microsoft import _base
+
+        with respx.mock:
+            route = respx.get(f"{GRAPH}/me/messages").mock(
+                side_effect=[
+                    httpx.Response(401, json={"error": {"code": "InvalidAuthenticationToken", "message": "expired"}}),
+                    httpx.Response(200, json={"value": []}),
+                ]
+            )
+            with patch(
+                "nodes.microsoft._base.ensure_fresh_microsoft_token",
+                new=AsyncMock(return_value="tok_old"),
+            ), patch(
+                "nodes.microsoft._base.force_refresh_microsoft_token",
+                new=AsyncMock(return_value="tok_new"),
+            ):
+                payload = await _base.graph_get_raw("/me/messages", params={})
+
+        assert payload == {"value": []}
+        assert route.call_count == 2
+        assert route.calls[0].request.headers["Authorization"] == "Bearer tok_old"
+        assert route.calls[1].request.headers["Authorization"] == "Bearer tok_new"
+
+
 # ============================================================================
 # msMailReceive (polling trigger)
 # ============================================================================

@@ -22,7 +22,7 @@ from core.logging import get_logger
 from services.plugin import NodeUserError
 from services.pricing import get_pricing_service
 
-from ._auth_helper import ensure_fresh_microsoft_token
+from ._auth_helper import ensure_fresh_microsoft_token, force_refresh_microsoft_token
 
 logger = get_logger(__name__)
 
@@ -84,6 +84,18 @@ async def graph_request(
     async with ctx.connection("microsoft") as conn:
         response = await conn.request(method, url, params=params, json=json)
 
+    if response.status_code == 401:
+        # The pre-call refresh ran against the in-process expiry cache, which
+        # a deploy restart empties — the stored token may be dead exactly
+        # then. Force one real refresh (raise an actionable error naming the
+        # reason if it cannot) and retry once with the rotated token. 403 is
+        # deliberately NOT retried: it means the token was accepted and the
+        # action denied — a permission problem, not a token problem.
+        user_id = getattr(ctx, "user_id", "owner")
+        await force_refresh_microsoft_token(user_id)
+        async with ctx.connection("microsoft") as conn:
+            response = await conn.request(method, url, params=params, json=json)
+
     if response.status_code >= 400:
         raise NodeUserError(_format_graph_error(response))
 
@@ -116,6 +128,12 @@ async def graph_get_raw(
     url = path if path.startswith("http") else f"{GRAPH_BASE_URL}{path}"
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
+    if response.status_code == 401:
+        # Same deploy-restart story as graph_request: the stored token may be
+        # dead on the first poll after a restart; force one refresh + retry.
+        token = await force_refresh_microsoft_token(user_id)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
     if response.status_code >= 400:
         raise NodeUserError(_format_graph_error(response))
     if not response.content:
