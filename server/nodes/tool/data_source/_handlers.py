@@ -5,6 +5,18 @@ resolves its scope from the persisted workflow graph and the authenticated
 WebSocket, mirroring the Simple Memory handlers. Neither the client nor the
 model can supply a mount root or namespace — only names of rows the
 operator created.
+
+Workspace *browsing* additionally has a Gallery-parity fallback: when the
+persisted graph cannot confirm the node in the active namespace (multi-
+tenant deployments give every namespace its own workflow-id sequence, so an
+id can land on an unrelated row — or the editor simply has not persisted
+the node yet), the workspace listing degrades to the same contract the
+Gallery panel serves (``resolve_workspace_root``: namespace-aware, read-
+only, ``default`` workspace tolerated) instead of hard-failing with "Data
+node does not belong to the requested workflow". Mount browsing still
+requires the confirmed node — mounts are operator-owned rows gated by the
+node's persisted params. Single-namespace deployments never see the
+fallback: the strict check succeeds and behaviour is unchanged.
 """
 
 from __future__ import annotations
@@ -57,8 +69,16 @@ def _store():
 
 async def _resolve_node_scope(
     data: Dict[str, Any], websocket: WebSocket
-) -> tuple[str, str, str]:
-    """(owner_id, workflow_id, node_id) for a browse request, or raise."""
+) -> tuple[str, str, str, Any]:
+    """(owner, workflow_id, node_id, params) for a browse request.
+
+    ``params`` is ``None`` when the persisted graph could not confirm the
+    node in the active namespace — "Workflow not found" or "does not
+    belong". The caller then serves the workspace listing Gallery-style
+    (no node params, no mounts). Real denials ("Workflow access denied",
+    internal socket, missing ids) still raise, and mount browsing keeps
+    requiring the confirmed node.
+    """
     _require_external_socket(websocket)
     workflow_id = str(data.get("workflow_id") or "").strip()
     node_id = str(data.get("data_node_id") or data.get("node_id") or "").strip()
@@ -66,12 +86,12 @@ async def _resolve_node_scope(
         raise NodeUserError("workflow_id required")
     if not node_id:
         raise NodeUserError("data_node_id required")
+    owner = _authenticated_owner(websocket)
     database = get_database()
     saved = await database.get_workflow(workflow_id)
     if saved is None:
-        raise NodeUserError("Workflow not found")
+        return owner, workflow_id, node_id, None
     graph = saved.data if hasattr(saved, "data") else saved.get("data", saved)
-    owner = _authenticated_owner(websocket)
     stored_owner = (
         str(graph.get("owner_id") or "") if isinstance(graph, dict) else ""
     )
@@ -86,10 +106,12 @@ async def _resolve_node_scope(
         == "dataSource"
     ]
     if len(matches) != 1:
-        raise NodeUserError(
-            "Data node does not belong to the requested workflow"
-        )
-    return owner, workflow_id, node_id
+        return owner, workflow_id, node_id, None
+
+    from nodes.tool.data_source import DataToolParams
+
+    persisted = await database.get_node_parameters(node_id) or {}
+    return owner, workflow_id, node_id, DataToolParams.model_validate(persisted)
 
 
 # ------------------------------------------------------------- mount CRUD
@@ -173,13 +195,16 @@ def _crumbs(virtual: str) -> list[dict[str, str]]:
 async def handle_data_browse(
     data: Dict[str, Any], websocket: WebSocket
 ) -> Dict[str, Any]:
-    """Read-only listing over the node's workspace + enabled mounts."""
-    from nodes.tool.data_source import DataToolParams
+    """Read-only listing over the node's workspace + enabled mounts.
 
-    owner, workflow_id, node_id = await _resolve_node_scope(data, websocket)
-    database = get_database()
-    persisted = await database.get_node_parameters(node_id) or {}
-    params = DataToolParams.model_validate(persisted)
+    When the node cannot be confirmed in the active namespace (multi-
+    tenant), the workspace half degrades to the Gallery panel's contract
+    (namespace-aware listing, ``default`` workspace tolerated) and only
+    the mount half is refused — see the module docstring.
+    """
+    owner, workflow_id, node_id, params = await _resolve_node_scope(
+        data, websocket
+    )
     path = str(data.get("path") or "").strip()
     try:
         limit = int(data.get("limit") or _BROWSE_LIMIT_DEFAULT)
@@ -189,6 +214,12 @@ async def handle_data_browse(
 
     split = split_mount_path(path)
     if split is not None:
+        if params is None:
+            raise NodeUserError(
+                "Mount browsing needs this Data node persisted in the "
+                "active namespace's workflow — save the workflow (and "
+                "check the active namespace), then retry."
+            )
         name, rest = split
         if name not in params.mounts:
             raise NodeUserError(f"Mount '{name}' is not enabled on this node")
@@ -234,7 +265,7 @@ async def handle_data_browse(
     from nodes.filesystem.gallery._service import list_directory
     from services.workspace_locator import resolve_workspace_root
 
-    root = await resolve_workspace_root(workflow_id, database)
+    root = await resolve_workspace_root(workflow_id, get_database())
     listing = await list_directory(
         str(root), path=path, workflow_id=workflow_id, limit=limit
     )
