@@ -30,8 +30,14 @@ from services.plugin import (
     TaskQueue,
     ToolNode,
 )
+from nodes.model._credentials import (
+    AnthropicCredential,
+    GeminiCredential,
+    OpenAICredential,
+    OpenRouterCredential,
+)
 
-VisionProvider = Literal["openai", "anthropic", "gemini"]
+VisionProvider = Literal["openai", "anthropic", "gemini", "openrouter"]
 VisionOperation = Literal["describe", "extract_text"]
 VisionBudget = Literal["small", "normal", "large"]
 
@@ -184,6 +190,15 @@ class VisionAnalyzeNode(ToolNode):
     Output = VisionAnalyzeOutput
     tool_schema_locked = True
     server_controlled_fields = frozenset({"provider", "vision_model"})
+    # `_api_key` opens ctx.connection(provider) — the connection factory
+    # refuses any provider the node does not declare here (the speech
+    # idiom). Declared for every VisionProvider literal.
+    credentials = (
+        OpenAICredential,
+        AnthropicCredential,
+        GeminiCredential,
+        OpenRouterCredential,
+    )
 
     @staticmethod
     def _config(ctx: NodeContext, params: Any) -> VisionAnalyzeParams:
@@ -239,6 +254,7 @@ class VisionAnalyzeNode(ToolNode):
         api_key = await _api_key(ctx, provider)
         dispatch = {
             "openai": self._ask_openai,
+            "openrouter": self._ask_openrouter,
             "anthropic": self._ask_anthropic,
             "gemini": self._ask_gemini,
         }
@@ -273,6 +289,50 @@ class VisionAnalyzeNode(ToolNode):
         response = await client.chat.completions.create(
             model=model,
             max_completion_tokens=_MAX_OUTPUT_TOKENS,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            # detail set explicitly — omitting it has caused
+                            # order-of-magnitude token regressions elsewhere.
+                            "image_url": {"url": data_url, "detail": "auto"},
+                        },
+                    ],
+                }
+            ],
+        )
+        return str(response.choices[0].message.content or "")
+
+    @staticmethod
+    async def _ask_openrouter(
+        *, api_key: str, model: str, prompt: str, image_bytes: bytes, mime: str
+    ) -> str:
+        from openai import AsyncOpenAI
+
+        # Same request shape as `_ask_openai` (OpenAI-compatible gateway);
+        # only the base_url, the attribution headers and the completion-cap
+        # parameter name differ, mirroring
+        # services/llm/providers/openrouter.py and llm_defaults.json
+        # (openrouter.max_tokens_param = "max_tokens").
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+            default_headers={
+                "HTTP-Referer": "http://localhost:5678",
+                "X-Title": "OpenCompany",
+            },
+            max_retries=2,
+        )
+        data_url = (
+            f"data:{mime};base64,"
+            f"{base64.b64encode(image_bytes).decode('ascii')}"
+        )
+        response = await client.chat.completions.create(
+            model=model,
+            max_tokens=_MAX_OUTPUT_TOKENS,
             messages=[
                 {
                     "role": "user",
