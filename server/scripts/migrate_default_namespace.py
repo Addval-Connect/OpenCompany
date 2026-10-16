@@ -24,6 +24,7 @@ Usage (as the app user, app stopped or --force):
 from __future__ import annotations
 
 import argparse
+import shutil
 import sqlite3
 import sys
 import time
@@ -40,16 +41,56 @@ def _migrate_dirs(namespaces_dir: Path, *, dry_run: bool, force: bool) -> list[s
     if not legacy.exists():
         return actions
     if canonical.exists():
-        # Both exist: move only the rows/files that canonical lacks? Too
-        # risky to merge automatically — surface it and require a manual
-        # decision (this state means a boot already created default while
-        # owner still held data).
+        # Both exist. Post-cleanup recreations are credentials-only (the
+        # 2026-10-16 deploy: the Temporal ws_client still defaulted
+        # credential_customer_id to "owner" for a window, so the running
+        # app re-created owner/credentials.db). When owner has NO
+        # workflow.db there is no data conflict: merge credential rows
+        # into the canonical DB (INSERT OR IGNORE) and move the stray
+        # directory to a backup.
+        owner_workflow = legacy / "workflow.db"
+        if owner_workflow.exists():
+            print(
+                f"REFUSING: {legacy} and {canonical} both exist and owner "
+                "still has a workflow.db — merge manually (inspect both "
+                "workflow.db files), then remove one and re-run.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup = namespaces_dir / f".{LEGACY}-credentials-merge-{stamp}"
         print(
-            f"REFUSING: both {legacy} and {canonical} exist. Merge manually "
-            "(inspect both workflow.db files), then remove one and re-run.",
-            file=sys.stderr,
+            f"[merge] {legacy}/credentials.db -> {canonical}/credentials.db "
+            f"(stray dir backed up at {backup})"
         )
-        sys.exit(2)
+        actions.append("merge credentials rows owner -> default")
+        if dry_run:
+            return actions
+        shutil.move(str(legacy), str(backup))
+        default_creds = canonical / "credentials.db"
+        stray_creds = backup / "credentials.db"
+        con = sqlite3.connect(default_creds)
+        try:
+            con.execute("ATTACH DATABASE ? AS stray", (str(stray_creds),))
+            tables = [
+                r[0]
+                for r in con.execute(
+                    "select name from stray.sqlite_master where type='table' "
+                    "and name not like 'sqlite_%' and name != 'db_metadata'"
+                ).fetchall()
+            ]
+            for table in tables:
+                cols = [r[1] for r in con.execute(f"PRAGMA stray.table_info({table})")]
+                col_list = ", ".join(cols)
+                con.execute(
+                    f"INSERT OR IGNORE INTO main.{table} ({col_list}) "
+                    f"SELECT {col_list} FROM stray.{table}"
+                )
+                print(f"    merged {table}")
+            con.commit()
+        finally:
+            con.close()
+        return actions
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = namespaces_dir / f".{LEGACY}-pre-default-migration-{stamp}"
     print(f"[f3] {legacy} -> {canonical}  (backup manifest at {backup})")

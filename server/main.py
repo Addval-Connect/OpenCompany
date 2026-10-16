@@ -182,12 +182,15 @@ async def lifespan(app: FastAPI):
     await container.cache().startup()
     _startup_log("Database + cache started")
 
-    # Initialize the "owner" namespace credentials DB and its encryption.
+    # Initialize the default namespace's credentials DB and its encryption.
     # CredentialsPool.startup_namespace handles table creation + per-DB salt
-    # derivation so each namespace gets isolated Fernet keys.
+    # derivation so each namespace gets isolated Fernet keys. The global
+    # auth DB and the default tenant share the "default" namespace file —
+    # "owner" is an auth principal, never a namespace (see
+    # docs-internal/multitenant_routing_audit.md).
     creds_pool = container._credentials_pool()
-    await creds_pool.startup_namespace("owner")
-    logger.info("Credentials database initialized (owner namespace)")
+    await creds_pool.startup_namespace("default")
+    logger.info("Credentials database initialized (default namespace)")
     _startup_log("Credentials + encryption initialized")
 
     # Seed the owner login credential from the environment (container
