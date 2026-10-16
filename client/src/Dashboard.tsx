@@ -1231,23 +1231,64 @@ const DashboardContent: React.FC = () => {
     const uiState = workflowUIStates[currentId];
     const savedViewport = uiState?.viewport;
 
-    // Only restore if we have a saved viewport
-    if (!savedViewport) {
-      viewportRestoredForRef.current = currentId;
-      return;
-    }
+    // Fit the SAVED graph bounds. With ``onlyRenderVisibleElements`` nodes
+    // outside the viewport never render, and React Flow's own fitView can't
+    // help — it measures RENDERED nodes, which don't exist yet — so the fit
+    // is computed from the workflow's saved positions and applied once
+    // React Flow has mounted.
+    const wfNodes = (useAppStore.getState().currentWorkflow?.nodes || []) as Array<{ position?: { x: number; y: number } }>;
+    if (wfNodes.length > 0 && reactFlowInstance) {
+      const xs = wfNodes.map(n => n.position?.x ?? 0);
+      const ys = wfNodes.map(n => n.position?.y ?? 0);
+      const padL = 120, padT = 100, padR = 260, padB = 160; // room for node size + handles
+      const minX = Math.min(...xs) - padL;
+      const minY = Math.min(...ys) - padT;
+      const maxX = Math.max(...xs) + padR;
+      const maxY = Math.max(...ys) + padB;
+      const pane = document.querySelector('.react-flow');
+      const paneW = pane?.clientWidth || window.innerWidth;
+      const paneH = pane?.clientHeight || window.innerHeight;
+      const spanX = Math.max(1, maxX - minX);
+      const spanY = Math.max(1, maxY - minY);
+      const zoom = Math.min(1.25, Math.min(paneW / spanX, paneH / spanY));
+      const x = (paneW - spanX * zoom) / 2 - minX * zoom;
+      const y = (paneH - spanY * zoom) / 2 - minY * zoom;
 
-    // Use delay to ensure ReactFlow has finished rendering nodes
-    const timeoutId = setTimeout(() => {
-      try {
-        reactFlowInstance.setViewport(savedViewport, { duration: 0 });
-        viewportRestoredForRef.current = currentId;
-      } catch {
-        // Viewport restore failed - ignore silently
+      // A saved viewport is honoured only if it still keeps the graph's
+      // centre in view. A degenerate viewport saved by a broken session
+      // ((0,0) zoom 1 with the graph spread far beyond the pane) would
+      // otherwise be restored forever and the canvas would keep opening
+      // "empty" — the 2026-10-16 report.
+      let target: { x: number; y: number; zoom: number } | null = null;
+      if (savedViewport) {
+        const z = savedViewport.zoom || 1;
+        const wx0 = -savedViewport.x / z;
+        const wy0 = -savedViewport.y / z;
+        const wx1 = (paneW - savedViewport.x) / z;
+        const wy1 = (paneH - savedViewport.y) / z;
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+        if (cx >= wx0 && cx <= wx1 && cy >= wy0 && cy <= wy1) {
+          target = savedViewport;
+        }
       }
-    }, 100);
+      if (!target) {
+        target = { x, y, zoom };
+      }
 
-    return () => clearTimeout(timeoutId);
+      const timeoutId = setTimeout(() => {
+        try {
+          reactFlowInstance.setViewport(target as { x: number; y: number; zoom: number }, { duration: 0 });
+          viewportRestoredForRef.current = currentId;
+        } catch {
+          // Viewport restore failed - ignore silently
+        }
+      }, 100);
+
+      return () => clearTimeout(timeoutId);
+    }
+    viewportRestoredForRef.current = currentId;
+    return;
   }, [currentWorkflow?.id, nodes.length, workflowUIStates, reactFlowInstance]);
 
   // Node context menu handler (right-click)

@@ -38,12 +38,19 @@ export async function fetchNodeSpec(
   return queryClient.fetchQuery({
     queryKey: nodeSpecQueryKey(nodeType),
     queryFn: async () => {
-      try {
-        const response = await sendRequest('get_node_spec', { node_type: nodeType });
-        return (response?.spec ?? null) as NodeSpec | null;
-      } catch {
-        return null;
+      const response = await sendRequest('get_node_spec', { node_type: nodeType });
+      const spec = (response?.spec ?? null) as NodeSpec | null;
+      if (!spec) {
+        // NEVER cache a null: with gcTime FOREVER a poisoned null entry
+        // survives every reload and the node renders as the default
+        // (unstyled) React Flow node forever. Throwing leaves the query
+        // without data so the next boot (or useNodeSpec's lazy fetch)
+        // retries. The 2026-10-16 incident: a deploy-restart killed the
+        // WS mid-prefetch, ~150 specs cached null, and every canvas
+        // opened as default rectangles.
+        throw new Error(`node spec unavailable for '${nodeType}'`);
       }
+      return spec;
     },
     staleTime: STALE_TIME.FOREVER,
     // useNodeSpec subscribes via useSyncExternalStore (no observer), so
@@ -52,6 +59,7 @@ export async function fetchNodeSpec(
     // disappear on every idle canvas. Keep the entries forever; the
     // persistor in lib/queryPersist.ts also writes them to localStorage.
     gcTime: GC_TIME.FOREVER,
+    retry: 1,
   });
 }
 
@@ -85,11 +93,31 @@ export async function prefetchAllNodeSpecs(sendRequest: SendRequest): Promise<vo
       if (lastSeen !== revision) {
         queryClient.removeQueries({ queryKey: ['nodeSpec'] });
         queryClient.removeQueries({ queryKey: ['nodeGroups'] });
-        window.localStorage.setItem(NODESPEC_REVISION_STORAGE_KEYS.canonical, revision);
       }
     }
 
-    await Promise.all(nodeTypes.map(t => fetchNodeSpec(t, sendRequest)));
+    // Warm-start self-heal: when the revision matches but the hydrated
+    // cache is missing types the backend still serves (a previous session
+    // persisted the revision and then failed its refetch — the
+    // 2026-10-16 stuck state), those types have no cache entry and no
+    // observer to fetch them, so they rendered as default nodes forever.
+    const missing = nodeTypes.filter(t => !getCachedNodeSpec(t));
+    const toFetch = missing.length > 0 ? missing : nodeTypes;
+    if (revision && missing.length === 0 && typeof window !== 'undefined') {
+      // Warm AND complete: revision already persisted — nothing to do.
+      window.localStorage.setItem(NODESPEC_REVISION_STORAGE_KEYS.canonical, revision);
+      return;
+    }
+
+    const results = await Promise.allSettled(toFetch.map(t => fetchNodeSpec(t, sendRequest)));
+    const failed = results.filter(r => r.status === 'rejected').length;
+    // Persist the revision ONLY when every spec actually cached. Writing
+    // it after a partial failure seals the stuck state: the next boot
+    // sees a matching revision, skips the refetch, and the missing types
+    // never come back.
+    if (revision && failed === 0 && typeof window !== 'undefined') {
+      window.localStorage.setItem(NODESPEC_REVISION_STORAGE_KEYS.canonical, revision);
+    }
   } catch {
     // Prefetch is best-effort — logged by the WS layer, not us.
   }
@@ -141,7 +169,7 @@ export function useNodeSpec(nodeType: string | undefined | null): NodeSpec | nul
   useEffect(() => {
     if (!nodeType || !isReady) return;
     if (queryClient.getQueryData(key) !== undefined) return;
-    void fetchNodeSpec(nodeType, sendRequest);
+    void fetchNodeSpec(nodeType, sendRequest).catch(() => null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- key derives from nodeType; including it is redundant.
   }, [nodeType, isReady, sendRequest]);
 
