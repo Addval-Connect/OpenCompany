@@ -1234,6 +1234,40 @@ const DashboardContent: React.FC = () => {
     // Only restore if we have a saved viewport
     if (!savedViewport) {
       viewportRestoredForRef.current = currentId;
+      // First open in this browser (no saved viewport): fit the SAVED graph
+      // bounds instead of leaving the default (0,0) zoom-1 viewport. With
+      // ``onlyRenderVisibleElements`` nodes outside the viewport never
+      // render, and React Flow's own fitView can't help — it measures
+      // RENDERED nodes, which don't exist yet — so the canvas opened
+      // apparently empty (the "cards without design" report, 2026-10-16).
+      // The node positions live in the workflow data, so the fit is
+      // computed from those and applied once React Flow has mounted.
+      const wfNodes = (useAppStore.getState().currentWorkflow?.nodes || []) as Array<{ position?: { x: number; y: number } }>;
+      if (wfNodes.length > 0 && reactFlowInstance) {
+        const xs = wfNodes.map(n => n.position?.x ?? 0);
+        const ys = wfNodes.map(n => n.position?.y ?? 0);
+        const padL = 120, padT = 100, padR = 260, padB = 160; // room for node size + handles
+        const minX = Math.min(...xs) - padL;
+        const minY = Math.min(...ys) - padT;
+        const maxX = Math.max(...xs) + padR;
+        const maxY = Math.max(...ys) + padB;
+        const pane = document.querySelector('.react-flow');
+        const paneW = pane?.clientWidth || window.innerWidth;
+        const paneH = pane?.clientHeight || window.innerHeight;
+        const spanX = Math.max(1, maxX - minX);
+        const spanY = Math.max(1, maxY - minY);
+        const zoom = Math.min(1.25, Math.min(paneW / spanX, paneH / spanY));
+        const x = (paneW - spanX * zoom) / 2 - minX * zoom;
+        const y = (paneH - spanY * zoom) / 2 - minY * zoom;
+        const timeoutId = setTimeout(() => {
+          try {
+            reactFlowInstance.setViewport({ x, y, zoom }, { duration: 0 });
+          } catch {
+            // Viewport fit failed - ignore silently
+          }
+        }, 100);
+        return () => clearTimeout(timeoutId);
+      }
       return;
     }
 
