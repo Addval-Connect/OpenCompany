@@ -72,6 +72,7 @@ class TestJevEvaluate:
                 {
                     "state": "Our API integration returns 500 errors and orders are blocked.",
                     "questions": json.dumps(QUESTIONS),
+                    "provider": "typesafe",
                 },
             )
 
@@ -111,6 +112,7 @@ class TestJevEvaluate:
                 {
                     "state": json.dumps({"messages": ["a", "b"], "user": "u1"}),
                     "questions": json.dumps({"is_urgent": {"type": "noul", "instructions": "urgent?"}}),
+                    "provider": "typesafe",
                 },
             )
 
@@ -128,6 +130,7 @@ class TestJevEvaluate:
                 {
                     "state": "42",
                     "questions": json.dumps({"is_urgent": {"type": "noul", "instructions": "urgent?"}}),
+                    "provider": "typesafe",
                 },
             )
 
@@ -177,6 +180,7 @@ class TestQuestionsValidation:
                     "questions": json.dumps(
                         {"pick": {"type": "choice", "instructions": "pick one", "criteria": ["a", "b"]}}
                     ),
+                    "provider": "typesafe",
                 },
             )
 
@@ -231,7 +235,7 @@ class TestHttpErrors:
         with patched_container(auth_api_keys={"typesafe": "ts_bad"}), patched_pricing():
             result = await harness.execute(
                 "jev",
-                {"state": "s", "questions": json.dumps({"x": {"type": "noul", "instructions": "..."}})},
+                {"state": "s", "questions": json.dumps({"x": {"type": "noul", "instructions": "..."}}), "provider": "typesafe"},
             )
 
         harness.assert_envelope(result, success=False)
@@ -249,7 +253,7 @@ class TestHttpErrors:
         with patched_container(auth_api_keys={"typesafe": "ts_key"}), patched_pricing():
             result = await harness.execute(
                 "jev",
-                {"state": "s", "questions": json.dumps({"x": {"type": "noul", "instructions": "..."}})},
+                {"state": "s", "questions": json.dumps({"x": {"type": "noul", "instructions": "..."}}), "provider": "typesafe"},
             )
 
         harness.assert_envelope(result, success=True)
@@ -288,7 +292,30 @@ class TestProviderRouting:
         assert sent["questions"]["x"]["type"] == "noul"
 
     @respx.mock
-    async def test_default_provider_stays_typesafe(self, harness):
+    async def test_default_provider_is_openrouter(self, harness):
+        """Tool calls without `provider` go to OpenRouter — the default.
+        (A typesafe-missing-key first attempt + agent retry used to double
+        every JEV call.)"""
+        route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=_mixed_answers()))
+        respx.post(URL).mock(return_value=httpx.Response(500))  # wrong host must not be hit
+
+        with patched_container(auth_api_keys={"openrouter": "or_key"}), patched_pricing():
+            result = await harness.execute(
+                "jev",
+                {
+                    "state": "s",
+                    "questions": json.dumps(
+                        {"x": {"type": "noul", "instructions": "..."}}
+                    ),
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert route.call_count == 1
+        assert route.calls[0].request.headers["Authorization"] == "Bearer or_key"
+
+    @respx.mock
+    async def test_explicit_typesafe_provider_routes_to_typesafe(self, harness):
         route = respx.post(URL).mock(return_value=httpx.Response(200, json=_mixed_answers()))
 
         with patched_container(auth_api_keys={"typesafe": "ts_key"}), patched_pricing():
@@ -299,6 +326,7 @@ class TestProviderRouting:
                     "questions": json.dumps(
                         {"x": {"type": "noul", "instructions": "..."}}
                     ),
+                    "provider": "typesafe",
                 },
             )
 
@@ -355,7 +383,7 @@ class TestProviderRouting:
         params_schema = get_node_class("jev").Params.model_json_schema()
         provider = params_schema["properties"]["provider"]
         assert provider.get("enum") == ["typesafe", "openrouter"]
-        assert params_schema["properties"]["provider"]["default"] == "typesafe"
+        assert params_schema["properties"]["provider"]["default"] == "openrouter"
 
 
 class TestToolSurface:
