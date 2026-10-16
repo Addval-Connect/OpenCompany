@@ -318,9 +318,11 @@ done < <(tar tzf "$TARBALL" | sed 's|^\./||' | awk -F/ 'NF && $1 != "" {print $1
 # namespaces/default/ (a fresh DB has no users table: nobody could log in).
 if [[ -x "$APP_DIR/server/.venv/bin/python" ]]; then
     say "Migrating default namespace (owner -> default), if needed"
+    # `python -m scripts...` resolves the package against CWD: run from the
+    # server dir (the 2026-10-16 deploy hit exactly this — ModuleNotFoundError
+    # aborted the deploy with the app already stopped).
     if ! sudo -u "$APP_USER" env HOME="$(getent passwd "$APP_USER" | cut -d: -f6)" \
-        "$APP_DIR/server/.venv/bin/python" -m scripts.migrate_default_namespace \
-        --data-dir "$DATA_DIR_VALUE"; then
+        bash -c "cd '$APP_DIR/server' && '$APP_DIR/server/.venv/bin/python' -m scripts.migrate_default_namespace --data-dir '$DATA_DIR_VALUE'"; then
         echo "namespace migration failed — aborting deploy before the app boots" >&2
         exit 1
     fi
