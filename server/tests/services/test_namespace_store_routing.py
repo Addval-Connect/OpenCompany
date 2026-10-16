@@ -97,6 +97,19 @@ def _rows(db_path: Path, table: str = "data_mounts") -> list:
         con.close()
 
 
+def _count(db_path: Path, table: str) -> int:
+    con = sqlite3.connect(db_path)
+    try:
+        exists = con.execute(
+            "select count(*) from sqlite_master where name=?", (table,)
+        ).fetchone()[0]
+        if not exists:
+            return -1
+        return con.execute(f"select count(*) from {table}").fetchone()[0]
+    finally:
+        con.close()
+
+
 @pytest.fixture
 def proxy(tmp_path: Path):
     NamespacedDatabase = _load_namespaced_db()
@@ -151,3 +164,34 @@ def test_plain_database_still_works(proxy, tmp_path):
     mount = asyncio.run(store.add_mount("1", name="plain", root_path=str(root)))
     assert mount["name"] == "plain"
     assert asyncio.run(store.list_mounts("1")) != []
+
+
+def test_conversations_are_per_namespace(proxy, tmp_path):
+    """Agent conversations / terminal transcripts are namespace data — the
+    user's directive: nothing global except user authentication."""
+    from services.agent_context import list_conversations, save_conversation
+
+    proxy_, _ = proxy
+    set_active_namespace("acme")
+    asyncio.run(
+        save_conversation(
+            proxy_,
+            workflow_id="wf-1",
+            generation=1,
+            agent_node_id="agent:1",
+            messages=[{"role": "user", "content": "hola"}],
+        )
+    )
+
+    # The conversation row lives in the ACTIVE namespace's file…
+    assert _count(tmp_path / "acme.db", "agent_conversations") == 1
+    # …and the owner DB stays clean.
+    assert _count(tmp_path / "owner.db", "agent_conversations") in (0, -1)
+
+    # Listing from another namespace sees nothing.
+    set_active_namespace("other")
+    assert asyncio.run(list_conversations(proxy_, workflow_id="wf-1")) == []
+
+    set_active_namespace("acme")
+    rows = asyncio.run(list_conversations(proxy_, workflow_id="wf-1"))
+    assert len(rows) == 1
