@@ -203,8 +203,13 @@ class MemoryToolStore:
         self.embedder = embedder
         self._fts_available = False
 
+    def _session_db(self) -> Any:
+        """Resolve the per-namespace DB (see DataMountStore._session_db)."""
+        active = getattr(self.database, "active_db", None)
+        return active() if callable(active) else self.database
+
     async def ensure_schema(self) -> None:
-        engine = getattr(self.database, "engine", None)
+        engine = getattr(self._session_db(), "engine", None)
         if engine is None:
             raise RuntimeError("Database is not initialized")
         if engine in self._initialized_engines:
@@ -391,7 +396,7 @@ class MemoryToolStore:
                 item_id=item_id,
                 exc_info=True,
             )
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             row = await session.get(MemoryToolEmbeddingProjection, item_id)
             if row is None:
                 row = MemoryToolEmbeddingProjection(
@@ -465,7 +470,7 @@ class MemoryToolStore:
         self, scope: MemoryScope, memory_id: str
     ) -> dict[str, Any]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             result = await session.execute(
                 select(MemoryToolItem).where(
                     MemoryToolItem.id == memory_id,
@@ -501,7 +506,7 @@ class MemoryToolStore:
         ]
         if category_filter:
             clauses.append(MemoryToolItem.category.in_(category_filter))
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             # Tags live in portable JSON. Scan bounded chunks so exact tag
             # filtering behaves the same on SQLite and Postgres.
             collected: list[tuple[MemoryToolItem, int]] = []
@@ -569,7 +574,7 @@ class MemoryToolStore:
         # all scope/data remains parameterized.
         match_query = " AND ".join(f'"{token}"*' for token in tokens)
         try:
-            async with self.database.get_session() as session:
+            async with self._session_db().get_session() as session:
                 result = await session.execute(
                     text(
                         "SELECT memory_id FROM agent_memory_items_fts "
@@ -607,7 +612,7 @@ class MemoryToolStore:
         offset = _decode_cursor(cursor)
         ranked_ids = await self._fts_ids(scope.namespace_id, query)
         retrieval = "fts" if ranked_ids is not None else "sql"
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             clauses = [
                 MemoryToolItem.namespace_id == scope.namespace_id,
                 self._active_clause(),

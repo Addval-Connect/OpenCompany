@@ -143,8 +143,23 @@ class DataMountStore:
     def __init__(self, database: Any) -> None:
         self.database = database
 
+    def _session_db(self) -> Any:
+        """The database every store query must run against.
+
+        The NamespacedDatabase proxy routes ``get_session`` to the owner DB
+        (auth tables are global), while per-namespace tables — mounts among
+        them — live in the active namespace's DB file. In multi-tenant
+        deployments the two differ, and mixing them is exactly the
+        "no such table: data_mounts" seen on the first panel open after a
+        deploy: ``ensure_schema`` created the table in the namespace DB
+        while the session read the owner DB. Plain Databases (tests,
+        single-tenant) have no ``active_db`` and pass through unchanged.
+        """
+        active = getattr(self.database, "active_db", None)
+        return active() if callable(active) else self.database
+
     async def ensure_schema(self) -> None:
-        engine = getattr(self.database, "engine", None)
+        engine = getattr(self._session_db(), "engine", None)
         if engine is None:
             raise RuntimeError("Database is not initialized")
         if engine in self._initialized_engines:
@@ -172,7 +187,7 @@ class DataMountStore:
 
     async def list_mounts(self, owner_id: str) -> list[dict[str, Any]]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             result = await session.execute(
                 select(DataMount)
                 .where(DataMount.user_id == owner_id)
@@ -184,7 +199,7 @@ class DataMountStore:
         self, owner_id: str, name: str
     ) -> Optional[dict[str, Any]]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             row = await self._row(session, owner_id, name)
             return _serialize(row) if row else None
 
@@ -201,7 +216,7 @@ class DataMountStore:
         resolved = await asyncio.to_thread(
             validate_mount_root, root_path, writable=bool(writable)
         )
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             existing = await session.execute(
                 select(DataMount).where(DataMount.user_id == owner_id)
             )
@@ -236,7 +251,7 @@ class DataMountStore:
     ) -> dict[str, Any]:
         """Only the writable flag is mutable; path changes are remove+add."""
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             row = await self._row(session, owner_id, name)
             if row is None:
                 raise MountStoreError(f"No mount named '{name}'")
@@ -253,7 +268,7 @@ class DataMountStore:
 
     async def remove_mount(self, owner_id: str, *, name: str) -> dict[str, Any]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             row = await self._row(session, owner_id, name)
             if row is None:
                 raise MountStoreError(f"No mount named '{name}'")

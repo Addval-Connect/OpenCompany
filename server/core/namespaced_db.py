@@ -98,6 +98,17 @@ class NamespacedDatabase:
     def _active_db(self) -> "Database":
         return self._pool.get(get_active_namespace())
 
+    def active_db(self) -> "Database":
+        """Public accessor for direct-session consumers (panel stores).
+
+        ``get_session`` routes to the owner DB by design (auth tables are
+        global), so stores that persist per-namespace tables — Data mounts,
+        Canvas boards, Memory tools — must resolve the namespace Database
+        explicitly per call. Namespace can change between calls on a
+        long-lived consumer, so this is a method, not a cached attribute.
+        """
+        return self._active_db()
+
     def __getattr__(self, name: str):
         if name.startswith("_"):
             # Private/dunder attrs not in our set → active namespace DB
