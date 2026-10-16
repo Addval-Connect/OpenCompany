@@ -308,6 +308,25 @@ while IFS= read -r top; do
 done < <(tar tzf "$TARBALL" | sed 's|^\./||' | awk -F/ 'NF && $1 != "" {print $1}' | sort -u)
 
 # ---------------------------------------------------------------------------
+# 4b. namespace migration — "owner" was a data sentinel; canonical is "default"
+# ---------------------------------------------------------------------------
+# The 2026-10 tenancy cleanup (docs-internal/multitenant_routing_audit.md)
+# renamed the default namespace's on-disk state (namespaces/owner/ ->
+# namespaces/default/) and rewrote credential buckets to the namespace name.
+# Idempotent: no-ops when already canonical. MUST run here — the app is
+# stopped (step 3) and the fresh process must not boot an empty
+# namespaces/default/ (a fresh DB has no users table: nobody could log in).
+if [[ -x "$APP_DIR/server/.venv/bin/python" ]]; then
+    say "Migrating default namespace (owner -> default), if needed"
+    if ! sudo -u "$APP_USER" env HOME="$(getent passwd "$APP_USER" | cut -d: -f6)" \
+        "$APP_DIR/server/.venv/bin/python" -m scripts.migrate_default_namespace \
+        --data-dir "$DATA_DIR_VALUE"; then
+        echo "namespace migration failed — aborting deploy before the app boots" >&2
+        exit 1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 5. .env -- rendered once, never rewritten
 # ---------------------------------------------------------------------------
 # The single place port numbers live is .env.template; read it rather than
