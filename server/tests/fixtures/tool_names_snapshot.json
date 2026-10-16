@@ -5,6 +5,7 @@
   "duckduckgoSearch": "web_search",
   "pythonExecutor": "python_code",
   "javascriptExecutor": "javascript_code",
+  "jev": "jev",
   "whatsappSend": "whatsapp_send",
   "whatsappDb": "whatsapp_db",
   "gmaps_locations": "geocode",

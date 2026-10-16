@@ -491,6 +491,29 @@
       "temperature_range": [0.0, 2.0]
     },
 
+    "typesafe": {
+      "display_name": "TypeSafe AI",
+      "default_model": "jev-latest",
+      "popular_models": [],
+      "_popular_note": "Empty by design: Jev is a System One decision model, not a chat model — it must never appear in agent chat-model dropdowns (it has no chat-completions API and gives up string generation by design). The models stay reachable through the JEV node (nodes/model/jev, tool_name 'jev') and its credential probe (GET /v1/models). See the max_output_tokens keys for the curated ids.",
+      "_models_note": "jev-latest (alias tracking the flagship) and jev-1.13, served by POST https://api.typesafe.ai/v1/systemone — state + typed questions (choice/score/noul) in, structured answers with calibrated probabilities and confidence out. Deliberately NOT in _COMPAT_PROVIDERS: there is no OpenAI-compatible chat endpoint to register. docs.typesafe.ai/api.",
+      "detection_patterns": ["typesafe", "jev"],
+      "base_url": "https://api.typesafe.ai/v1",
+      "models_endpoint": "models",
+      "supports_model_listing": true,
+      "_models_listing_note": "GET /v1/models returns the current model ids — used by the TypesafeCredential probe (nodes/model/jev) to validate keys and surface the list in the Credentials modal. Unreachable here as a chat provider: fetch_models is only called for registered chat providers.",
+      "api_key_param": "api_key",
+      "max_tokens_param": "max_tokens",
+      "supported_params": [],
+      "_supported_params_note": "No chat-completion params exist — the evaluation API takes state/model/questions only (docs.typesafe.ai/api). Kept empty so nothing downstream assumes chat parameters for this provider.",
+      "max_output_tokens": {"jev-latest": 4096, "jev-1.13": 4096, "_default": 4096},
+      "_max_output_note": "Placeholder ceilings for catalogue completeness only — Jev answers are short structured values (tens of output tokens), never long generations. Not used at runtime while the provider is unregistered.",
+      "context_length": {},
+      "_context_note": "TypeSafe documents request limits in bytes, not tokens: 32 MiB body cap and max 64 nesting levels (docs.typesafe.ai/api request rules). No token-context figure to curate; per-model context entries are deliberately absent so the >=1M global-list policy never fires on these ids.",
+      "temperature_range": [0.0, 0.0],
+      "_temperature_note": "Jev takes no temperature — decisions are calibrated, not sampled. Range pinned to a single value purely to satisfy the block shape; nothing reads it while the provider is unregistered."
+    },
+
     "openai_compatible": {
       "display_name": "OpenAI-compatible",
       "_description": "User-named OpenAI-compatible endpoints: llama.cpp, vLLM, a LiteLLM proxy, a second Ollama host, and so on. No base_url and no default_model: each endpoint is its own provider reference, openai_compatible:<slug>, whose resolved base URL and model list are stored on its credential rows when it is saved (RFC-0003 D13). This block supplies the fallbacks every endpoint shares.",

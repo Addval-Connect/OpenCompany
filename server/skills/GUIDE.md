@@ -24,6 +24,8 @@ server/skills/
 ├── coding_agent/             # Code execution skills
 │     python-skill, javascript-skill, monty-skill, file-read-skill,
 │     file-modify-skill, fs-search-skill
+├── decision/                 # Decision-model skills
+│     jev-decisions (TypeSafe JEV question composition)
 ├── gcloud/                   # gcloud-skill (Google Cloud CLI)
 ├── github/                   # github-skill (gh CLI)
 ├── language_agent/           # speech-skill, translation-skill
