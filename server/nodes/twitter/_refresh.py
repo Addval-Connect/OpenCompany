@@ -35,7 +35,7 @@ async def refresh_twitter_status(broadcaster: "StatusBroadcaster") -> None:
             from services.plugin.deps import get_auth_service
 
             auth_service = get_auth_service()
-            tokens = await auth_service.get_oauth_tokens("twitter", customer_id="owner")
+            tokens = await auth_service.get_oauth_tokens("twitter", customer_id="default")
             if not tokens or not tokens.get("access_token"):
                 broadcaster._status["twitter"] = {
                     "connected": False,

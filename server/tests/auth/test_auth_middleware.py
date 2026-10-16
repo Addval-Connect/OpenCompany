@@ -116,6 +116,29 @@ class TestGating:
             )
         assert response.status_code == 401
 
+    async def test_multitenant_token_without_namespace_claim_is_rejected(
+        self, user_auth, settings, overridden_container
+    ):
+        """Fail-closed (multi-tenant): a token minted without an
+        ``active_namespace`` claim cannot address any tenant's data —
+        silently landing in the default namespace would route one
+        tenant's request at another's DB files. Re-login mints a
+        claim-bearing token."""
+        user, _ = await user_auth.register(
+            email="owner@example.com", password="hunter2hunter2", display_name="Owner"
+        )
+        token = user_auth.create_access_token(user, active_namespace="")
+
+        mt_settings = make_settings(multi_tenant_namespaces=True)
+        client = _build_app(user_auth, mt_settings, overridden_container)
+        async with client as http:
+            response = await http.get(
+                "/api/protected", cookies={mt_settings.jwt_cookie_name: token}
+            )
+
+        assert response.status_code == 401
+        assert "namespace claim" in response.json()["detail"]
+
     async def test_auth_disabled_passes_through_anonymously(self, user_auth, overridden_container):
         settings = make_settings(vite_auth_enabled="false")
         client = _build_app(user_auth, settings, overridden_container)

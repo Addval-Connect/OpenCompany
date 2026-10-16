@@ -58,7 +58,7 @@ async def get_twitter_client():
     from xdk import Client
 
     auth_service = get_auth_service()
-    tokens = await auth_service.get_oauth_tokens("twitter", customer_id="owner")
+    tokens = await auth_service.get_oauth_tokens("twitter", customer_id="default")
     if not tokens or not tokens.get("access_token"):
         raise RuntimeError("Twitter not connected. Please authenticate via Credentials.")
     return Client(access_token=tokens["access_token"])
@@ -71,7 +71,7 @@ async def refresh_and_get_client():
     from xdk import Client
 
     auth_service = get_auth_service()
-    tokens = await auth_service.get_oauth_tokens("twitter", customer_id="owner")
+    tokens = await auth_service.get_oauth_tokens("twitter", customer_id="default")
     refresh_token = tokens.get("refresh_token", "") if tokens else ""
     if not refresh_token:
         raise RuntimeError("Twitter token expired. Please re-authenticate.")
@@ -94,7 +94,7 @@ async def refresh_and_get_client():
         email=tokens.get("email", ""),
         name=tokens.get("name", ""),
         scopes=tokens.get("scopes", ""),
-        customer_id="owner",
+        customer_id="default",
     )
     logger.info("Twitter token refreshed successfully")
     return Client(access_token=new_access)

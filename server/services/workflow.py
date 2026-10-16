@@ -212,7 +212,7 @@ class WorkflowService:
             "workflow_id": workflow_id,  # UUID — stable system identity, FK target
             "workflow_slug": workflow_slug,  # Human-readable, mutable on rename
             "user_id": str(user_id or "owner"),
-            "credential_customer_id": credential_customer_id or "owner",
+            "credential_customer_id": credential_customer_id or "default",
             "workspace_dir": workspace_dir,  # Per-workflow filesystem for nodes and agents
             "get_output_fn": self.get_node_output,
             "outputs": outputs or {},  # Upstream node outputs for data flow (e.g., taskTrigger -> chatAgent)
@@ -264,7 +264,7 @@ class WorkflowService:
                 context.get("user_id")
                 or _parallel_user_id.get()
             ),
-            credential_customer_id=context.get("credential_customer_id", "owner"),
+            credential_customer_id=context.get("credential_customer_id", "default"),
         )
 
     # =========================================================================

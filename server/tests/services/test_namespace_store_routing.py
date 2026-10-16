@@ -68,7 +68,7 @@ class _FakePool:
 async def _make_dbs(tmp_path: Path) -> dict:
     Database = _load_real_database()
     dbs = {}
-    for ns in ("owner", "acme", "other"):
+    for ns in ("default", "acme", "other"):
         db = Database(
             SimpleNamespace(
                 database_url=f"sqlite+aiosqlite:///{tmp_path / f'{ns}.db'}",
@@ -131,7 +131,7 @@ def test_mount_lands_in_active_namespace_db(proxy, tmp_path):
     # The row lives in the ACTIVE namespace's file…
     assert _rows(tmp_path / "acme.db") == [("1", "docs")]
     # …and never in the owner DB.
-    assert _rows(tmp_path / "owner.db") == []
+    assert _rows(tmp_path / "default.db") == []
 
 
 def test_list_mounts_reads_active_namespace(proxy, tmp_path):
@@ -156,11 +156,11 @@ def test_plain_database_still_works(proxy, tmp_path):
     """Single-tenant / tests pass a plain Database (no active_db) — the
     store falls back to it unchanged."""
     proxy_, _ = proxy
-    owner_db = proxy_._pool._dbs["owner"]
+    global_db = proxy_._pool._dbs["default"]
     root = tmp_path / "plain"
     root.mkdir()
 
-    store = DataMountStore(owner_db)  # not the proxy: no active_db attribute
+    store = DataMountStore(global_db)  # not the proxy: no active_db attribute
     mount = asyncio.run(store.add_mount("1", name="plain", root_path=str(root)))
     assert mount["name"] == "plain"
     assert asyncio.run(store.list_mounts("1")) != []

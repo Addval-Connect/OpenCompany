@@ -112,7 +112,7 @@ class AuthService:
         # credential_customer_id kept for call-site compat; ignored —
         # NamespacedCredentialsDatabase routes to the correct namespace DB
         # automatically via ContextVar.
-        credential_customer_id: str = "owner",
+        credential_customer_id: str = "default",
     ) -> bool:
         """Store API key in the active-namespace credentials DB."""
         try:
@@ -154,7 +154,7 @@ class AuthService:
         provider: str,
         session_id: str = "default",
         # credential_customer_id kept for call-site compat; ignored
-        credential_customer_id: str = "owner",
+        credential_customer_id: str = "default",
     ) -> Optional[str]:
         """Get decrypted API key from the active-namespace credentials DB."""
         try:
@@ -173,7 +173,7 @@ class AuthService:
             return None
 
     async def list_key_scopes(
-        self, provider: str, *, credential_customer_id: str = "owner"
+        self, provider: str, *, credential_customer_id: str = "default"
     ) -> List[str]:
         """List every session_id holding a key for one provider (active namespace)."""
         try:
@@ -202,7 +202,7 @@ class AuthService:
             return []
 
     async def get_stored_models(
-        self, provider: str, session_id: str = "default", credential_customer_id: str = "owner"
+        self, provider: str, session_id: str = "default", credential_customer_id: str = "default"
     ) -> List[str]:
         """Get stored models for provider (active namespace)."""
         try:
@@ -222,7 +222,7 @@ class AuthService:
             return []
 
     async def remove_api_key(
-        self, provider: str, session_id: str = "default", credential_customer_id: str = "owner"
+        self, provider: str, session_id: str = "default", credential_customer_id: str = "default"
     ) -> bool:
         """Remove API key from the active-namespace credentials DB."""
         try:
@@ -271,7 +271,7 @@ class AuthService:
         scopes: Optional[str] = None,
         # customer_id kept for call-site compat; NamespacedCredentialsDatabase
         # routes to the correct namespace DB automatically via ContextVar.
-        customer_id: str = "owner",
+        customer_id: str = "default",
     ) -> bool:
         """Store OAuth tokens in the active-namespace credentials DB."""
         try:
@@ -283,7 +283,7 @@ class AuthService:
                 email=email,
                 name=name,
                 scopes=scopes,
-                customer_id="owner",  # single row per provider per namespace DB
+                customer_id="default",  # single row per provider per namespace DB
             )
             self._oauth_cache[cache_key] = {
                 "access_token": access_token,
@@ -298,13 +298,13 @@ class AuthService:
             logger.error("Failed to store OAuth tokens", provider=provider, error=str(e))
             return False
 
-    async def get_oauth_tokens(self, provider: str, customer_id: str = "owner") -> Optional[Dict[str, Any]]:
+    async def get_oauth_tokens(self, provider: str, customer_id: str = "default") -> Optional[Dict[str, Any]]:
         """Get OAuth display tokens from the active-namespace credentials DB."""
         try:
             cache_key = f"oauth_{provider}"
             if cache_key in self._oauth_cache:
                 return self._oauth_cache[cache_key]
-            tokens = await self.credentials_db.get_oauth_tokens(provider, "owner")
+            tokens = await self.credentials_db.get_oauth_tokens(provider, "default")
             if tokens:
                 display = {
                     "access_token": tokens.get("access_token"),
@@ -322,11 +322,11 @@ class AuthService:
     async def get_oauth_refresh_token(
         self,
         provider: str,
-        customer_id: str = "owner",
+        customer_id: str = "default",
     ) -> Optional[str]:
         """Read the OAuth refresh token from the active-namespace credentials DB."""
         try:
-            tokens = await self.credentials_db.get_oauth_tokens(provider, "owner")
+            tokens = await self.credentials_db.get_oauth_tokens(provider, "default")
             if tokens:
                 return tokens.get("refresh_token")
             return None
@@ -418,7 +418,7 @@ class AuthService:
                 "needs_reauth": True,
             }
 
-    async def remove_oauth_tokens(self, provider: str, customer_id: str = "owner") -> bool:
+    async def remove_oauth_tokens(self, provider: str, customer_id: str = "default") -> bool:
         """Remove OAuth tokens from storage and cache.
 
         Args:
@@ -430,7 +430,7 @@ class AuthService:
         """
         try:
             cache_key = f"oauth_{provider}"
-            await self.credentials_db.delete_oauth_tokens(provider, "owner")
+            await self.credentials_db.delete_oauth_tokens(provider, "default")
             self._oauth_cache.pop(cache_key, None)
             self._bump_catalogue_version()
             logger.info(f"Removed OAuth tokens for {provider}")

@@ -508,23 +508,28 @@ def detect_ai_provider(node_type: str, parameters: dict = None) -> str:
 # Enforced by tests/test_identity_namespaces.py.
 # ---------------------------------------------------------------------------
 
-#: The single-owner tenancy principal. Used when auth is disabled, and as
-#: the degenerate namespace in single-owner installs.
+#: The single-owner tenancy principal. Auth-domain ONLY: it is the user
+#: account id when auth is disabled (and the admin account name). It is
+#: NEVER a namespace, a credential bucket, or a data-routing key — the
+#: canonical default namespace is "default" (same name the JWT claim,
+#: the UI and Temporal use). See docs-internal/multitenant_routing_audit.md.
 OWNER_PRINCIPAL_ID: str = "owner"
 
-#: Default ``customer_id`` for stored credentials. Deliberately NOT an
-#: alias of OWNER_PRINCIPAL_ID — see the note above.
-DEFAULT_CREDENTIAL_CUSTOMER_ID: str = "owner"
+#: Default ``customer_id`` for stored credentials — the canonical default
+#: namespace. Same string as the JWT ``active_namespace`` claim for
+#: single-tenant installs; no translation anywhere.
+DEFAULT_CREDENTIAL_CUSTOMER_ID: str = "default"
 
 
 def normalize_credential_ns(ns: str | None) -> str:
-    """Map an active_namespace value to the canonical credential customer_id.
+    """Legacy alias resolver: return the namespace unchanged.
 
-    "default" is the Temporal routing namespace name and is NOT the same
-    as the credential bucket named "owner".  Any place that derives a
-    credential customer_id from websocket/JWT state must call this so that
-    the default namespace always resolves to the "owner" credential bucket.
+    History: this used to map the "default" namespace onto an "owner"
+    credential bucket — the translation that made the default tenant's
+    data live in ``namespaces/owner/`` while every surface called it
+    "default". Removed (2026-10): the bucket IS the namespace. Kept as an
+    identity function because every call site already routes through it;
+    legacy rows with ``customer_id='owner'`` are migrated at startup
+    (``CredentialsDatabase._migrate_customer_ids``).
     """
-    if not ns or ns == "default":
-        return DEFAULT_CREDENTIAL_CUSTOMER_ID
-    return ns
+    return ns or DEFAULT_CREDENTIAL_CUSTOMER_ID

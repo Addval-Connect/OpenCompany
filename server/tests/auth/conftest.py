@@ -63,6 +63,7 @@ def make_settings(**overrides) -> SimpleNamespace:
         vite_auth_enabled="true",
         deployment_mode="local",
         cors_origins=["http://localhost"],
+        multi_tenant_namespaces=False,
     )
     base.update(overrides)
     return SimpleNamespace(**base)

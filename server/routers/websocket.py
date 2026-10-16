@@ -1836,7 +1836,34 @@ async def websocket_internal_endpoint(websocket: WebSocket):
             # Set namespace context from the message so credential lookups
             # in Temporal-initiated node execution use the correct namespace.
             from core.namespace_context import set_active_namespace as _set_ns
-            _set_ns(data.get("credential_customer_id") or "owner")
+            from constants import normalize_credential_ns as _norm
+            from core.container import container as _container
+            _msg_ns = _norm(data.get("credential_customer_id") or "")
+            if (
+                _container.settings().multi_tenant_namespaces
+                and not data.get("credential_customer_id")
+            ):
+                # Fail-closed: an internal message without a tenant cannot
+                # address any namespace's data. Log and skip the message —
+                # the sender (activity) must stamp credential_customer_id.
+                logger.warning(
+                    "[WebSocket Internal] message without credential_customer_id "
+                    "dropped (multi-tenant)",
+                    msg_type=msg_type,
+                    request_id=request_id,
+                )
+                if request_id:
+                    await _safe_send(
+                        websocket,
+                        {
+                            "type": "error",
+                            "request_id": request_id,
+                            "code": "NAMESPACE_REQUIRED",
+                            "message": "credential_customer_id required in multi-tenant mode",
+                        },
+                    )
+                continue
+            _set_ns(_msg_ns)
 
             # Deny-by-default: this socket is unauthenticated, so it may
             # reach only the handlers the activity worker actually needs.

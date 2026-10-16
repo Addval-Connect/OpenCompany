@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
-from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID
+from constants import DEFAULT_CREDENTIAL_CUSTOMER_ID, OWNER_PRINCIPAL_ID
 
 if TYPE_CHECKING:
     from services.plugin.connection import Connection
@@ -30,13 +30,13 @@ class NodeContext:
     workflow_id: Optional[str] = None
     session_id: str = "default"
     execution_id: Optional[str] = None
-    user_id: str = "owner"
+    user_id: str = OWNER_PRINCIPAL_ID
     #: Namespace for stored credentials. Distinct from ``user_id``: that is
     #: the tenancy principal, this is which installation's OAuth tokens and
     #: API keys to read. Keeping them separate is what lets ``user_id``
     #: become a real authenticated subject without re-pointing every
     #: credential lookup. See constants.DEFAULT_CREDENTIAL_CUSTOMER_ID.
-    credential_customer_id: str = "owner"
+    credential_customer_id: str = "default"
     workspace_dir: Optional[str] = None
     # Original outputs/nodes/edges for graph-aware nodes (console, pythonExecutor, …)
     outputs: Dict[str, Any] = field(default_factory=dict)
@@ -64,7 +64,7 @@ class NodeContext:
             workflow_id=context.get("workflow_id"),
             session_id=context.get("session_id", "default"),
             execution_id=context.get("execution_id"),
-            user_id=context.get("user_id", "owner"),
+            user_id=context.get("user_id", OWNER_PRINCIPAL_ID),
             # Falls back to the credential default, NOT to user_id — a real
             # authenticated subject must not silently become a credential
             # namespace nobody has stored tokens under.
