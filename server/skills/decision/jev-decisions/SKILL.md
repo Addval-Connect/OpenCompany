@@ -32,24 +32,24 @@ handle and call the `jev` tool with `state` + `questions`.
 | state | string | Yes | The unstructured state to evaluate: plain text, or a JSON-serialized object/array (chat logs, records, form data). Objects/arrays are sent as structured state. |
 | questions | string (JSON) | Yes | Object mapping question ids to typed questions — see the contract below. |
 | jev_model | string | No | TypeSafe model id. Default `jev-latest` tracks the flagship release. |
-| provider | string | No | `typesafe` (default, direct API with the console.typesafe.ai key) or `openrouter` (System One surface routed through OpenRouter, billed to the OpenRouter account). The questions contract is identical. |
+| provider | string | No | `openrouter` (default — System One surface routed through OpenRouter, billed to the OpenRouter account) or `typesafe` (direct API with the console.typesafe.ai key). The questions contract is identical. |
 
 ## Choosing a Provider
 
 `provider` selects who answers; the request and response shapes are the same:
 
-- **`typesafe`** — direct TypeSafe API (`api.typesafe.ai`). Needs the
-  **TypeSafe AI** credential.
-- **`openrouter`** — `openrouter.ai/api/v1/systemone`, the TypeSafe-SDK-
+- **`openrouter`** (default) — `openrouter.ai/api/v1/systemone`, the TypeSafe-SDK-
   compatible surface. Needs the **OpenRouter** credential; calls are billed to
   your OpenRouter account (each response reports `usage.cost` in USD). Bare
   model ids (`jev-latest`, `jev-1.13`) are mapped onto the `typesafe/`
   namespace automatically. `jev-router` is OpenRouter's *chat* routing model —
   it cannot answer System One questions, so don't select it as `model` here.
+- **`typesafe`** — direct TypeSafe API (`api.typesafe.ai`). Needs the
+  **TypeSafe AI** credential.
 
-Pick `openrouter` when you already have OpenRouter credit and want one bill;
-pick `typesafe` when you have a direct TypeSafe key or need the vendor's
-latest release first.
+Pick `openrouter` when you already have OpenRouter credit and want one bill
+(most installs); pick `typesafe` only when you have a direct TypeSafe key or
+need the vendor's latest release first.
 
 ## The Questions JSON Contract
 

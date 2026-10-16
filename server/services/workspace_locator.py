@@ -59,7 +59,7 @@ def workspace_base_dir() -> Path:
     from core.config import Settings
     from core.namespace_context import get_active_namespace
 
-    ns = get_active_namespace() or "owner"
+    ns = get_active_namespace() or "default"
     return Path(Settings().data_dir) / "namespaces" / ns / "workspaces"
 
 

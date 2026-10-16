@@ -2,8 +2,9 @@
 
 NamespacedDatabase:
   - AUTH_METHODS (users, namespaces, namespace assignments) always route
-    to the "owner" namespace DB regardless of the active ContextVar
-    namespace.  These tables are global/shared.
+    to the GLOBAL DB — the "default" namespace's DB, which hosts the
+    shared auth tables. The default tenant and the auth store share one
+    DB file by design (single-tenant installs have exactly that one).
   - Everything else routes to the pool entry for the current namespace
     (get_active_namespace()).
 
@@ -84,19 +85,35 @@ _AUTH_METHODS: frozenset[str] = frozenset(
 class NamespacedDatabase:
     """Database proxy that routes calls per namespace via ContextVar.
 
-    Auth methods always target the "owner" DB.
+    AUTH methods always target the global DB — the **default** namespace's
+    DB, which hosts the shared auth tables (users, namespaces, invites).
+    "owner" is an auth principal, never a database location.
     All other methods target the namespace-specific DB.
     """
+
+    # The namespace whose DB carries the global auth tables.
+    GLOBAL_NAMESPACE = "default"
 
     def __init__(self, pool: "DatabasePool") -> None:
         self._pool = pool
 
     @property
     def _owner(self) -> "Database":
-        return self._pool.get("owner")
+        return self._pool.get(self.GLOBAL_NAMESPACE)
 
     def _active_db(self) -> "Database":
         return self._pool.get(get_active_namespace())
+
+    def active_db(self) -> "Database":
+        """Public accessor for direct-session consumers (panel stores).
+
+        ``get_session`` routes to the owner DB by design (auth tables are
+        global), so stores that persist per-namespace tables — Data mounts,
+        Canvas boards, Memory tools — must resolve the namespace Database
+        explicitly per call. Namespace can change between calls on a
+        long-lived consumer, so this is a method, not a cached attribute.
+        """
+        return self._active_db()
 
     def __getattr__(self, name: str):
         if name.startswith("_"):

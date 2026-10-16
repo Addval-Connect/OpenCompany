@@ -40,7 +40,7 @@ async def get_google_credentials(
     from services.plugin.deps import get_auth_service, get_database
 
     account_mode = parameters.get("account_mode", "owner")
-    customer_id = "owner"
+    customer_id = "default"
 
     if account_mode == "customer":
         customer_id = parameters.get("customer_id")

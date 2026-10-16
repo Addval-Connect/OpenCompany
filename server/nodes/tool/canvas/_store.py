@@ -139,8 +139,13 @@ class CanvasStore:
     def __init__(self, database: Any) -> None:
         self.database = database
 
+    def _session_db(self) -> Any:
+        """Resolve the per-namespace DB (see DataMountStore._session_db)."""
+        active = getattr(self.database, "active_db", None)
+        return active() if callable(active) else self.database
+
     async def ensure_schema(self) -> None:
-        engine = getattr(self.database, "engine", None)
+        engine = getattr(self._session_db(), "engine", None)
         if engine is None:
             raise RuntimeError("Database is not initialized")
         if engine in self._initialized_engines:
@@ -176,7 +181,7 @@ class CanvasStore:
                 raise CanvasStoreError(
                     f"Unknown canvas item kind: {item.get('kind')!r}"
                 )
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             board = await self._board(session, scope, create=True)
             if mode == "replace":
                 await session.execute(
@@ -247,7 +252,7 @@ class CanvasStore:
 
     async def list(self, scope: CanvasScope) -> Dict[str, Any]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             board = await self._board(session, scope, create=False)
             if board is None:
                 return {"items": [], "revision": 0}
@@ -263,7 +268,7 @@ class CanvasStore:
 
     async def remove(self, scope: CanvasScope, item_id: str) -> Dict[str, Any]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             board = await self._board(session, scope, create=False)
             if board is None:
                 raise CanvasStoreError("No canvas content for this node")
@@ -285,7 +290,7 @@ class CanvasStore:
 
     async def clear(self, scope: CanvasScope) -> Dict[str, Any]:
         await self.ensure_schema()
-        async with self.database.get_session() as session:
+        async with self._session_db().get_session() as session:
             board = await self._board(session, scope, create=False)
             if board is None:
                 return {"cleared": 0, "revision": 0}

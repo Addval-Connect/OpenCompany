@@ -41,6 +41,19 @@ def _lock(workflow_id: str, generation: int, agent_node_id: str) -> asyncio.Lock
     return lock
 
 
+def _session_db(database: Any) -> Any:
+    """Resolve the per-namespace DB (see DataMountStore._session_db).
+
+    Conversations, agent messages and console history are namespace data:
+    the NamespacedDatabase proxy routes ``get_session`` to the owner DB
+    (auth tables are global), so callers holding the proxy must resolve
+    the active namespace's Database explicitly or every conversation in
+    every namespace would land in one shared owner DB.
+    """
+    active = getattr(database, "active_db", None)
+    return active() if callable(active) else database
+
+
 async def load_conversation(
     database: Any,
     *,
@@ -50,7 +63,7 @@ async def load_conversation(
 ) -> List[Dict[str, Any]]:
     """Return the stored transcript, or ``[]`` for a new conversation."""
 
-    async with database.get_session() as session:
+    async with _session_db(database).get_session() as session:
         result = await session.execute(
             select(AgentConversation).where(
                 AgentConversation.workflow_id == workflow_id,
@@ -109,7 +122,7 @@ async def save_conversation(
     """Upsert the full transcript for the key; notifies panel listeners."""
 
     async with _lock(workflow_id, generation, agent_node_id):
-        async with database.get_session() as session:
+        async with _session_db(database).get_session() as session:
             result = await session.execute(
                 select(AgentConversation).where(
                     AgentConversation.workflow_id == workflow_id,
@@ -149,7 +162,7 @@ async def clear_conversation(
 ) -> int:
     """Delete matching conversations; returns the number of rows removed."""
 
-    async with database.get_session() as session:
+    async with _session_db(database).get_session() as session:
         query = select(AgentConversation).where(
             AgentConversation.workflow_id == workflow_id
         )
@@ -174,7 +187,7 @@ async def list_conversations(
 ) -> List[Dict[str, Any]]:
     """Panel metadata: one entry per stored conversation for the workflow."""
 
-    async with database.get_session() as session:
+    async with _session_db(database).get_session() as session:
         result = await session.execute(
             select(AgentConversation)
             .where(AgentConversation.workflow_id == workflow_id)

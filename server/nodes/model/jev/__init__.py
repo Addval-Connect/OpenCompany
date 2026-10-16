@@ -17,14 +17,14 @@ the answers slot directly into workflow branching.
 Two providers, same wire contract (``state`` + ``questions`` in, typed
 ``answers`` out):
 
-- ``typesafe`` (default) — ``POST https://api.typesafe.ai/v1/systemone``,
-  key from console.typesafe.ai/keys (``TypesafeCredential``).
-- ``openrouter`` — ``POST https://openrouter.ai/api/v1/systemone``, the
-  TypeSafe-SDK-compatible System One surface (the official SDKs point at
+- ``openrouter`` (default) — ``POST https://openrouter.ai/api/v1/systemone``,
+  the TypeSafe-SDK-compatible System One surface (the official SDKs point at
   it by changing the base URL; bare model ids like ``jev-latest`` map onto
   the ``typesafe/`` namespace), billed to the OpenRouter account
   (``OpenRouterCredential``). ``jev-router`` is OpenRouter's *chat*
   routing model — not answerable through this node.
+- ``typesafe`` — ``POST https://api.typesafe.ai/v1/systemone``, key from
+  console.typesafe.ai/keys (``TypesafeCredential``).
 
 Docs: https://docs.typesafe.ai/api,
 https://openrouter.ai/docs/guides/community/jev.
@@ -183,12 +183,12 @@ class JevParams(BaseModel):
         ),
     )
     provider: Literal["typesafe", "openrouter"] = Field(
-        default="typesafe",
+        default="openrouter",
         description=(
-            "Who answers the call: 'typesafe' = direct TypeSafe API "
-            "(console.typesafe.ai key), 'openrouter' = the System One "
-            "surface routed through OpenRouter (openrouter.ai key, billed "
-            "to the OpenRouter account). Same questions contract either way."
+            "Who answers the call: 'openrouter' (default — the System One "
+            "surface routed through OpenRouter, openrouter.ai key, billed "
+            "to the OpenRouter account) or 'typesafe' (direct TypeSafe API, "
+            "console.typesafe.ai key). Same questions contract either way."
         ),
     )
 
@@ -373,9 +373,9 @@ class JevNode(ActionNode):
         "\"instructions\": \"...\", \"criteria\": ...}}). choice = pick one "
         "option from a criteria map (max 255); score = rate on an ordered "
         "2-10 level rubric; noul = yes/no probability 0-1. `provider` picks "
-        "who answers: 'typesafe' (direct API, console.typesafe.ai key) or "
-        "'openrouter' (routed through OpenRouter, openrouter.ai key) — the "
-        "questions contract is identical. Ask ATOMIC questions "
+        "who answers: 'openrouter' (default — routed through OpenRouter, "
+        "openrouter.ai key) or 'typesafe' (direct API, console.typesafe.ai "
+        "key) — the questions contract is identical. Ask ATOMIC questions "
         "(one judgment each) and combine in code. Returns `decisions` "
         "(id -> value), `confidence` and `probabilities` — branch on the "
         "decision, gate the action on confidence. Use the jev-decisions skill "
@@ -423,7 +423,7 @@ class JevNode(ActionNode):
 
     @staticmethod
     async def _post_systemone(
-        ctx: NodeContext, payload: Dict[str, Any], provider: str = "typesafe"
+        ctx: NodeContext, payload: Dict[str, Any], provider: str = "openrouter"
     ) -> Dict[str, Any]:
         """POST the System One surface with one polite retry on 429/529.
 

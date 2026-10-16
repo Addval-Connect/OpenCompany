@@ -69,7 +69,7 @@ class FernetBackend(CredentialBackend):
                     models = metadata.get("models", []) if metadata else []
                     await self._credentials_db.save_api_key(provider, value, models, session_id)
                 elif key_type == "oauth":
-                    customer_id = parts[2] if len(parts) > 2 else "owner"
+                    customer_id = parts[2] if len(parts) > 2 else "default"
                     await self._credentials_db.save_oauth_tokens(
                         provider=provider,
                         access_token=value,
@@ -103,7 +103,7 @@ class FernetBackend(CredentialBackend):
                     session_id = parts[2] if len(parts) > 2 else "default"
                     return await self._credentials_db.get_api_key(provider, session_id)
                 elif key_type == "oauth":
-                    customer_id = parts[2] if len(parts) > 2 else "owner"
+                    customer_id = parts[2] if len(parts) > 2 else "default"
                     tokens = await self._credentials_db.get_oauth_tokens(provider, customer_id)
                     return tokens.get("access_token") if tokens else None
             else:
@@ -124,7 +124,7 @@ class FernetBackend(CredentialBackend):
                     session_id = parts[2] if len(parts) > 2 else "default"
                     await self._credentials_db.delete_api_key(provider, session_id)
                 elif key_type == "oauth":
-                    customer_id = parts[2] if len(parts) > 2 else "owner"
+                    customer_id = parts[2] if len(parts) > 2 else "default"
                     await self._credentials_db.delete_oauth_tokens(provider, customer_id)
                 return True
             else:

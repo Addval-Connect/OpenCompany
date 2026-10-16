@@ -1,10 +1,12 @@
 """Tenancy principal and credential namespace must never be aliased.
 
 ``user_id`` (who is acting) and the credential ``customer_id`` (whose
-stored tokens to read) happen to share the literal "owner". Collapsing
-them means the day ``user_id`` becomes a real authenticated subject,
-every OAuth-backed node starts looking up tokens under a customer id
-nobody has stored anything under.
+stored tokens to read) are different identifiers. Historically they
+shared the literal "owner" — the principal leaked into data routing and
+the default namespace's DB lived in ``namespaces/owner/`` while every
+surface called it "default". Since 2026-10 (multitenant_routing_audit):
+"owner" is an auth principal ONLY; the canonical default namespace — and
+its credential bucket — is "default" end-to-end.
 """
 
 from __future__ import annotations
@@ -18,13 +20,34 @@ SERVER_DIR = Path(__file__).resolve().parents[1]
 def test_the_two_constants_exist_and_are_not_aliased():
     import constants
 
+    # The principal keeps its historical id (auth domain only).
     assert constants.OWNER_PRINCIPAL_ID == "owner"
-    assert constants.DEFAULT_CREDENTIAL_CUSTOMER_ID == "owner"
+    # The credential bucket IS the canonical default namespace now.
+    assert constants.DEFAULT_CREDENTIAL_CUSTOMER_ID == "default"
     source = inspect.getsource(constants)
     # Same value, but each must be its own literal. `X = Y` would mean a
     # change to one silently moves the other.
     assert "DEFAULT_CREDENTIAL_CUSTOMER_ID: str = OWNER_PRINCIPAL_ID" not in source
     assert "OWNER_PRINCIPAL_ID: str = DEFAULT_CREDENTIAL_CUSTOMER_ID" not in source
+
+
+def test_normalize_credential_ns_is_identity():
+    """The "default"→"owner" translation is gone: bucket == namespace."""
+    from constants import normalize_credential_ns
+
+    assert normalize_credential_ns("default") == "default"
+    assert normalize_credential_ns("cartola-tax") == "cartola-tax"
+    assert normalize_credential_ns("") == "default"
+    assert normalize_credential_ns(None) == "default"
+
+
+def test_active_namespace_default_is_the_canonical_default():
+    from core.namespace_context import get_active_namespace, set_active_namespace
+
+    set_active_namespace("")
+    assert get_active_namespace() == "default"
+    set_active_namespace("acme")
+    assert get_active_namespace() == "acme"
 
 
 def test_node_context_keeps_them_independent():
@@ -35,7 +58,7 @@ def test_node_context_keeps_them_independent():
     )
     assert ctx.user_id == "42"
     # The credential namespace must NOT follow the principal.
-    assert ctx.credential_customer_id == "owner"
+    assert ctx.credential_customer_id == "default"
 
 
 def test_connection_factory_scopes_on_the_credential_namespace():

@@ -67,7 +67,7 @@ class EncryptedOAuthToken(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     provider: str = Field(max_length=50, index=True)  # 'google', 'twitter'
-    customer_id: str = Field(default="owner", max_length=255, index=True)
+    customer_id: str = Field(default="default", max_length=255, index=True)
     email: Optional[str] = Field(default=None, max_length=255)
     name: Optional[str] = Field(default=None, max_length=255)
     access_token_encrypted: str = Field(max_length=4000)
@@ -148,6 +148,20 @@ class CredentialsDatabase:
                     )
                 )
             except Exception:  # noqa: BLE001 — best-effort; table may not exist yet
+                pass
+            # Credential-bucket migration (2026-10): the default namespace's
+            # bucket was historically keyed "owner" — an auth principal
+            # leaking into data routing. The canonical bucket name is the
+            # namespace itself ("default"). Idempotent: legacy rows are
+            # rewritten once, new rows are born with the namespace name.
+            try:
+                await conn.execute(
+                    text(
+                        "UPDATE oauth_tokens SET customer_id = 'default' "
+                        "WHERE customer_id = 'owner'"
+                    )
+                )
+            except Exception:  # noqa: BLE001 — table may not exist yet
                 pass
 
         # Get or create salt
@@ -433,7 +447,7 @@ class CredentialsDatabase:
         name: Optional[str] = None,
         expiry: Optional[datetime] = None,
         scopes: Optional[str] = None,
-        customer_id: str = "owner",
+        customer_id: str = "default",
     ) -> None:
         """
         Save encrypted OAuth tokens.
@@ -446,7 +460,7 @@ class CredentialsDatabase:
             name: User display name
             expiry: Token expiration datetime
             scopes: Comma-separated granted scopes
-            customer_id: Customer identifier (default: "owner")
+            customer_id: Customer identifier (default: "default")
         """
         encrypted_access = self.encryption.encrypt(access_token)
         encrypted_refresh = self.encryption.encrypt(refresh_token)
@@ -485,7 +499,7 @@ class CredentialsDatabase:
             await session.commit()
             logger.debug(f"Saved encrypted OAuth tokens for provider: {provider}")
 
-    async def get_oauth_tokens(self, provider: str, customer_id: str = "owner") -> Optional[Dict[str, Any]]:
+    async def get_oauth_tokens(self, provider: str, customer_id: str = "default") -> Optional[Dict[str, Any]]:
         """
         Get decrypted OAuth tokens.
 
@@ -521,7 +535,7 @@ class CredentialsDatabase:
                 logger.error(f"Failed to decrypt OAuth tokens for {provider}: {e}")
                 return None
 
-    async def delete_oauth_tokens(self, provider: str, customer_id: str = "owner") -> bool:
+    async def delete_oauth_tokens(self, provider: str, customer_id: str = "default") -> bool:
         """
         Delete OAuth tokens.
 
@@ -547,7 +561,7 @@ class CredentialsDatabase:
                 return True
             return False
 
-    async def list_oauth_providers(self, customer_id: str = "owner") -> List[str]:
+    async def list_oauth_providers(self, customer_id: str = "default") -> List[str]:
         """
         List all OAuth providers with stored tokens.
 

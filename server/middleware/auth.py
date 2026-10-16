@@ -68,7 +68,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.is_owner = True
             request.state.active_namespace = "default"
             from core.namespace_context import set_active_namespace
-            set_active_namespace("owner")
+            set_active_namespace("default")
             return await call_next(request)
 
         # Auth enabled - check token
@@ -88,7 +88,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.user_id = payload.get("sub")
         request.state.user_email = payload.get("email")
         request.state.is_owner = payload.get("is_owner", False)
-        request.state.active_namespace = payload.get("active_namespace", "default")
+        request.state.active_namespace = payload.get("active_namespace") or ""
+        if settings.multi_tenant_namespaces and not request.state.active_namespace:
+            # Fail-closed (multi-tenant): a token without a namespace claim
+            # cannot address any tenant's data — silently landing in the
+            # default namespace would route one tenant's request at
+            # another's DB files. A fresh sign-in mints a claim-bearing
+            # token (switch_namespace re-mints on every switch).
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Session token has no namespace claim — sign in again"},
+            )
+        request.state.active_namespace = request.state.active_namespace or "default"
         from core.namespace_context import set_active_namespace
         from constants import normalize_credential_ns
         set_active_namespace(normalize_credential_ns(request.state.active_namespace))

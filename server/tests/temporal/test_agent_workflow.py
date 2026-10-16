@@ -165,9 +165,10 @@ class TestDurableTeamDelegationContract:
         ) == "addval-tax"
         # no key -> the Temporal boundary decides, as-is for tenants
         assert _resolve_tenant_ns(({},), "addval-tax") == "addval-tax"
-        # default namespace -> the owner credential bucket
-        assert _resolve_tenant_ns((), "default") == "owner"
-        assert _resolve_tenant_ns(None, "default") == "owner"
+        # default namespace -> itself (bucket == namespace since 2026-10;
+        # the "default"→"owner" translation was removed — audit doc §1.2)
+        assert _resolve_tenant_ns((), "default") == "default"
+        assert _resolve_tenant_ns(None, "default") == "default"
 
 
 class TestCanvasCompletionReviewContract:
