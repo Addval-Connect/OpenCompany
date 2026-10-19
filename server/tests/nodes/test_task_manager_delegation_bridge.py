@@ -1,9 +1,11 @@
 from types import SimpleNamespace
+from typing import Any, Dict
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from nodes.tool.task_manager import _execute_task_manager
+from services.plugin import NodeContext
 
 
 def _config():
@@ -251,3 +253,125 @@ def test_task_manager_params_coerce_prose_context_to_object():
     # dict input passes through untouched
     params3 = TaskManagerParams(operation="assign_task", context={"motivo": "x"})
     assert params3.context == {"motivo": "x"}
+
+
+# ---------------------------------------------------------------------------
+# Operation inference (production 2026-10-19, CartolaTax): the model sent
+# assign-shaped calls (title/mission/assignee_node_id) WITHOUT `operation`.
+# They silently degraded to the list_tasks default, created nothing, and the
+# mangled tool response hid the mistake — the coordinator concluded "the
+# Task Manager is broken". An assign-shaped call must infer assign_task; an
+# explicit operation always wins.
+# ---------------------------------------------------------------------------
+
+
+def test_assign_shaped_params_without_operation_infer_assign_task():
+    from nodes.tool.task_manager import TaskManagerParams
+
+    params = TaskManagerParams(
+        title="Visado sincronización", mission="Pre-valida en solo lectura",
+        assignee_node_id="wf:tool_agent:1",
+    )
+    assert params.operation == "assign_task"
+
+
+def test_explicit_operation_wins_over_shape_inference():
+    from nodes.tool.task_manager import TaskManagerParams
+
+    params = TaskManagerParams(
+        operation="list_tasks", title="T", mission="M",
+        assignee_node_id="wf:tool_agent:1",
+    )
+    assert params.operation == "list_tasks"
+
+
+def test_unshaped_params_without_operation_keep_the_list_default():
+    from nodes.tool.task_manager import TaskManagerParams
+
+    assert TaskManagerParams(include_history=True).operation == "list_tasks"
+    # mission alone (no assignee) is not assign-shaped
+    assert TaskManagerParams(mission="solo texto").operation == "list_tasks"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_without_operation_assigns_through_the_real_validation_path():
+    """The full execute_as_tool pipeline (Temporal per-type activity path):
+    an assign-shaped call without `operation` must reach the operation as
+    assign_task, and the flat Output — which declares its own `success`
+    field — must reach the LLM UNMANGLED (previously it collapsed to
+    {"result": null})."""
+    from nodes.tool.task_manager import TaskManagerNode
+
+    flat = {
+        "success": True, "operation": "assign_task",
+        "task": {"id": "task-x", "team_id": "team-1", "status": "queued"},
+        "delegation": None,
+        "delegation_request": {"team_task_id": "task-x"},
+    }
+    captured: Dict[str, Any] = {}
+
+    async def fake_execute(args, config):
+        captured.update(args)
+        return flat
+
+    node = TaskManagerNode()
+    with patch("nodes.tool.task_manager._execute_task_manager", fake_execute):
+        result = await node.execute_as_tool(
+            {
+                "title": "Visado sincronización contable log 1546",
+                "mission": "Pre-valida en solo lectura",
+                "assignee_node_id": "wf:tool_agent:1",
+                "context": {"modo_visado": True},
+            },
+            {},
+            NodeContext(node_id="wf:taskManager:1", node_type="taskManager", raw={}),
+        )
+
+    assert captured["operation"] == "assign_task"
+    assert result == flat  # flat passthrough — no envelope re-wrap
+
+
+@pytest.mark.asyncio
+async def test_flat_output_with_success_key_reaches_the_llm_unmangled():
+    """The double-envelope bug: ToolNode._wrap_success returns the flat
+    Output dict, but execute_as_tool re-checked `"success" not in envelope`
+    — a flat Output that declares its own `success` field was misread as an
+    ActionNode envelope, .get("result") returned None, and the LLM saw
+    {"result": null} for every task_manager call."""
+    from nodes.tool.task_manager import TaskManagerNode
+
+    flat = {"success": True, "operation": "list_tasks", "tasks": [], "count": 0}
+
+    async def fake_execute(args, config):
+        return flat
+
+    node = TaskManagerNode()
+    with patch("nodes.tool.task_manager._execute_task_manager", fake_execute):
+        result = await node.execute_as_tool(
+            {"operation": "list_tasks", "include_history": True},
+            {},
+            NodeContext(node_id="wf:taskManager:1", node_type="taskManager", raw={}),
+        )
+
+    assert result == flat
+    assert result["tasks"] == []  # the lead can actually see the list
+
+
+@pytest.mark.asyncio
+async def test_operation_error_surfaces_as_error_dict_to_the_llm():
+    """Plain exceptions from the operation must reach the LLM as
+    {"error": ...} — never as a silently-empty result."""
+    from nodes.tool.task_manager import TaskManagerNode
+
+    async def fake_execute(args, config):
+        raise ValueError("No team exists for this lead execution")
+
+    node = TaskManagerNode()
+    with patch("nodes.tool.task_manager._execute_task_manager", fake_execute):
+        result = await node.execute_as_tool(
+            {"operation": "list_tasks"},
+            {},
+            NodeContext(node_id="wf:taskManager:1", node_type="taskManager", raw={}),
+        )
+
+    assert result == {"error": "No team exists for this lead execution"}

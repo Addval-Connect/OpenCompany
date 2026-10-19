@@ -726,17 +726,18 @@ class BaseNode:
                     context.raw.pop(key, None)
                 else:
                     context.raw[key] = previous
-        # ToolNode skips the envelope wrap entirely — its _wrap_success
-        # returns the flat Output dict directly. Detect by the absence
-        # of the {success, ...} envelope keys.
-        if "success" not in envelope:
-            return envelope
+        # Only ToolNodes reach this point (dual-purpose ActionNodes
+        # returned above with their own unwrap contract). _wrap_success
+        # returns the flat Output dict directly — branch on node CLASS,
+        # not on key absence: a flat Output may legitimately declare its
+        # own ``success`` field (TaskManagerOutput does), and key-absence
+        # then misreads the flat dict as an {success, result} envelope —
+        # .get("result") returned None and the LLM saw {"result": null}
+        # for every call (production 2026-10-19: every task_manager
+        # response reached the lead as result:null).
         if envelope.get("success") is False:
             return {"error": envelope.get("error", "tool execution failed")}
-        result = envelope.get("result")
-        if isinstance(result, dict):
-            return result
-        return {"result": result}
+        return envelope
 
     # ---- internals --------------------------------------------------------
 
