@@ -169,6 +169,41 @@ async def test_list_tasks_can_include_prior_executions():
     )
 
 
+@pytest.mark.asyncio
+async def test_list_tasks_returns_bounded_summaries_not_full_rows():
+    """Production 2026-10-19 (CartolaTax): list_tasks with include_history
+    returned every task's full mission/context/result — 22 rows ~60 KB on one
+    call — and the coordinator's next LLM step blew the model context window
+    (LLMError.context_length, node red on the canvas). taskManager is exempt
+    from bound_tool_output by design, so the bound lives here: lists carry
+    state summaries; details ride get_task."""
+    full_row = {
+        "id": "task-1", "title": "Carga real Odoo", "status": "accepted",
+        "assigned_to": "wf:tool_agent:1", "revision": 3, "current_attempt": 1,
+        "team_execution_id": "exec-old", "created_at": "2026-10-19",
+        "completed_at": "2026-10-19", "error": None,
+        "mission": "x" * 3000, "context": {"k": "v" * 3000},
+        "result": "r" * 4000, "acceptance_criteria": {"y": "z"},
+        "child_workflow_id": "wf-child",
+    }
+    service = SimpleNamespace(list_durable_task_history=AsyncMock(return_value=[full_row]))
+    with patch("services.agent_team.get_agent_team_service", return_value=service):
+        result = await _execute_task_manager(
+            {"operation": "list_tasks", "include_history": True}, _config()
+        )
+
+    row = result["tasks"][0]
+    assert row["id"] == "task-1" and row["status"] == "accepted"
+    assert "team_execution_id" in row
+    for heavy in ("mission", "context", "result", "acceptance_criteria", "child_workflow_id"):
+        assert heavy not in row
+    # the full row is still retrievable through get_task (untouched path)
+    service.get_durable_task = AsyncMock(return_value=full_row)
+    with patch("services.agent_team.get_agent_team_service", return_value=service):
+        detail = await _execute_task_manager({"operation": "get_task", "task_id": "task-1"}, _config())
+    assert detail["task"]["mission"] == full_row["mission"]
+
+
 # ---------------------------------------------------------------------------
 # Model-robustness: small models mangle the assignee id and send `context`
 # as prose. The resolver degrades gracefully instead of burning the lead's

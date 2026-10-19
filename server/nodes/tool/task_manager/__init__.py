@@ -176,6 +176,27 @@ def _resolve_teammate(config: Dict[str, Any], args: Dict[str, Any]) -> Dict[str,
     return matches[0]
 
 
+# Fields a task LIST carries to the lead. ``taskManager`` results are
+# exempt from ``bound_tool_output`` by design ("bounded by other means",
+# services/tool_output.py) — but ``list_tasks`` with ``include_history``
+# returns every task's full mission/context/result, and production
+# (2026-10-19, CartolaTax) blew the model context window with 22 unbounded
+# rows (~60 KB) on one list call. Lists are state summaries: the lead
+# rehydrates details per task with ``get_task``.
+_LIST_FIELDS = (
+    "id", "title", "status", "assigned_to", "revision", "current_attempt",
+    "team_execution_id", "created_at", "completed_at", "error",
+)
+
+
+def _summarize_tasks(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Project task rows onto their bounded list shape."""
+    return [
+        {k: t.get(k) for k in _LIST_FIELDS} if isinstance(t, dict) else t
+        for t in tasks
+    ]
+
+
 async def _execute_task_manager(args: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     from services.agent_team import get_agent_team_service
 
@@ -199,7 +220,7 @@ async def _execute_task_manager(args: Dict[str, Any], config: Dict[str, Any]) ->
             )
         else:
             tasks = await service.list_durable_tasks(**scope, status=args.get("status_filter"))
-        return {"success": True, "operation": operation, "tasks": tasks, "count": len(tasks)}
+        return {"success": True, "operation": operation, "tasks": _summarize_tasks(tasks), "count": len(tasks)}
     if operation == "get_task":
         task_id = str(args.get("task_id") or "")
         if not task_id:
