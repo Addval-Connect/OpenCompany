@@ -17,6 +17,91 @@ from services.plugin import NodeContext, Operation, TaskQueue, TriggerNode
 from ._credentials import TelegramCredential
 
 
+async def _download_media_to_workspace(
+    ctx: NodeContext,
+    media: Dict[str, Any],
+) -> None:
+    """Fetch and persist a Telegram attachment into the workspace.
+
+    Mirrors the Outlook attachment pattern (``write_attachment_bytes`` in
+    ``nodes.microsoft._base``): the file bytes are fetched from the bot API,
+    saved under the workspace ``attachments/`` folder with a slugified,
+    collision-safe name, and the payload travels onward as a
+    workspace-relative path — never as bytes/base64 (node outputs are
+    persisted and serialized into LLM conversations).
+
+    Mutates ``media`` in place: on success sets ``file_path`` +
+    ``downloaded=True``; on any failure sets ``downloaded=False`` and
+    ``download_error`` so the trigger never breaks on an unfetchable file.
+    """
+    file_id = media.get("file_id") if isinstance(media, dict) else None
+    if not file_id:
+        media["downloaded"] = False
+        media["download_error"] = "no file_id in media payload"
+        return
+
+    import hashlib
+    import mimetypes
+    from uuid import uuid4
+
+    from core.logging import get_logger
+    from nodes.filesystem._backend import atomic_write_bytes
+    from services.media.workspace import _slugify, resolve_media, workspace_root
+
+    logger = get_logger(__name__)
+
+    try:
+        from ._service import get_telegram_service
+
+        svc = get_telegram_service()
+        bot = svc._require_bot()
+        tg_file = await bot.get_file(file_id)
+        payload = await bot.download_file(tg_file.file_path)
+    except Exception as exc:  # noqa: BLE001 — never break the trigger on a bad download
+        logger.warning(f"[telegram] media download failed ({media.get('kind')}): {exc}")
+        media["downloaded"] = False
+        media["download_error"] = str(exc)
+        return
+
+    if not payload:
+        media["downloaded"] = False
+        media["download_error"] = "Telegram returned an empty file"
+        return
+
+    # Preserve the real extension (documentParser globs on *.pdf); slugify
+    # the stem and suffix with node/uuid bits — identical shape to Outlook.
+    filename = media.get("file_name") or f"telegram-{media.get('kind') or 'file'}"
+    if "." not in filename:
+        mime = media.get("mime_type") or ""
+        ext = mimetypes.guess_extension(mime.split(";")[0].strip()) if mime else ""
+        filename = f"{filename}{ext or ''}"
+
+    root = workspace_root(ctx)
+    node_id = str(getattr(ctx, "node_id", "") or "node")
+    workflow_id = getattr(ctx, "workflow_id", None)
+
+    dot = filename.rfind(".") if filename else -1
+    stem = filename[:dot] if dot > 0 else (filename or "attachment")
+    ext = filename[dot + 1 :].lower() if dot > 0 else ""
+    safe = f"{_slugify(stem)}-{node_id[:8]}-{uuid4().hex[:6]}"
+    name = f"{safe}.{ext}" if ext else safe
+    rel = f"attachments/{name}"
+
+    target = resolve_media(rel, ctx=ctx)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(target, payload, root_dir=root)
+
+    media["file_path"] = str(target)
+    media["downloaded"] = True
+    media["download_error"] = None
+    media["sha256"] = hashlib.sha256(payload).hexdigest()
+    media["size_bytes"] = len(payload)
+    media["workflow_id"] = workflow_id
+    logger.debug(
+        f"[telegram] attachment saved: {rel} ({len(payload)} bytes, kind={media.get('kind')})"
+    )
+
+
 class TelegramReceiveParams(BaseModel):
     """7-field schema. Snake_case field names throughout; JSON Schema
     keys match field names exactly (no aliases).
@@ -215,7 +300,29 @@ class TelegramReceiveNode(TriggerNode):
                 start_time=time.time(),
                 error=("Telegram bot not connected. Add bot token in Credentials."),
             )
-        return await super().execute(node_id, parameters, context)
+        result = await super().execute(node_id, parameters, context)
+
+        # Resolve media on the event data only (skip error wrappers).
+        if (
+            isinstance(result, dict)
+            and result.get("success")
+            and isinstance(result.get("result"), dict)
+        ):
+            output = result["result"]
+            # `media` is a single TelegramMedia dict (not a list) in the
+            # trigger payload — guard against both shapes.
+            media = output.get("media")
+            if not isinstance(media, list):
+                media = [media] if media else []
+            for item in media:
+                if isinstance(item, dict) and not item.get("downloaded"):
+                    try:
+                        await _download_media_to_workspace(context, item)
+                    except Exception as exc:  # noqa: BLE001 — never break the trigger
+                        item["downloaded"] = False
+                        item["download_error"] = str(exc)
+
+        return result
 
     @Operation("wait")
     async def wait(self, ctx: NodeContext, params: TelegramReceiveParams) -> TelegramReceiveOutput:
