@@ -1,7 +1,7 @@
 ---
 name: puntos-de-control-consultor
 description: Los cuatro tipos de punto de control con el consultor — qué detiene el pipeline, qué se pregunta y cuándo.
-allowed-tools: task_manager write_todos
+allowed-tools: task_manager write_todos data
 metadata:
   author: opencompany
   version: "1.0"
@@ -83,7 +83,7 @@ El archivo es la autoridad sobre si el punto está cerrado. Si el puntero y el a
 
 No escribes cuestionarios: **transportas**.
 
-1. **Lee el archivo** del punto con `fileRead`; el cuestionario del agente ya trae todo.
+1. **Lee el archivo** del punto con `data`; el cuestionario del agente ya trae todo.
 2. **Publica** (skill `correo-consultor`): los `BLOQUEANTE` primero, agrupados por flujo, con las opciones tal como vienen y sin sugerir una, porque la propuesta ya está en cada bloque. Los pendientes que los agentes escribieron en los archivos no se preguntan dos veces.
 3. **Di explícitamente que ese trabajo está detenido** y qué desbloquea cada respuesta. Refleja el punto como ítem propio en `write_todos`. Los flujos que no dependen de esa respuesta siguen.
 4. **Espera por el mismo canal.** No reintentes por otra vía ni avances "mientras tanto" con lo que depende de la respuesta.

@@ -266,6 +266,63 @@ class TestDocumentParser:
         assert doc["parser"] == "pypdf"
         assert "page text" in doc["content"]
 
+    async def test_docx_backend_reads_paragraphs_and_tables(self, harness, tmp_path):
+        # Real python-docx round-trip: the sandboxed executors are retired, so
+        # this backend is the only .docx reader left — it must read paragraphs
+        # AND tables (the client's process-modeling material is table-heavy),
+        # in document order, skipping empty paragraphs.
+        pytest.importorskip("docx")
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("Encabezado del modelamiento")
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "Proceso"
+        table.cell(0, 1).text = "Responsable"
+        table.cell(1, 0).text = "Ventas"
+        table.cell(1, 1).text = "Comercial"
+        document.add_paragraph("")  # empty paragraphs are skipped
+        document.add_paragraph("Cierre")
+        f = tmp_path / "modelamiento.docx"
+        document.save(str(f))
+
+        result = await harness.execute(
+            "documentParser",
+            {"file_path": str(f), "parser": "docx"},
+        )
+
+        harness.assert_envelope(result, success=True)
+        doc = result["result"]["documents"][0]
+        assert doc["parser"] == "docx"
+        assert doc["filename"] == "modelamiento.docx"
+        content, lines = doc["content"], doc["content"].splitlines()
+        # Paragraphs and table rows survive, tables flattened to one line/row
+        assert lines[0] == "Encabezado del modelamiento"
+        assert "Proceso | Responsable" in content
+        assert "Ventas | Comercial" in content
+        assert "Cierre" in content
+        assert "" not in lines
+        assert doc["length"] == len(content)
+
+    async def test_docx_backend_empty_document_yields_empty_text(self, harness, tmp_path):
+        # An empty docx must surface as length 0 — the tool description makes
+        # the caller check lengths before trusting content.
+        pytest.importorskip("docx")
+        from docx import Document
+
+        f = tmp_path / "empty.docx"
+        Document().save(str(f))
+
+        result = await harness.execute(
+            "documentParser",
+            {"file_path": str(f), "parser": "docx"},
+        )
+
+        harness.assert_envelope(result, success=True)
+        doc = result["result"]["documents"][0]
+        assert doc["content"] == ""
+        assert doc["length"] == 0
+
     async def test_tool_surface_keeps_canvas_handles(self):
         # CartolaTax Fase 2: dual-purpose — invokable as `document_parser`
         # while staying wirable on the canvas (fileDownloader chains).

@@ -210,6 +210,11 @@ dependencies = [
     #   unactionable on a deployed instance, where nobody asked for an extra.
     "beautifulsoup4>=4.12.0",
     "pypdf>=5.0.0",
+    # python-docx is imported lazily (``document_parser`` docx backend). Main
+    # dependency for the same pruning reason as the two above: the sandboxed
+    # code executors are being retired, so the parser is the only docx reader
+    # left and ``uv sync`` would otherwise uninstall it.
+    "python-docx>=1.1.0",
 ]
 
 [project.optional-dependencies]

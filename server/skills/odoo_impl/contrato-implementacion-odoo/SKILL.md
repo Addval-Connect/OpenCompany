@@ -27,22 +27,32 @@ El `context` de una tarea lleva solo rutas y datos livianos, nunca contenido de 
 
 ## Carpetas
 
+**Raíz del proyecto.** Este flujo es multiproyecto: cada implementación vive en su propia carpeta
+`proyectos/<proyecto>/`, donde `<proyecto>` es el slug que el Coordinador fija al abrir el proyecto y
+registra en `proyectos/index.json`. **Toda ruta de este contrato es relativa a esa raíz.** El
+`<proyecto>` activo viaja en el `context` de cada misión; un agente que no lo reciba devuelve
+`detenida_por_precondicion` y no escribe nada. Al llamar a la herramienta `data`, antepone siempre
+`proyectos/<proyecto>/` a la ruta: `data` con path `01-analisis/x.md` es un error — la ruta correcta
+es `proyectos/<proyecto>/01-analisis/x.md`. Los scripts lanzados con `process_manager` reciben la raíz
+del proyecto como argumento o la derivan de su cwd; nunca adivinan rutas absolutas del host.
+
 ```
-proyecto/
-├── 00-entrada/        epicas.md, historias.csv, alcance.md
-├── 01-analisis/       propuesta-epicas.md, propuesta-historias.csv, preguntas-descubrimiento.md,
-│                      definiciones-proyecto.md, definiciones-requeridas-<flujo>.md,
-│                      matriz-brechas-<flujo>.csv, preguntas-abiertas.md
-├── 02-instancia/      introspeccion-<flujo>.json
-├── 03-blueprint/      proyecto.yaml, blueprint-<flujo>.yaml, configuracion-<flujo>.yaml
-├── 04-backlog/        tareas-<flujo>.yaml
-├── 05-plantillas/     <modelo>.csv, <modelo>.meta.json, INSTRUCTIVO-<flujo>.md
-├── 06-completadas/    <modelo>.csv (llenadas por el consultor)
-├── 07-validacion/     informe-<modelo>.md, errores-<modelo>.csv, veredicto-<flujo>.json
-├── 08-carga/          plan-carga.json, estado-carga.json, bitacora-<modelo>.jsonl,
-│                      resumen-carga.md, capacidades-instancia.json
-├── 09-qa/             casos-<flujo>.yaml, resultados-<flujo>.md, evidencia/
-└── coordinador/       estado.json, jev-log.jsonl
+proyectos/
+└── <proyecto>/
+    ├── 00-entrada/        epicas.md, historias.csv, alcance.md
+    ├── 01-analisis/       propuesta-epicas.md, propuesta-historias.csv, preguntas-descubrimiento.md,
+    │                      definiciones-proyecto.md, definiciones-requeridas-<flujo>.md,
+    │                      matriz-brechas-<flujo>.csv, preguntas-abiertas.md
+    ├── 02-instancia/      introspeccion-<flujo>.json
+    ├── 03-blueprint/      proyecto.yaml, blueprint-<flujo>.yaml, configuracion-<flujo>.yaml
+    ├── 04-backlog/        tareas-<flujo>.yaml
+    ├── 05-plantillas/     <modelo>.csv, <modelo>.meta.json, INSTRUCTIVO-<flujo>.md
+    ├── 06-completadas/    <modelo>.csv (llenadas por el consultor)
+    ├── 07-validacion/     informe-<modelo>.md, errores-<modelo>.csv, veredicto-<flujo>.json
+    ├── 08-carga/          plan-carga.json, estado-carga.json, bitacora-<modelo>.jsonl,
+    │                      resumen-carga.md, capacidades-instancia.json
+    ├── 09-qa/             casos-<flujo>.yaml, resultados-<flujo>.md, evidencia/
+    └── coordinador/       estado.json, jev-log.jsonl
 ```
 
 Los números de carpeta son el orden del proceso, no una jerarquía. **Los nombres de archivo de plantilla no llevan prefijo `NN`**: el orden de carga sale del grafo `depende_de`. Si llega un archivo con prefijo, se ignora.
@@ -65,7 +75,7 @@ Los números de carpeta son el orden del proceso, no una jerarquía. **Los nombr
 | `08-carga/*`, `09-qa/resultados-*`, `09-qa/evidencia/*` | CARGA | todos |
 | `coordinador/*` | Coordinador | — |
 
-**Regla dura: un agente nunca escribe en un archivo que no es suyo.** Si necesita corregir algo aguas arriba, escribe una entrada en `preguntas-abiertas.md` y devuelve el control. Quien enriquece un archivo propio relee antes de escribir (`fileRead`), para partir del contenido vigente. No hay excepciones: `capacidades-instancia.json` lo escribe solo CARGA.
+**Regla dura: un agente nunca escribe en un archivo que no es suyo.** Si necesita corregir algo aguas arriba, escribe una entrada en `preguntas-abiertas.md` y devuelve el control. Quien enriquece un archivo propio relee antes de escribir (`data`), para partir del contenido vigente. No hay excepciones: `capacidades-instancia.json` lo escribe solo CARGA.
 
 **Modelos compartidos.** Cada modelo tiene un único dueño declarado en `proyecto.yaml` → `duenos_modelos`. Un flujo que necesita columnas de un modelo ajeno las pide con `requiere_de`; no plantilla el modelo.
 

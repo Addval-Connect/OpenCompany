@@ -1,7 +1,7 @@
 ---
 name: flujo-implementacion
 description: Misiones plantillas y validación — producir y validar los archivos que el consultor llena; no cargan nada en Odoo.
-allowed-tools: odoo_jsonrpc
+allowed-tools: odoo_jsonrpc data
 metadata:
   author: opencompany
   version: "1.0"
@@ -43,7 +43,7 @@ Hay archivos en `06-completadas/` de **tus** modelos. Valida solo tus modelos, n
 
 ### Procedimiento
 
-1. **Lee los CSV con `sandboxed_python` y `workspace_read`**, no con `fileRead`: el archivo completo no debe entrar a tu historial. Devuelve solo errores y conteos.
+1. **Lee los CSV por tramos con `data`** (operation=read, con `offset`/`limit`): el archivo completo no debe entrar a tu historial. Devuelve solo errores y conteos.
 2. **Valida** por cada archivo, en este orden:
    - **Estructura (`E100`)**: columna `id` primera, sin vacíos; cabeceras que existen en el modelo; sidecar presente. Un `E100` **detiene el archivo completo**.
    - **Identidad**: `id` únicos (`E310`), todos con el `prefijo_xmlid`, todos cumpliendo `^[a-z0-9_]+\.[a-z0-9_]+$`.

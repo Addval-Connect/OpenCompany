@@ -5,7 +5,7 @@ description: >-
   veredicto cargable usando load() en el orden del grafo depende_de, verifica con read-back, y
   ejecuta los casos de QA de cada flujo. ÚNICO punto de escritura del sistema. Ejecuta los pasos
   en orden.
-allowed-tools: odoo_jsonrpc file_read file_modify fs_search sandboxed_python javascript_code write_todos
+allowed-tools: odoo_jsonrpc data process_manager write_todos
 metadata:
   agente: CARGA
   tipo: MIX
@@ -47,7 +47,7 @@ lo creas y lo escribes **solo tú**: a sus listas **agregas** entradas sin borra
    por archivo, `cargable` | `con_errores` | `detenido`. **Solo cargas los `cargable`.** Un archivo
    `con_errores` o `detenido` no se carga ni parcialmente. Si un flujo no tiene veredictos, sus
    archivos son un pendiente para ese flujo — no los cargues.
-2. **Entorno confirmado.** `file_read` de `03-blueprint/proyecto.yaml` → `entorno_objetivo`,
+2. **Entorno confirmado.** `data` (read) de `03-blueprint/proyecto.yaml` → `entorno_objetivo`,
    `base_datos` y `rama`. Si `entorno_objetivo` es `production` y la misión no trae confirmación
    explícita de **base de datos y rama**, no escribas: pendiente `entorno_produccion` y devuelve el
    control. "Adelante" no es una confirmación de entorno.
@@ -126,7 +126,7 @@ Registra cada objeto en `08-carga/bitacora-<modelo>.jsonl` igual que una carga.
 `E300` en cascada. El orden lo da el grafo de dependencias de los blueprints de **todos** los flujos
 (`depende_de` y `requiere_de`); deriva el plan y déjalo escrito antes de la primera escritura.
 
-1. `fs_search` sobre `06-completadas/` para la lista real de archivos. Crúzala con los veredictos
+1. `data` (search) sobre `06-completadas/` para la lista real de archivos. Crúzala con los veredictos
    `cargable` de los `07-validacion/veredicto-<flujo>.json`: **solo entra al plan lo que está en
    ambas.**
 2. **Un mismo modelo en dos archivos es una colisión, no dos cargas.** Si `res.partner.csv` y
@@ -140,11 +140,11 @@ Registra cada objeto en `08-carga/bitacora-<modelo>.jsonl` igual que una carga.
    del archivo que **produce** esos xmlids. Orden topológico: primero los que no referencian a nadie.
    Un ciclo (A referencia a B y B a A) no se resuelve reordenando: carga A sin la columna que apunta
    a B, carga B, y vuelve a cargar A completo — `load()` actualiza, no duplica.
-4. Un solo `sandboxed_python` te da el grafo entero sin arrastrar los CSVs al historial: abre cada
-   ruta de la lista, y devuelve por archivo solo `{modelo, campos, ids, refs}` — `refs` son los
-   valores no vacíos de las columnas `<campo>/id`. El parser está en
-   `sandbox-de-codigo-en-opencompany`; los `fields` completos los devuelve el mismo parser cuando
-   cargues ese archivo.
+4. Un solo script con `process_manager` te da el grafo entero sin arrastrar los CSVs al historial:
+   escribe el script en el workspace con `data`, corralo (`python3`, salida por stdout) y que devuelva
+   por archivo solo `{modelo, campos, ids, refs}` — `refs` son los valores no vacíos de las columnas
+   `<campo>/id`. El parser está en `scripts-verificados-de-carga-odoo`; los `fields` completos los
+   devuelve el mismo parser cuando cargues ese archivo.
 
 Escribe el plan en `08-carga/plan-carga.json`: orden, archivo, modelo, filas, dependencias, y las
 colisiones detectadas. Es lo que hace auditable la carga y lo que te permite reanudarla.
@@ -242,26 +242,23 @@ primero tiene pendientes para el consultor, el segundo no.
 
 Por archivo:
 
-1. `file_read` del `.meta.json` (es chico: catálogos, referencias, obligatorios). **El CSV no lo leas
-   con `file_read` para convertirlo** — ver el punto 2.
-2. **Convierte el CSV a `fields` + `data` con el script S1 de `scripts-verificados-de-carga-odoo`**
-   (`sandboxed_python` + `capabilities: ["workspace_read"]`, el único sandbox que puede abrir el
-   archivo). **Copia el script y cambia solo sus tres primeras líneas** (`ARCHIVO`, `MODELO`,
-   `PREFIJO`). No lo reescribas ni escribas uno propio: el que está en esa skill se verificó contra el
-   intérprete real, y volver a derivar la mecánica es de donde salió la mayor parte del costo de las
-   corridas anteriores.
+1. `data` (read) del `.meta.json` (es chico: catálogos, referencias, obligatorios). **El CSV no lo leas
+   para convertirlo a mano** — ver el punto 2.
+2. **Convierte el CSV a `fields` + `data` con el script S1 de `scripts-verificados-de-carga-odoo`**,
+   ejecutado con **`process_manager`** (python3 real). **Copia el script y cambia solo sus cuatro
+   primeras líneas** (`RAIZ`, `ARCHIVO`, `MODELO`, `PREFIJO`). No lo reescribas ni escribas uno
+   propio: el que está en esa skill se verificó contra el intérprete real, y volver a derivar la
+   mecánica es de donde salió la mayor parte del costo de las corridas anteriores.
 
-   El nombre del archivo es el que devolvió `fs_search`, tal cual — con punto o con guion bajo. Un
+   El nombre del archivo es el que devolvió `data` (search), tal cual — con punto o con guion bajo. Un
    nombre "normalizado" a mano es un `file not found` y dos iteraciones perdidas.
 
    Requisito previo, una vez por modelo: `fields_get` guardado en
    `08-carga/campos-<modelo>.json`. El script lo lee de ahí en vez de llamar a Odoo, así que la
    introspección se paga una vez y no una vez por lote.
 
-   **`javascript_code` no sirve para este paso**: su sandbox no tiene `require` ni `fs`, y su
-   `input_data` no recibe archivos. `require('fs')` / `require('csv-parse')` fallan con
-   `require is not defined`; si ves ese error, no cambies de módulo — cambiaste de tool demasiado
-   tarde. `python_code` tampoco: prohíbe `import` y no tiene `csv`.
+   No improvises la conversión en el prompt ni pruebes sandboxes alternativos: ya no los hay. La
+   conversión es código, no criterio — va en el script, y el script va por `process_manager`.
 3. **Lee la salida del script antes de llamar a Odoo.** Trae `fields` y `data` listos, y además cuatro
    cosas que son tu trabajo, no del script:
 
@@ -286,8 +283,8 @@ Por archivo:
    `scripts-verificados-de-carga-odoo`. Consúltalas cuando un rechazo no cuadre, no para reimplementarlas.
 4. Trocea en lotes de **200 a 500 filas**. Más grande, un error obliga a repetir todo el archivo; más
    chico, multiplica las llamadas y cada tool-result se queda en el historial encareciendo cada
-   iteración siguiente. Trocea **dentro** del `sandboxed_python` (`data[0:300]`) y devuelve solo el
-   lote que vas a cargar: así el archivo completo nunca entra al historial.
+   iteración siguiente. Trocea **dentro del script** (recorta `data` antes del `print` final) y haz
+   que imprima solo el lote que vas a cargar: así el archivo completo nunca entra al historial.
 5. Por lote:
 
 ```
@@ -529,9 +526,8 @@ está en `estado-carga.json` y la siguiente corrida sigue desde ahí.
 - No escribas en producción sin confirmación explícita de base de datos y rama.
 - No ejecutes el QA en producción.
 - No uses `create` en bucle donde va `load()`: pierdes el xmlid y la idempotencia.
-- No intentes leer un CSV con `require('fs')`, `require('csv-parse')` ni `import csv`: ninguno existe
-  en ningún sandbox. Un `require is not defined` no se arregla probando otro módulo — se arregla
-  usando `sandboxed_python` con `capabilities: ["workspace_read"]`.
+- No conviertas un CSV a `fields`/`data` "a mano" leyéndolo con `data` y escribiendo el JSON tú:
+  la conversión es código, no criterio — corre el script S1 con `process_manager`.
 - No adivines nombres de campo. Un `Invalid field ...` se resuelve con `fields_get` sobre ese modelo
   (`E110`), no probando una segunda variante: dos rechazos seguidos por campo inexistente significan
   que no hiciste la introspección.
