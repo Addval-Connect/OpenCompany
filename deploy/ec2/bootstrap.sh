@@ -303,8 +303,8 @@ fi
 # (no runtime state lives inside them — DATA_DIR and .venv are elsewhere),
 # so wiping them here is always safe. client/dist is likewise a pure build
 # artifact; pruning it stops hashed-asset accumulation.
-say "Pruning tarball-owned trees (skills, nodes, client/dist)"
-rm -rf "$APP_DIR/server/skills" "$APP_DIR/server/nodes" "$APP_DIR/client/dist"
+say "Pruning tarball-owned trees (skills, nodes, client/dist, retired nodejs sidecar)"
+rm -rf "$APP_DIR/server/skills" "$APP_DIR/server/nodes" "$APP_DIR/client/dist" "$APP_DIR/server/nodejs"
 
 say "Unpacking $(basename "$TARBALL")"
 tar xzf "$TARBALL" -C "$APP_DIR"
@@ -400,17 +400,6 @@ say "Syncing Python dependencies"
 # dependency, so it arrives as a transitive of a main dep.
 sudo -u "$APP_USER" env HOME="$APP_USER_HOME" \
     uv sync --no-dev --project "$APP_DIR/server"
-
-# The code sidecar's bundle is prebuilt and shipped; only its runtime
-# dependency (express) is installed here. Dev deps (esbuild/tsx/typescript)
-# stay off the box.
-if [[ -f "$APP_DIR/server/nodejs/dist/index.js" ]]; then
-    say "Installing sidecar runtime deps"
-    sudo -u "$APP_USER" env HOME="$APP_USER_HOME" \
-        npm install --omit=dev --no-audit --no-fund --prefix "$APP_DIR/server/nodejs" >/dev/null
-else
-    echo "WARNING: server/nodejs/dist/index.js missing -- Code nodes will fail" >&2
-fi
 
 # ---------------------------------------------------------------------------
 # 7. supervisor

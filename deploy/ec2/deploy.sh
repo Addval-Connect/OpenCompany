@@ -86,17 +86,16 @@ say "Target host ${HOST}"
 # 2. build locally
 # ---------------------------------------------------------------------------
 if [[ $SKIP_BUILD -eq 0 ]]; then
-    say "Building client + sidecar locally"
+    say "Building client locally"
     bun run build
 fi
 [[ -f client/dist/index.html ]] || { echo "client/dist missing -- run bun run build" >&2; exit 1; }
-[[ -f server/nodejs/dist/index.js ]] || { echo "server/nodejs/dist missing -- run bun run build" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 # 3. package
 # ---------------------------------------------------------------------------
-# Ships: backend source + lockfile, the prebuilt SPA, the prebuilt sidecar
-# bundle, the git-tracked example workflows (core.paths reads them from
+# Ships: backend source + lockfile, the prebuilt SPA, the git-tracked example
+# workflows (core.paths reads them from
 # <repo>/.opencompany/workflows, NOT from DATA_DIR), .env.template (the
 # authoritative port source read by bootstrap), and deploy/ec2 itself.
 # Excludes tests, caches, and every venv/node_modules -- the server rebuilds
