@@ -1,5 +1,8 @@
 # Reusable validation workflow. Called by ci.yml and release.yml.
 # Four jobs: client build + lint, Python lint, backend tests, cross-OS smoke test.
+# macOS/Windows runners disabled (2026-10-20) — the EC2 deploy only ships
+# the ubuntu build; re-enable by restoring the full smoke_os default:
+#   default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
 
 name: Predeploy
 
@@ -7,13 +10,11 @@ on:
   workflow_call:
     inputs:
       # JSON array of runner OS labels for the cross-OS Build + start
-      # smoke. Default: the full matrix (ci.yml / release.yml keep the
-      # current behaviour). Consumers that target ONE platform pass a
-      # single-entry array — the EC2 deploy only ships the ubuntu build,
-      # so burning windows/macos runners on it buys nothing.
+      # smoke. Ubuntu-only until further notice — macos/windows runners
+      # burned minutes on smoke tests that never fed the EC2 deploy.
       smoke_os:
         type: string
-        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+        default: '["ubuntu-latest"]'
 
 permissions:
   contents: read
