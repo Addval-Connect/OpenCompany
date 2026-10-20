@@ -113,25 +113,33 @@ class OdooJsonRpcToolInput(BaseModel):
     """
 
     # ---- Per-call instance override (optional, all-or-nothing) ---------- #
-    host: Optional[str] = Field(
-        default=None,
+    # Plain `str` with an empty-string default, NOT `Optional[str] = None`.
+    # The node treats "" as "not provided", and the schema shape matters:
+    # Optional fields render as {"anyOf": [{string}, {null}]} — a shape some
+    # model-serving stacks' tool-call parsers mishandle. Observed 2026-10-20
+    # with z-ai/glm-5.3-flash via OpenRouter: the model's tool_use silently
+    # lost the four nullable connection keys (and the model itself saw its
+    # own call without them). Plain strings give the parser nothing to trip
+    # on.
+    host: str = Field(
+        default="",
         description=(
             "Override: Odoo instance hostname WITHOUT scheme or path "
             "(e.g. my-db.odoo.com). Pass ONLY together with db, username "
-            "and api_key — omit all four to use the instance configured "
-            "on the node."
+            "and api_key — omit all four (empty) to use the instance "
+            "configured on the node."
         ),
     )
-    db: Optional[str] = Field(
-        default=None,
+    db: str = Field(
+        default="",
         description="Override: Odoo database name of the target instance.",
     )
-    username: Optional[str] = Field(
-        default=None,
+    username: str = Field(
+        default="",
         description="Override: Odoo login of the target instance.",
     )
-    api_key: Optional[str] = Field(
-        default=None,
+    api_key: str = Field(
+        default="",
         description=(
             "Override: Odoo API key / password of the target instance "
             "(used for JSON-RPC login)."
@@ -168,8 +176,8 @@ class OdooJsonRpcToolInput(BaseModel):
             "[['default_code','=','ABC']]. Omit for [] (all records)."
         ),
     )
-    fields: Optional[List[str]] = Field(
-        default=None,
+    fields: List[str] = Field(
+        default_factory=list,
         description=(
             "Field names to return for read/search_read. For load, the column "
             "header of the import: the first entry must be 'id' (the xmlid "
@@ -191,8 +199,9 @@ class OdooJsonRpcToolInput(BaseModel):
             "string, including numbers and booleans ('1'/'0')."
         ),
     )
-    limit: Optional[int] = Field(
-        default=None, ge=1, le=1000, description="Max rows for search/search_read."
+    limit: int = Field(
+        default=0, ge=0, le=1000,
+        description="Max rows for search/search_read. 0 = no explicit limit.",
     )
     offset: Optional[int] = Field(
         default=None, ge=0, description="Row offset for pagination."
@@ -371,9 +380,9 @@ class OdooJsonRpcNode(ToolNode):
         domain = args.domain or []
         kwargs: Dict[str, Any] = dict(args.kwargs or {})
         if args.method == "search_read":
-            if args.fields is not None:
+            if args.fields:
                 kwargs["fields"] = args.fields
-            if args.limit is not None:
+            if args.limit:
                 kwargs["limit"] = args.limit
             if args.offset is not None:
                 kwargs["offset"] = args.offset
@@ -381,7 +390,7 @@ class OdooJsonRpcNode(ToolNode):
                 kwargs["order"] = args.order
             return base + ["search_read", [domain], kwargs]
         if args.method == "search":
-            if args.limit is not None:
+            if args.limit:
                 kwargs["limit"] = args.limit
             if args.offset is not None:
                 kwargs["offset"] = args.offset
@@ -391,7 +400,7 @@ class OdooJsonRpcNode(ToolNode):
         if args.method == "search_count":
             return base + ["search_count", [domain], kwargs]
         if args.method == "read":
-            if args.fields is not None:
+            if args.fields:
                 kwargs["fields"] = args.fields
             return base + ["read", [args.ids], kwargs]
         if args.method == "create":
