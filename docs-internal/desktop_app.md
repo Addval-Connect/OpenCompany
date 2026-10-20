@@ -40,7 +40,7 @@ OpenCompany.app / OpenCompany/ / AppImage
       package.json                package.json, .opencompany/workflows/,
       .opencompany/workflows/     server/uv.lock, server/pyproject.toml
       client/dist/
-      server/  (+ nodejs/dist/index.js — the sidecar's own `bun build --target=bun`, dependencies inlined)
+      server/
     runtime/
       uv/uv[.exe]                 pinned uv (runtimes.json)
       python/                     python-build-standalone install_only_stripped
@@ -119,19 +119,16 @@ bun run gen-icons && bun run dist
 `desktop/scripts/stage.ts` takes the file list from `bun pm pack --dry-run` (the
 root `files` allowlist, i.e. what the published tarball ships), drops what a bundle
 never needs (CLI, install scripts, client sources, backend tests) and
-force-includes `server/uv.lock`. It builds the JS executor sidecar with the
-sidecar package's own `bun run build` (`bun build --target=bun`, a self-contained
-bundle with `express` inlined) and copies `dist/index.js` — no re-bundle of its
-own. `desktop/scripts/fetch-runtimes.ts` downloads the versions pinned
+force-includes `server/uv.lock`. `desktop/scripts/fetch-runtimes.ts` downloads the
+versions pinned
 in `runtimes.json`, verifies each against the upstream checksum manifest
 (`.sha256` sidecars for uv, `SHA256SUMS` for python-build-standalone,
 `SHASUMS256.txt` for bun), fetches bun's `LICENSE.md` from the bun repo (the
 release zip carries no license file; electron-builder ships it as
 `licenses/Bun-LICENSE.md`), caches in `vendor/`, prunes stale runtime dirs (a
 leftover `node/` from an older stage), and extracts into
-`stage/runtime/<os>-<arch>/`. The staged-tree invariants assert bun is present,
-no `node/` dir exists, and the sidecar boots on the bundled bun with Node
-stripped from PATH. Extraction uses the platform `tar`; on Windows
+`stage/runtime/<os>-<arch>/`. The staged-tree invariants assert bun is present
+and no `node/` dir exists. Extraction uses the platform `tar`; on Windows
 the System32 bsdtar is used explicitly because Git's GNU tar cannot read
 zips.
 
@@ -182,7 +179,7 @@ bundled Python. Then remove the macOS notify-only branch in
 - `desktop-release.yml` on `v*.*.*` tags (and manual dispatch): a `prepare`
   job drafts the GitHub Release from the annotated tag's message (title +
   notes) so the three legs upload into one draft; the matrix
-  windows-latest / macos-14 / ubuntu-22.04 builds the client and sidecar
+  windows-latest / macos-14 / ubuntu-22.04 builds the client
   with the repo toolchain, syncs the version and refuses to continue when it
   differs from the tag (the build ships the committed desktop version, not
   the tag's), stages, runs typecheck + unit + invariant tests, then

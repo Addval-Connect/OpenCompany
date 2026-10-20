@@ -112,12 +112,8 @@ match its doc here, and each doc must still describe what the code does.
 - [File Read (`fileRead`)](./code_fs_process/fileRead.md)
 - [FS Search (`fsSearch`)](./code_fs_process/fsSearch.md)
 - [Gallery (`gallery`)](./code_fs_process/gallery.md)
-- [JavaScript Executor (`javascriptExecutor`)](./code_fs_process/javascriptExecutor.md)
-- [Monty Executor (`montyExecutor`)](./code_fs_process/montyExecutor.md)
 - [Process Manager (`processManager`)](./code_fs_process/processManager.md)
-- [Python Executor (`pythonExecutor`)](./code_fs_process/pythonExecutor.md)
 - [Shell (`shell`)](./code_fs_process/shell.md)
-- [TypeScript Executor (`typescriptExecutor`)](./code_fs_process/typescriptExecutor.md)
 
 ### discord
 
@@ -195,9 +191,9 @@ match its doc here, and each doc must still describe what the code does.
 - [Task Management Agent (`task_agent`)](./specialized_agents/task_agent.md)
 - [Tool Agent (`tool_agent`)](./specialized_agents/tool_agent.md)
 - [Travel Agent (`travel_agent`)](./specialized_agents/travel_agent.md)
+- [Cloud Tool (`vertexCloudTool`)](./specialized_agents/vertexCloudTool.md)
 - [Vertex Agent Admin (`vertex_agent_admin`)](./specialized_agents/vertex_agent_admin.md)
 - [Vertex Agent (`vertex_managed_agent`)](./specialized_agents/vertex_managed_agent.md)
-- [Cloud Tool (`vertexCloudTool`)](./specialized_agents/vertexCloudTool.md)
 - [Web Control Agent (`web_agent`)](./specialized_agents/web_agent.md)
 
 ### stripe

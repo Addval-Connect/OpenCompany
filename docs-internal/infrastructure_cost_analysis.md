@@ -14,11 +14,11 @@ namespace se inicia:
 | Componente | Cantidad | RAM estimada |
 |---|---|---|
 | `TemporalWorkerManager` (machina-tasks) | 1 | ~60–100 MB |
-| `TemporalWorkerPool` workers (9 colas) | 9 | ~15–25 MB c/u |
+| `TemporalWorkerPool` workers (8 colas) | 8 | ~15–25 MB c/u |
 | **Total por namespace (idle)** | — | **~200–330 MB** |
 
 **Colas del pool:** `machina-default` (20 slots), `rest-api` (50), `ai-heavy` (4),
-`code-exec` (10), `triggers-poll` (100), `triggers-event` (100), `android` (10),
+`triggers-poll` (100), `triggers-event` (100), `android` (10),
 `browser` (4), `messaging` (20).
 
 ---

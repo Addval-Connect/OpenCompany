@@ -315,8 +315,6 @@ pydantic==2.12.5
     #   xdk
 pydantic-core==2.41.5
     # via pydantic
-pydantic-monty==0.0.18
-    # via opencompany-server
 pydantic-settings==2.15.0
     # via
     #   crawlee
@@ -452,7 +450,6 @@ typing-extensions==4.16.0
     #   portkey-ai
     #   pydantic
     #   pydantic-core
-    #   pydantic-monty
     #   referencing
     #   sqlalchemy
     #   sqlmodel

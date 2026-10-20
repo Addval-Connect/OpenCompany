@@ -128,14 +128,14 @@ def test_frozen_dispatch_never_reads_mutable_settings():
         side_effect=AssertionError("workflow dispatch read live Settings"),
     ):
         dispatch = workflow_instance._resolve_dispatch(
-            "pythonExecutor",
+            "httpRequest",
             routing_snapshot=frozen,
         )
 
     assert dispatch == {
         "kind": "activity",
-        "name": "node.pythonExecutor.v1",
-        "queue": "code-exec",
+        "name": "node.httpRequest.v1",
+        "queue": "rest-api",
     }
 
 

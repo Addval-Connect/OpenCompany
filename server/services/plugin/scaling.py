@@ -23,7 +23,6 @@ class TaskQueue:
     DEFAULT = "machina-default"  # catch-all
     REST_API = "rest-api"  # lightweight HTTP calls (gmail, brave, twitter)
     AI_HEAVY = "ai-heavy"  # long-running LLM + agent loops
-    CODE_EXEC = "code-exec"  # python/js/ts sandboxed execution
     TRIGGERS_POLL = "triggers-poll"  # polling triggers (long-lived)
     TRIGGERS_EVENT = "triggers-event"  # event-waiter triggers (long-lived)
     ANDROID = "android"  # ADB / relay ops
@@ -35,7 +34,6 @@ class TaskQueue:
             DEFAULT,
             REST_API,
             AI_HEAVY,
-            CODE_EXEC,
             TRIGGERS_POLL,
             TRIGGERS_EVENT,
             ANDROID,

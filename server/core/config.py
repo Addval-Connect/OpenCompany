@@ -187,7 +187,7 @@ class Settings(BaseSettings):
     # per-type activities land on their specialised pool worker.
     #
     # Wave 16.4: default flipped to True — per-queue routing is the
-    # production default (LLM / browser / code-exec / REST workloads
+    # production default (LLM / browser / REST workloads
     # get isolated slot pools instead of sharing one 100-slot queue).
     # Rollback: TEMPORAL_WORKER_POOL_ENABLED=false + restart — the pool
     # stops and every activity routes back to the single manager worker
@@ -362,10 +362,6 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     google_ai_api_key: Optional[str] = Field(default=None, env="GOOGLE_AI_API_KEY")
-
-    # JS executor sidecar settings live in the plugin: nodes/code/_runtime.py
-    # and _nodejs.py read the NODEJS_EXECUTOR_* env vars directly
-    # (plugin-owned config, same as the WhatsApp runtime).
 
     # AI Proxy Configuration (Ollama-style proxy)
     ai_proxy_default_port: int = Field(default=11434, env="AI_PROXY_DEFAULT_PORT")

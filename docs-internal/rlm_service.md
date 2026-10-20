@@ -39,10 +39,10 @@ OpenCompany Node Execution System
                              |
                       input-tools handle
                      /       |        \         \
-  [openaiChatModel]  [pythonExecutor]  [braveSearch]  [simpleMemory]
-  (small LM,          (tool node,       (tool node,    (Memory is an
-   depth>=1)           bridged to        bridged to     ordinary tool)
-                       custom_tool)      custom_tool)
+  [openaiChatModel]  [httpRequest]  [braveSearch]  [simpleMemory]
+  (small LM,          (tool node,     (tool node,    (Memory is an
+   depth>=1)           bridged to      bridged to     ordinary tool)
+                       custom_tool)    custom_tool)
 
 
 Execution Flow
@@ -166,7 +166,6 @@ Bridges non-agent, non-chat-model tool nodes into RLM `custom_tools` dict format
 
 | Tool Node | Bridged Name | REPL Usage |
 |-----------|-------------|------------|
-| pythonExecutor | python_executor | `python_executor(code="output = 2+2")` |
 | httpRequest | http_request | `http_request(url="...", method="GET")` |
 | duckduckgoSearch | duckduckgo_search | `duckduckgo_search(query="...")` |
 | braveSearch | brave_search | `brave_search(query="...")` |

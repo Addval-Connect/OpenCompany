@@ -9,8 +9,8 @@
 # cert for macOS) plus flipping the mac flags in desktop/electron-builder.yml.
 #
 # Flow: prepare drafts the GitHub Release from the annotated tag's message
-# (first line = title, rest = notes) -> each matrix leg builds the client +
-# sidecar with the repo toolchain, checks the synced version against the tag,
+# (first line = title, rest = notes) -> each matrix leg builds the client
+# with the repo toolchain, checks the synced version against the tag,
 # stages the app-root with the pinned runtimes for its target, runs the
 # invariant test and lets electron-builder upload into that one draft -> the
 # finalize job publishes the draft once every leg is green.
@@ -99,12 +99,10 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build client and JS executor sidecar
+      - name: Build client
         # Targeted builds only: `bun run build` would also uv-sync a server
         # venv and download the Temporal binary, neither of which ships.
-        run: |
-          bun run --filter react-flow-client build
-          bun run --filter opencompany-nodejs-executor build
+        run: bun run --filter react-flow-client build
 
       - name: Install desktop dependencies
         working-directory: desktop

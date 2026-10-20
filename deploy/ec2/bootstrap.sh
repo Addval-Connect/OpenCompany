@@ -60,8 +60,8 @@ apt-get update -qq
 apt-get install -y -qq nginx supervisor curl ca-certificates git openssl unzip \
     certbot python3-certbot-nginx >/dev/null
 
-# Node 22 -- required by the on-demand JS/TS code-execution sidecar
-# (server/nodejs), which the backend spawns itself. No Ubuntu LTS ships anything
+# Node 22 -- runtime for bun's JS toolchain (vite/vitest/eslint) and for
+# npm-installed plugin CLIs. No Ubuntu LTS ships anything
 # recent enough (22.04 has Node 12, 24.04 has 18), so NodeSource is not optional.
 #
 # The floor is 22, not a pin: the guard below skips the install when the host

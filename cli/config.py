@@ -92,9 +92,9 @@ class Config:
         # ``temporal_ui_port`` are bound by the same ``temporal server
         # start-dev`` process, so killing one kills both — listing both
         # only matters when cleaning up stale orphans on either port.
-        # Plugin-owned daemons (WhatsApp's edgymeow, the Node.js executor
-        # sidecar) are NOT listed: the backend supervises them (tree-kill
-        # on shutdown), and the CLI carries no plugin knowledge. A
+        # Plugin-owned daemons (WhatsApp's edgymeow) are NOT listed: the
+        # backend supervises them (tree-kill on shutdown), and the CLI
+        # carries no plugin knowledge. A
         # crashed-backend orphan surfaces as a bind error on the plugin's
         # next start, which the plugin reports.
         return [

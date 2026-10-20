@@ -40,10 +40,8 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build client and JS executor sidecar
-        run: |
-          bun run --filter react-flow-client build
-          bun run --filter opencompany-nodejs-executor build
+      - name: Build client
+        run: bun run --filter react-flow-client build
 
       - name: Provision a backend venv for the smoke test
         working-directory: server

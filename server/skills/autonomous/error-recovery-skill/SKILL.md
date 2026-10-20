@@ -1,7 +1,7 @@
 ---
 name: error-recovery-skill
 description: Handle errors gracefully with retry strategies and fallback patterns
-allowed-tools: "delegate_to_ai_agent python_executor check_delegated_tasks"
+allowed-tools: "delegate_to_ai_agent process_manager check_delegated_tasks"
 metadata:
   author: opencompany
   version: "1.0"

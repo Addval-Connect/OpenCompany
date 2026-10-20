@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Build client + sidecar (the same build deploy.sh runs)
+      - name: Build client (the same build deploy.sh runs)
         run: bun install --frozen-lockfile && bun run build
       - name: Package artifact (deploy.sh parity)
         run: |

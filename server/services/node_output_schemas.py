@@ -109,15 +109,6 @@ class SimpleMemoryOutput(_OutputBase):
 
 
 # ---------------------------------------------------------------------------
-# Code executors
-# ---------------------------------------------------------------------------
-
-
-class CodeExecutorOutput(_OutputBase):
-    output: Optional[Any] = None
-
-
-# ---------------------------------------------------------------------------
 # HTTP / network
 # ---------------------------------------------------------------------------
 
@@ -689,8 +680,6 @@ _CHAT_MODEL_TYPES = [
 
 _SEARCH_TYPES = ["braveSearch", "serperSearch", "perplexitySearch"]
 
-_CODE_EXECUTOR_TYPES = ["pythonExecutor", "javascriptExecutor", "typescriptExecutor"]
-
 
 NODE_OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
     # workflow / triggers
@@ -703,8 +692,6 @@ NODE_OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
     **{t: AIAgentOutput for t in _AGENT_TYPES},
     **{t: AIAgentOutput for t in _CHAT_MODEL_TYPES},
     "simpleMemory": SimpleMemoryOutput,
-    # code
-    **{t: CodeExecutorOutput for t in _CODE_EXECUTOR_TYPES},
     # network
     "httpRequest": HttpRequestOutput,
     # telegram entries are registered by nodes/telegram/__init__.py via

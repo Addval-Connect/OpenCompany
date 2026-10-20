@@ -215,9 +215,9 @@ async def _dispatch_tool(tool_name: str, tool_args: Dict[str, Any], config: Dict
 
     # Wave 11.E.2: every per-type legacy dispatch branch retired —
     # the plugin fast-path above intercepts every registered plugin
-    # (httpRequest / pythonExecutor / javascriptExecutor / currentTime
-    # / filesystem / writeTodos / processManager / taskManager /
-    # browser / email{Send,Read} / proxy{Request,Status,Config}).
+    # (httpRequest / currentTime / filesystem / writeTodos /
+    # processManager / taskManager / browser / email{Send,Read} /
+    # proxy{Request,Status,Config}).
     # Branches below are only for built-ins without a plugin
     # representation or cases needing special argument translation.
 

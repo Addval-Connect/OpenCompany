@@ -42,7 +42,6 @@ from cli.commands import build
 # Workspace package names. These are the stable IDs declared in each
 # `package.json` — paths are resolved via the `workspace_members`
 # fixture so tests don't care where the workspace lives on disk.
-SIDECAR_PKG_NAME = "opencompany-nodejs-executor"
 CLIENT_PKG_NAME = "react-flow-client"
 
 
@@ -51,18 +50,8 @@ def _load_pkg_json(workspace_path: Path) -> dict:
 
 
 @pytest.fixture(scope="module")
-def sidecar_dir(workspace_members: dict[str, Path]) -> Path:
-    return workspace_members[SIDECAR_PKG_NAME]
-
-
-@pytest.fixture(scope="module")
 def client_dir(workspace_members: dict[str, Path]) -> Path:
     return workspace_members[CLIENT_PKG_NAME]
-
-
-@pytest.fixture(scope="module")
-def sidecar_pkg(sidecar_dir: Path) -> dict:
-    return _load_pkg_json(sidecar_dir)
 
 
 @pytest.fixture(scope="module")
@@ -98,87 +87,6 @@ def release_yml(root: Path) -> dict:
 @pytest.fixture(scope="module")
 def preinstall_js_src(root: Path) -> str:
     return (root / "scripts" / "preinstall.js").read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# JS executor sidecar (runs on bun) — package.json & .gitignore
-# ---------------------------------------------------------------------------
-
-
-def test_sidecar_start_runs_compiled_bundle_on_bun(sidecar_pkg: dict):
-    """``start`` runs the ``bun build`` output on bun, not interpreted
-    TypeScript. The bundle is what ``nodes/code/_runtime.py`` spawns
-    (``[bun, dist/index.js]``); the runtime is bun, never node.
-    """
-    start = sidecar_pkg["scripts"]["start"]
-    assert start == "bun dist/index.js", f"sidecar start must be `bun dist/index.js`, got {start!r}"
-    assert "node " not in start and "tsx" not in start
-
-
-def test_sidecar_dev_uses_bun_watch(sidecar_pkg: dict):
-    """``dev`` runs the TS source directly under ``bun --watch`` — bun
-    executes TypeScript natively, so no loader (tsx) is needed."""
-    dev = sidecar_pkg["scripts"]["dev"]
-    assert dev.startswith("bun --watch") and "src/index.ts" in dev
-    assert "tsx" not in dev
-
-
-@pytest.mark.parametrize(
-    "flag",
-    [
-        "bun build",
-        "src/index.ts",
-        "--target=bun",
-        "--outfile=dist/index.js",
-    ],
-)
-def test_sidecar_build_script_carries_required_bun_build_flag(sidecar_pkg: dict, flag: str):
-    """Each part of the sidecar build script is load-bearing.
-
-    - ``bun build`` — bun's bundler; no esbuild dependency.
-    - ``--target=bun`` — self-contained bundle with express INLINED, so
-      the desktop stage copies one file and no ``node_modules`` (bun's
-      isolated linker would otherwise ship a dangling express symlink).
-    - ``--outfile=dist/index.js`` — ``start`` and ``main`` read this
-      exact path; mismatch breaks the runtime.
-    """
-    cmd = sidecar_pkg["scripts"]["build"]
-    assert flag in cmd, f"sidecar build script missing {flag!r}: {cmd}"
-    assert "esbuild" not in cmd and "--packages=external" not in cmd
-
-
-def test_sidecar_engines_declare_bun_not_node(sidecar_pkg: dict):
-    """The sidecar's runtime is bun; ``engines`` must say so and must not
-    reintroduce a Node floor."""
-    engines = sidecar_pkg.get("engines", {})
-    assert "bun" in engines, f"engines must declare bun, got {engines!r}"
-    assert "node" not in engines
-
-
-def test_sidecar_main_field_points_at_compiled_output(sidecar_pkg: dict):
-    """``main`` is what ``import 'opencompany-nodejs-executor'`` resolves
-    to — the compiled bundle, not the TS source.
-    """
-    assert sidecar_pkg.get("main") == "dist/index.js"
-
-
-def test_sidecar_has_no_node_toolchain_dependencies(sidecar_pkg: dict):
-    """bun bundles and runs the sidecar; esbuild and tsx are gone."""
-    deps = {**sidecar_pkg.get("dependencies", {}), **sidecar_pkg.get("devDependencies", {})}
-    assert "esbuild" not in deps
-    assert "tsx" not in deps
-
-
-def test_sidecar_dist_is_gitignored(sidecar_dir: Path):
-    """``dist/`` is build output and must not be tracked. Tracking it
-    triggers noisy diffs every time the bundle is regenerated.
-    """
-    gitignore = (sidecar_dir / ".gitignore").read_text(encoding="utf-8")
-    lines = {line.strip() for line in gitignore.splitlines()}
-    assert {
-        "dist/",
-        "dist",
-    } & lines, f"sidecar .gitignore must list dist/, got:\n{gitignore}"
 
 
 # ---------------------------------------------------------------------------
@@ -571,9 +479,10 @@ def test_root_manifest_declares_bun_as_the_dev_package_manager(root_pkg: dict):
         "the version-ranged override keys (e.g. 'esbuild@<0.28.1') must be "
         "preserved verbatim"
     )
-    assert root_pkg.get("workspaces") == ["client", "server/nodejs"], (
-        "workspaces must list both member PATHS — pnpm-workspace.yaml is gone "
-        "and bun reads only this array"
+    assert root_pkg.get("workspaces") == ["client"], (
+        "workspaces must list the member PATHS — pnpm-workspace.yaml is gone "
+        "and bun reads only this array (the nodejs-executor sidecar was "
+        "retired; script execution goes through process_manager)"
     )
 
 
@@ -597,10 +506,9 @@ def test_root_scripts_never_hop_through_npm_or_node(root_pkg: dict):
 
 
 def test_root_package_declares_bun_engine_and_no_express(root_pkg: dict):
-    """``engines`` names bun, the runtime of the launcher and the sidecar;
-    the root ``express`` dependency (once a hack so the npm-tarball install
-    could run the sidecar's external express) is gone — the sidecar bundle
-    inlines it."""
+    """``engines`` names bun, the runtime of the launcher; the root
+    ``express`` dependency (once a hack so the npm-tarball install could
+    run the retired sidecar's external express) is gone."""
     engines = root_pkg.get("engines", {})
     assert "bun" in engines and "node" not in engines
     assert "express" not in root_pkg.get("dependencies", {})

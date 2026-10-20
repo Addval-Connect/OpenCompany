@@ -82,10 +82,10 @@ class TestTaskQueueCoverage:
         """Sanity: DEFAULT exists in TaskQueue.ALL and the frozenset is
         the single source the other invariants key off."""
         assert TaskQueue.DEFAULT in TaskQueue.ALL
-        assert len(TaskQueue.ALL) >= 9, (
-            "TaskQueue.ALL shrank below the 9 queues Wave 16 verified — "
-            "update docs-internal/ARCHIVE/TEMPORAL_CLEANUP_AND_RESILIENCE_PLAN.md "
-            "if a queue was deliberately removed."
+        assert len(TaskQueue.ALL) >= 8, (
+            "TaskQueue.ALL shrank below the 8 queues currently verified — "
+            "the code-exec queue was removed with the sandboxed executors "
+            "(2026-10); update this floor if another queue is deliberately removed."
         )
 
 
