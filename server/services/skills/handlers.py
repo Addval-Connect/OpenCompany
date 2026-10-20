@@ -19,7 +19,7 @@ untouched — frontend handlers keep working without modification.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
 
@@ -263,6 +263,55 @@ async def handle_lookup_skill_metadata(
     return {"success": True, "skills": skills}
 
 
+def _skill_folder_of(skill_loader: Any, metadata: Any) -> Optional[str]:
+    """Top-level folder name (e.g. ``assistant``) a filesystem skill lives in.
+
+    ``metadata.path`` points at the skill's own directory; the folder shown
+    in the MasterSkillEditor dropdown is the first path segment relative to
+    one of the loader's skill roots (``server/skills``, ``.machina/skills``,
+    ``.opencompany/skills``). Returns None for skills sitting directly in a
+    root or for anything outside the scanned roots.
+    """
+    if metadata.path is None:
+        return None
+    for skill_dir in skill_loader._skill_dirs:
+        try:
+            rel = metadata.path.relative_to(skill_dir)
+        except ValueError:
+            continue
+        return rel.parts[0] if len(rel.parts) > 1 else None
+    return None
+
+
+@ws_handler()
+async def handle_list_all_skills(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
+    """List every filesystem skill across all skill directories, flat.
+
+    The MasterSkillEditor dropdown is folder-scoped; this handler backs its
+    "All skills" view so users can search the whole catalogue without
+    browsing folder by folder. User-created (DB) skills are NOT included —
+    the editor merges those client-side via ``get_user_skills``.
+    """
+    from services.skill_loader import get_skill_loader
+
+    skill_loader = get_skill_loader()
+    registry = skill_loader.scan_skills()
+
+    skills: List[Dict[str, Any]] = []
+    for name in sorted(registry.keys()):
+        meta = registry[name]
+        skills.append(
+            {
+                "name": meta.name,
+                "description": meta.description,
+                "metadata": meta.metadata,
+                "folder": _skill_folder_of(skill_loader, meta),
+            }
+        )
+
+    return {"success": True, "skills": skills, "count": len(skills)}
+
+
 # ============================================================================
 # User-skill CRUD
 # ============================================================================
@@ -449,6 +498,7 @@ WS_HANDLERS: Dict[str, Any] = {
     "list_skill_folders": handle_list_skill_folders,
     "evaluate_auto_skill": handle_evaluate_auto_skill,
     "lookup_skill_metadata": handle_lookup_skill_metadata,
+    "list_all_skills": handle_list_all_skills,
     # User-skill CRUD
     "get_user_skills": handle_get_user_skills,
     "get_user_skill": handle_get_user_skill,
@@ -470,6 +520,7 @@ __all__ = [
     "handle_get_skill_content",
     "handle_get_user_skill",
     "handle_get_user_skills",
+    "handle_list_all_skills",
     "handle_list_skill_folders",
     "handle_lookup_skill_metadata",
     "handle_reset_skill",
