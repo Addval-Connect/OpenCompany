@@ -42,7 +42,6 @@ async def _download_media_to_workspace(
 
     import hashlib
     import mimetypes
-    import time
     from uuid import uuid4
 
     from core.logging import get_logger
