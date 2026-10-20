@@ -270,13 +270,13 @@ html[data-page-hidden] *::after {
       var(--card) 100%
     );
   box-shadow: 0 2px 8px color-mix(in srgb, var(--node-color, var(--node-shadow-base)) var(--tint-shadow), transparent);
-  transition:
-    transform var(--dur-fast) ease,
-    border-color var(--dur-fast) ease;
+  /* No transform transition and no hover lift: canvas nodes must not move
+     under the cursor (hover or zoom churn made icons visibly bob). Shadow /
+     border are the only hover feedback. */
+  transition: border-color var(--dur-fast) ease;
 }
 
 .node:hover {
-  transform: translateY(-1px);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--node-color, var(--node-shadow-base)) var(--tint-shadow-hover), transparent);
 }
 
@@ -322,13 +322,10 @@ html[data-page-hidden] *::after {
       var(--card) 100%
     );
   box-shadow: 0 2px 8px color-mix(in srgb, var(--node-color, var(--node-shadow-base)) var(--tint-shadow), transparent);
-  transition:
-    transform var(--dur-fast) ease,
-    border-color var(--dur-fast) ease;
+  transition: border-color var(--dur-fast) ease;
 }
 
 .sq-node-box:hover {
-  transform: translateY(-1px);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--node-color, var(--node-shadow-base)) var(--tint-shadow-hover), transparent);
 }
 
