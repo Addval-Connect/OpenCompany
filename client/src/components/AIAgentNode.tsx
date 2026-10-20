@@ -163,7 +163,9 @@ const AIAgentNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnecta
         fontWeight: theme.fontWeight.medium,
         textAlign: 'center',
         cursor: 'pointer',
-        transition: 'transform 0.3s ease, border-color 0.3s ease, opacity 0.3s ease',
+        // No transform transition — canvas nodes must not move under the
+        // cursor (hover lift made icons bob). Shadow/border are the feedback.
+        transition: 'border-color 0.3s ease, opacity 0.3s ease',
         overflow: 'visible',
         display: 'flex',
         flexDirection: 'column',
