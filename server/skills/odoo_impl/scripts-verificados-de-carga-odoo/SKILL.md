@@ -4,7 +4,7 @@ description: >-
   Los scripts ya probados que convierten un CSV completado en el payload de load() sin prueba y error:
   derivan la cabecera contra fields_get, aplican los remapeos y xmlids ya aprendidos, y apartan las
   filas que Odoo va a rechazar. Copialos tal cual; no los reescribas.
-allowed-tools: sandboxed_python odoo_jsonrpc file_read
+allowed-tools: process_manager odoo_jsonrpc data write_todos
 metadata:
   agente: TODOS
   tipo: DET
@@ -23,10 +23,10 @@ relacional lleva `/id`, traducir una clave de `selection`, calcular un digito ve
 codigo, no criterio, y re-derivarlo en cada turno es de donde salio la mayor parte del costo de las
 corridas anteriores.
 
-**Regla: el script se copia, no se escribe.** El bloque de abajo esta verificado contra el interprete
-real (`pydantic-monty`, el que corre detras de `sandboxed_python`) sobre archivos reales de este
-proyecto. Si lo reescribes "mejor", vuelves a pagar el ciclo que esta skill evita. Lo unico que cambias
-son las **tres primeras lineas**.
+**Regla: el script se copia, no se escribe.** El bloque de abajo esta verificado contra `python3` real
+(el que corre detras de `process_manager`) sobre archivos reales de este proyecto. Si lo reescribes
+"mejor", vuelves a pagar el ciclo que esta skill evita. Lo unico que cambias son las **cuatro primeras
+lineas**.
 
 Tu criterio se gasta en lo que el script no puede decidir: si un match ambiguo es un pendiente, si un
 `E400` es regla de negocio, a quien le toca corregir. Eso sigue siendo tuyo.
@@ -37,11 +37,11 @@ No la reordenes ni te saltes pasos; cada uno existe porque su ausencia produjo u
 
 ```
 1. una vez por modelo:  odoo_jsonrpc  fields_get  ->  guardalo en 08-carga/campos-<modelo>.json
-2. por archivo:         sandboxed_python  S1  ->  {fields, data, avisos, filas_a_apartar...}
+2. por archivo:         process_manager  S1  (python3 s1_carga.py; la salida llega por stdout)
 3. lee "avisos" y "descartes_columna" ANTES de llamar a Odoo
 4. quita de "data" las filas de "filas_a_apartar_antes_de_enviar"  (son rechazos garantizados)
 5. odoo_jsonrpc  load  con fields y data
-6. si vuelve "messages":  sandboxed_python  S2  ->  reenvia el lote sin las filas rechazadas
+6. si vuelve "messages":  process_manager  S2  (python3 s2_cuarentena.py; salida por stdout)
 7. read-back de 2-3 xmlids del lote, y segunda corrida para probar idempotencia
 ```
 
@@ -51,7 +51,19 @@ rechaza la fila.
 
 ## S1 — de CSV completado a payload de `load()`
 
-`sandboxed_python` con `capabilities: ["workspace_read"]`.
+Se ejecuta con **`process_manager`** (el sandbox de codigo fue retirado; `python3` real es el
+interprete). Mecanica, una vez por archivo:
+
+1. Escribe el script en el workspace con `data` (`operation=write`, ruta `08-carga/s1_carga.py`),
+   copiandolo tal cual y cambiando solo las lineas de parametros.
+2. Lanza `process_manager` con `operation=start`, `name=s1-<modelo>`,
+   `command=python3 ../08-carga/s1_carga.py`. El cwd del proceso es la subcarpeta del propio nodo,
+   un nivel bajo la raiz del workspace: por eso el script y las rutas llevan el prefijo `../`.
+3. Lee la salida con `process_manager` `operation=get_output`: el script imprime **una sola linea**
+   JSON con el resultado completo (o solo el lote, si lo recortaste).
+
+El script lee los archivos del workspace con rutas relativas a la raiz (`RAIZ = ".."`); no necesita
+saber la ruta absoluta del workspace y no debe pedirla a nadie.
 
 Que hace, y por que cada parte esta ahi:
 
@@ -90,7 +102,8 @@ sale en `xmlids_por_resolver_antes_de_enviar` con el modelo destino. **Resuelvel
 llamar a `load`** (procedimiento en `localización-chile` → el caso del xmlid `l10n_*`), y anota el resultado en `xmlids_resueltos` para que la proxima corrida lo sustituya sola.
 
 ```python
-# =========== PARAMETROS: las 3 lineas que cambias por archivo ===========
+# =========== PARAMETROS: las 4 lineas que cambias por archivo ===========
+RAIZ = ".."  # la raiz del workspace, vista desde el cwd del proceso
 ARCHIVO = "06-completadas/product.template.csv"
 MODELO = "product.template"
 PREFIJO = "ecominera"
@@ -99,7 +112,7 @@ import json
 import re
 
 def leer(ruta):
-    f = open("/workspace/" + ruta)
+    f = open(RAIZ + "/" + ruta)
     raw = f.read()
     f.close()
     return raw
@@ -361,7 +374,7 @@ resultado = {
     "xmlids_por_resolver_antes_de_enviar": por_resolver,
     "obligatorios_del_modelo": obligatorios,
 }
-json.dumps(resultado)
+print(json.dumps(resultado))
 ```
 
 Salida (todo lo que necesitas para el paso siguiente, sin volver a abrir el archivo):
@@ -386,7 +399,8 @@ corrige — asi la correccion sirve para la proxima corrida y no solo para esta.
 
 `load()` es transaccional: si el lote trajo errores, **no entro nada**, asi que hay que reenviarlo sin
 las filas rechazadas. Pega los `messages` que devolvio Odoo en `MENSAJES` y el script te dice que
-reenviar. Es aritmetica sobre datos que ya tienes en contexto, asi que va sin capabilities.
+reenviar. Es aritmetica sobre datos que ya tienes en contexto: corre con `process_manager` igual que
+S1 (`python3 ../08-carga/s2_cuarentena.py`), sin leer archivos del workspace.
 
 ```python
 # ===== pega aqui los messages de Odoo y las filas que enviaste =====
@@ -416,7 +430,7 @@ if columna_a_descartar != "":
 else:
     accion = "cuarentena de filas: quita los indices " + json.dumps(sorted(filas_malas)) + " de data (0-based, tal como los reporta Odoo) y reenvia el resto"
 
-json.dumps({"accion": accion, "filas_rechazadas_0based": sorted(filas_malas),
+print(json.dumps({"accion": accion, "filas_rechazadas_0based": sorted(filas_malas),
             "filas_csv": [r + 2 for r in sorted(filas_malas)],
             "columna_a_descartar": columna_a_descartar,
             "rechazos_por_columna": por_columna})
@@ -448,6 +462,7 @@ instancia en esta corrida.
   `campos-<modelo>.json`) para que la correccion persista.
 - No llames a `load` sin haber leido `avisos`. Los `E210` y `E200` son rechazos garantizados: enviarlos
   gasta una llamada y un lote.
-- No uses `javascript_code` ni `python_code` para abrir el CSV: ninguno de los dos ve el disco.
+- No conviertas el CSV a mano en el prompt: la conversion es codigo, no criterio — corre S1 con
+  `process_manager`.
 - No trates un aviso `E220` con lista de claves como si el script hubiera fallado. Es el script
   negandose a adivinar, que es lo correcto.

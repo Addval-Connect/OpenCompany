@@ -79,6 +79,28 @@ def _parse_file_sync(path: Path, parser: str) -> str:
         from unstructured.partition.auto import partition
 
         return "\n\n".join(str(el) for el in partition(str(path)))
+    if parser == "docx":
+        # python-docx reads .docx (Word) — paragraphs and tables in document
+        # order via iter_inner_content(). Table rows flatten to one line per
+        # row with cells joined by " | ", which keeps row alignment readable
+        # in an LLM-facing text block. Empty cells/paragraphs are skipped.
+        from docx import Document as _open_docx
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+
+        document = _open_docx(str(path))
+        lines: list[str] = []
+        for block in document.iter_inner_content():
+            if isinstance(block, Paragraph):
+                text = block.text.strip()
+                if text:
+                    lines.append(text)
+            elif isinstance(block, Table):
+                for row in block.rows:
+                    cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                    if any(cells):
+                        lines.append(" | ".join(cells))
+        return "\n".join(lines)
     if parser == "beautifulsoup":
         from bs4 import BeautifulSoup
 
@@ -90,9 +112,9 @@ def _parse_file_sync(path: Path, parser: str) -> str:
 
 
 class DocumentParserParams(BaseModel):
-    parser: Literal["pypdf", "marker", "unstructured", "beautifulsoup"] = Field(
+    parser: Literal["pypdf", "marker", "unstructured", "docx", "beautifulsoup"] = Field(
         default="pypdf",
-        description="Parser backend. pypdf is fast; marker uses GPU OCR; unstructured handles multi-format; beautifulsoup for HTML.",
+        description="Parser backend. pypdf is fast; marker uses GPU OCR; unstructured handles multi-format; docx reads Word files (paragraphs + tables); beautifulsoup for HTML.",
     )
     file_path: str = Field(
         default="",

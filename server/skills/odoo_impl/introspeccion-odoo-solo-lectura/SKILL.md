@@ -28,7 +28,7 @@ Cada resultado queda en tu historial y se re-lee en cada iteración, así que el
 
 - `fields` mínimo siempre; `limit` explícito siempre.
 - En bloque: un `search_read` con `["name","in",[...]]`, no una llamada por fila.
-- Cachea a archivo: lo introspectado va a `02-instancia/introspeccion-<flujo>.json` y los pasos siguientes lo leen con `fileRead`.
+- Cachea a archivo: lo introspectado va a `02-instancia/introspeccion-<flujo>.json` y los pasos siguientes lo leen con `data`.
 
 ## Protocolo
 

@@ -1,7 +1,7 @@
 ---
 name: orquestacion-del-proyecto
 description: Reglas del proyecto sobre task_manager y write_todos para el Coordinador — estados, trazas y disciplina de tareas; si chocan con los skills de plataforma, rige este.
-allowed-tools: task_manager write_todos
+allowed-tools: task_manager write_todos data
 metadata:
   author: opencompany
   version: "1.0"
@@ -33,7 +33,7 @@ No hay secuencia fija entre flujos. Mantén en la cabeza (y reconstruye en cada 
 
 Convención de título: `<flujo> · <etapa> · r<ronda>` (D0: `descubrimiento · r1`). Antes de asignar, `list_tasks(include_history=true)`: una re-delegación legítima lleva ronda nueva, no repite título.
 
-| Etapa | Agente | Precondición (verifícala en archivos antes de asignar) | Criterio de aceptación (comprobable con `fileRead`) |
+| Etapa | Agente | Precondición (verifícala en archivos antes de asignar) | Criterio de aceptación (comprobable con `data`) |
 |---|---|---|---|
 | `descubrimiento` | D0 | `00-entrada/` tiene material; si está vacía, es un pendiente `alcance_no_declarado` | Existen `propuesta-epicas.md`, `propuesta-historias.csv`, `preguntas-descubrimiento.md`; lista los flujos en alcance sin historias |
 | `analisis` | cada flujo | G0 cerrado: `historias.csv` con filas, `definiciones-proyecto.md` sin ítems abiertos | `matriz-brechas-<flujo>.csv`, `introspeccion-<flujo>.json` y `definiciones-requeridas-<flujo>.md` con el mínimo de G1, cada ítem con propuesta |
@@ -56,7 +56,7 @@ Hay un máximo de tres tareas concurrentes en todo el árbol; el resto queda en 
 ## Revisar una tarea `submitted`
 
 1. `get_task`. Si el resultado no explica el desenlace, `inspect_task_trace` con `detail="summary"`; solo si hace falta, `failures` o búsqueda acotada.
-2. **Relee los artefactos** con `fileRead` y compáralos con el criterio de aceptación. No aceptes por el resumen del agente. Comprueba además que ningún archivo fuera de la propiedad del agente cambió (contrato).
+2. **Relee los artefactos** con `data` y compáralos con el criterio de aceptación. No aceptes por el resumen del agente. Comprueba además que ningún archivo fuera de la propiedad del agente cambió (contrato).
 3. Elige un solo desenlace:
    - `accept_task` cuando el criterio se cumple. **Siempre pasa `task_id` y `expected_revision`**, aunque haya una sola entregada: con varios flujos en paralelo, esa "única" puede no ser la que crees.
    - `retry_task` si la misión es válida y falló algo verificable.

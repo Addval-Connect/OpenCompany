@@ -30,6 +30,9 @@
     "writeTodos",
     "canvas",
     "odooJsonRpc",
+    "msMailReceive",
+    "documentParser",
+    "processManager",
 
     "httpRequest",
     "timer",

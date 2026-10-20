@@ -4,7 +4,7 @@ description: >-
   Qué hacer con un rechazo de Odoo que no es un error de dato — decidir si es un caso de borde
   propio, del bucle de corrección o del consultor, y recuperar el estado tras un lote fallido.
   Úsalo solo cuando la carga o el QA devuelven algo que el runbook de CARGA no cubre.
-allowed-tools: odoo_jsonrpc file_read file_modify fs_search sandboxed_python javascript_code write_todos
+allowed-tools: odoo_jsonrpc data process_manager write_todos
 metadata:
   agente: CARGA
   tipo: MIX
