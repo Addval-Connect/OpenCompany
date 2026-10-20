@@ -11,7 +11,7 @@ metadata:
 
 # Catálogo de flujos
 
-Índice ligero de los cuatro flujos para D0: qué cubre cada uno, sus sub-alcances y dónde están las fronteras. **No es el conocimiento de dominio**: ese vive en `flujos/<flujo>`. Este catálogo se regenera desde la sección 1 ("Alcance y sub-alcance") de cada skill de dominio cuando esos skills existan; hasta entonces es una versión inicial. Lo marcado `[por confirmar]` es una decisión por defecto que el dueño del proyecto debe validar.
+Índice ligero de los cuatro flujos para D0: qué cubre cada uno, sus sub-alcances y dónde están las fronteras. **No es el conocimiento de dominio**: ese vive en `flujo-<flujo>`. Este catálogo se regenera desde la sección 1 ("Alcance y sub-alcance") de cada skill de dominio cuando esos skills existan; hasta entonces es una versión inicial. Lo marcado `[por confirmar]` es una decisión por defecto que el dueño del proyecto debe validar.
 
 ## Los cuatro flujos
 

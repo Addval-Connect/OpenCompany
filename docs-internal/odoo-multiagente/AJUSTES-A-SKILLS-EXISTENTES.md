@@ -11,7 +11,7 @@ Los skills nuevos cambian rutas, nombres y responsabilidades. Estos son los camb
 | `odoo-rpc-en-opencompany` | `odoo-rpc-transporte`, `taxonomia-errores-odoo`, `bucle-de-correccion`, `ajustes-de-aplicacion`, `entornos-y-seguridad`, `odoo19-diferencias` y `localizacion-chile` |
 | Skills de etapa A1 a A4 (análisis, blueprint, plantillas, validación) | `flujo-entendimiento`, `flujo-configuracion`, `flujo-implementacion` |
 | `orden-de-carga-odoo` | El orden sale del grafo `depende_de` (ver `carga-a-odoo-y-verifica`, paso 2) |
-| `flujos-de-referencia` (en el runbook de carga) | La sección 6 de cada `flujos/<flujo>` (los casos de QA los escribe cada flujo) |
+| `flujos-de-referencia` (en el runbook de carga) | La sección 6 de cada `flujo-<flujo>` (los casos de QA los escribe cada flujo) |
 
 Dónde fue cada sección de `odoo-rpc-en-opencompany`: la herramienta, `load()`, las lecturas, el límite `E520` y la economía de llamadas a `odoo-rpc-transporte`; la tabla de códigos y su clasificación por texto a `taxonomia-errores-odoo`; el bucle, `E110`, `E220` y `E300` en carga a `bucle-de-correccion`; `res.config.settings` a `ajustes-de-aplicacion`; la seguridad y los entornos a `entornos-y-seguridad`; las tablas de campos y claves de Odoo 19 a `odoo19-diferencias`; el caso de `E300` sobre xmlids de la localización a `localizacion-chile`. "Ajustes verificados en esta instancia" no se migró como skill: es un hecho de **una** instancia y va en `08-carga/capacidades-instancia.json`.
 

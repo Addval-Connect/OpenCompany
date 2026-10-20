@@ -37,7 +37,7 @@ AJUSTES-A-SKILLS-EXISTENTES.md
 | `flujo-configuracion` | | | ● | |
 | `flujo-implementacion` | | | ● | |
 | `introspeccion-odoo-solo-lectura` | | | ● | |
-| `flujos/<flujo>` (solo el suyo) | | | ● | |
+| `flujo-<flujo>` (solo el suyo) | | | ● | |
 | `odoo-rpc-transporte` | | | ● | ● |
 | `taxonomia-errores-odoo` | | | ● | ● |
 | `odoo19-diferencias` | | | ● | ● |
@@ -53,7 +53,7 @@ AJUSTES-A-SKILLS-EXISTENTES.md
 
 Skills de plataforma del Coordinador: `task-manager`, `write-todos`, `jev`. Los demás agentes también cargan `jev`.
 
-`plantilla-skill-de-dominio` no la carga ningún agente: es la guía para escribir los cuatro `flujos/<flujo>`.
+`plantilla-skill-de-dominio` no la carga ningún agente: es la guía para escribir los cuatro `flujo-<flujo>`.
 
 ## Cómo instalarlo
 
@@ -67,6 +67,6 @@ Skills de plataforma del Coordinador: `task-manager`, `write-todos`, `jev`. Los 
 
 ## Lo que falta
 
-- Los cuatro skills de dominio `flujos/<flujo>` (siguen la estructura de `plantilla-skill-de-dominio`). Cuando existan, `catalogo-de-flujos` se regenera desde su sección 1.
+- Los cuatro skills de dominio `flujo-<flujo>` (siguen la estructura de `plantilla-skill-de-dominio`). Cuando existan, `catalogo-de-flujos` se regenera desde su sección 1. **Ubicación**: carpetas planas en `server/skills/odoo_impl/` (`flujo-financiero/`, `flujo-ventas-servicios/`, `flujo-compras-aprobaciones/`, `flujo-inventario-fabricacion/`) — la plataforma descubre skills a dos niveles (grupo/skill) y los nombres no admiten `/`.
 - Los umbrales de JEV (0,8 general, 0,7 y 0,3 en usos puntuales) son valores iniciales sin calibrar; se ajustan con los logs `jev-*.jsonl`.
 - `odoo19-diferencias` y `localizacion-chile` marcan cada hecho como observado o hipótesis; hay que confirmarlos con `fields_get` en tu instancia y ponerles fecha.
