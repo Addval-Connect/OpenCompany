@@ -229,9 +229,6 @@
   "jev": {
     "skill": "jev-decisions"
   },
-  "javascriptExecutor": {
-    "skill": "javascript-skill"
-  },
   "kimiChatModel": {
     "icon": "lobehub:kimi"
   },
@@ -292,12 +289,6 @@
   },
   "proxyStatus": {
     "icon": "📊"
-  },
-  "pythonExecutor": {
-    "skill": "python-skill"
-  },
-  "montyExecutor": {
-    "skill": "monty-skill"
   },
   "rlm_agent": {
     "icon": "🧠"

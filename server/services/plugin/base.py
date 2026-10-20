@@ -200,15 +200,15 @@ class BaseNode:
     # SpecializedAgentBase subclasses).
     #
     # ``tool_name`` is genuinely distinct from ``type`` (camelCase → snake;
-    # e.g. ``calculatorTool`` → ``calculator``, ``pythonExecutor`` →
-    # ``python_code``); plugins declare it when they want an LLM-facing
+    # e.g. ``calculatorTool`` → ``calculator``, ``processManager`` →
+    # ``process_manager``); plugins declare it when they want an LLM-facing
     # name that differs from the registry key.
     #
     # ``tool_description`` defaults to falling back to ``cls.description``
     # at resolve time — plugins ONLY override when the LLM-facing variant
     # needs to differ materially from the human-facing description
-    # (writeTodos' instruction-heavy prompt, pythonExecutor's available-
-    # libraries hint, specialized agents' ONE-SHOT pattern, etc.).
+    # (writeTodos' instruction-heavy prompt, processManager's ops
+    # guide, specialized agents' ONE-SHOT pattern, etc.).
     tool_name: ClassVar[str] = ""
     tool_description: ClassVar[str] = ""
 

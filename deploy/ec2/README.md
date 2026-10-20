@@ -131,8 +131,6 @@ stating what that is based on, since it is checkable:
 - Every lazy binary installer carries an explicit `Linux/aarch64` mapping — the
   `temporal` CLI (`services/temporal/_install.py`), `gh`, `gcloud` (`linux-arm`),
   `stripe` — and `agent-browser` ships a real `bin/agent-browser-linux-arm64`.
-- `pydantic-monty`, the one pinned Rust-backed dependency, publishes
-  `manylinux_2_17_aarch64` wheels.
 
 **Pick x86 (`t3.medium`) if the browser nodes are load-bearing for you.** Nothing
 in the browser stack is known-broken on arm64, but it is the one part that is not
@@ -143,7 +141,7 @@ $6/mo buys away the unknown.
 Two notes on that stack either way, unrelated to architecture:
 
 - `agent-browser` declares `engines: node >= 24`, while `bootstrap.sh` installs
-  Node 22 (the version the JS/TS code-execution sidecar targets). npm treats
+  Node 22 (the floor bun's JS toolchain needs). npm treats
   `engines` as a warning, so the install does not hard-fail — but it is the one
   bundled binary aimed at a newer runtime than the host has.
 - Both `agent-browser` (npm) and `browser-harness` (a `uv tool`) install **on

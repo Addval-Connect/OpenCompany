@@ -70,8 +70,7 @@
     "install.ps1"
   ],
   "workspaces": [
-    "client",
-    "server/nodejs"
+    "client"
   ],
   "scripts": {
     "start": "python -m cli start",

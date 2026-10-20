@@ -1,25 +1,24 @@
 """Contract tests for code_fs_process nodes.
 
-Covers: pythonExecutor, javascriptExecutor, typescriptExecutor,
-        fileRead, fileModify, shell, fsSearch, processManager.
+Covers: fileRead, fileModify, shell, fsSearch, processManager.
 
-Frozen behavioural contract for the 8 nodes in
+Frozen behavioural contract for the nodes in
 `docs-internal/node-logic-flows/code_fs_process/`. Each test asserts the
 standard handler envelope shape and at least one payload detail from the
-matching doc; external side-effects (subprocess spawn, Node.js HTTP call,
-workspace backend, Terminal broadcast) are mocked.
+matching doc; external side-effects (subprocess spawn, workspace backend,
+Terminal broadcast) are mocked.
 
 Mocking strategy:
-  - pythonExecutor runs in-process (no external service) -- tests exercise
-    the real exec() path.
-  - javascriptExecutor / typescriptExecutor: patch NodeJSClient.execute()
-    via the module-level _nodejs_client singleton.
   - filesystem nodes (fileRead, fileModify, shell, fsSearch): patch
     nodes.filesystem._backend.get_backend to return a fake WorkspaceBackend
     with the methods each mode invokes.
   - processManager: patch services.process_service.get_process_service to
     return a fake ProcessService with the dispatched method set to an
     AsyncMock / MagicMock.
+
+(The sandboxed code executors — pythonExecutor / javascriptExecutor /
+typescriptExecutor / montyExecutor — were retired; script execution now
+goes through processManager. Their test classes were removed with them.)
 """
 
 from __future__ import annotations
@@ -51,20 +50,6 @@ async def _wait_for_thread_event(event: threading.Event) -> None:
 # ============================================================================
 # Helpers
 # ============================================================================
-
-
-def _reset_nodejs_singleton():
-    """Clear the module-level client singleton in nodes.code._nodejs.
-
-    The plugin caches its NodeJSClient on first use; tests that patch must
-    either reset this between cases or patch the module attribute directly.
-    """
-    try:
-        import nodes.code._nodejs as code_mod
-
-        code_mod._client = None  # scaling-branch singleton name
-    except (ImportError, AttributeError):
-        pass
 
 
 class _FakeWriteResult(SimpleNamespace):
@@ -104,198 +89,6 @@ def _patch_fs_backend(backend: MagicMock):
 def _writable_test_path(name: str) -> Path:
     """Use the writable checkout; the managed sandbox blocks pytest tmp dirs."""
     return Path.cwd() / f".test-{uuid4().hex}-{name}"
-
-
-# ============================================================================
-# pythonExecutor
-# ============================================================================
-
-
-class TestPythonExecutor:
-    async def test_happy_path_reads_input_and_sets_output(self, harness):
-        # NodeExecutor keys connected_outputs by SOURCE TYPE (not id).
-        # See node_executor._get_connected_outputs_with_info (outputs[source_type] = output).
-        upstream = {
-            "source_A::output_main": {"n": 5},
-        }
-        nodes = [
-            {"id": "py1", "type": "pythonExecutor"},
-            {"id": "source_A", "type": "start"},
-        ]
-        edges = [
-            {"source": "source_A", "target": "py1", "sourceHandle": "output-main"},
-        ]
-
-        code = "val = input_data.get('start', {}).get('n', 0)\n" "print('doubled', val * 2)\n" "output = {'doubled': val * 2}\n"
-
-        result = await harness.execute(
-            "pythonExecutor",
-            {"code": code},
-            node_id="py1",
-            upstream_outputs=upstream,
-            nodes=nodes,
-            edges=edges,
-        )
-
-        harness.assert_envelope(result, success=True)
-        harness.assert_output_shape(result, ["output", "console_output"])
-        payload = result["result"]
-        assert payload["output"] == {"doubled": 10}
-        assert "doubled 10" in payload["console_output"]
-
-    async def test_empty_code_short_circuits(self, harness):
-        result = await harness.execute("pythonExecutor", {"code": "   \n\t"})
-
-        harness.assert_envelope(result, success=False)
-        assert "no code provided" in result["error"].lower()
-
-    async def test_exception_in_user_code_is_captured(self, harness):
-        # Sandbox exposes int() but not Exception class names, so raise via int('boom').
-        result = await harness.execute(
-            "pythonExecutor",
-            {"code": "int('boom')"},
-        )
-
-        harness.assert_envelope(result, success=False)
-        assert "boom" in result["error"]
-
-
-# ============================================================================
-# javascriptExecutor
-# ============================================================================
-
-
-class TestJavascriptExecutor:
-    async def test_happy_path_returns_node_output(self, harness):
-        _reset_nodejs_singleton()
-        fake_client = MagicMock(name="NodeJSClient")
-        fake_client.execute = AsyncMock(
-            return_value={
-                "success": True,
-                "output": {"v": 42},
-                "console_output": "running\n",
-            }
-        )
-
-        with patch(
-            "nodes.code._nodejs.acquire_client",
-            return_value=fake_client,
-        ):
-            result = await harness.execute(
-                "javascriptExecutor",
-                {"code": "output = {v: 42}", "timeout": 15},
-            )
-
-        harness.assert_envelope(result, success=True)
-        harness.assert_output_shape(result, ["output", "console_output"])
-        payload = result["result"]
-        assert payload["output"] == {"v": 42}
-        assert "running" in payload["console_output"]
-
-        # timeout: seconds -> milliseconds forwarded to the Node server
-        call_kwargs = fake_client.execute.await_args.kwargs
-        assert call_kwargs["timeout"] == 15 * 1000
-        assert call_kwargs["language"] == "javascript"
-        # workspace_dir injected into input_data
-        assert "workspace_dir" in call_kwargs["input_data"]
-
-    async def test_empty_code_short_circuits(self, harness):
-        result = await harness.execute("javascriptExecutor", {"code": ""})
-
-        harness.assert_envelope(result, success=False)
-        assert "invalid parameters" in result["error"].lower()
-
-    async def test_node_server_returns_failure_preserves_console(self, harness):
-        _reset_nodejs_singleton()
-        fake_client = MagicMock(name="NodeJSClient")
-        fake_client.execute = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "SyntaxError: unexpected token",
-                "console_output": "partial log\n",
-            }
-        )
-
-        with patch(
-            "nodes.code._nodejs.acquire_client",
-            return_value=fake_client,
-        ):
-            result = await harness.execute("javascriptExecutor", {"code": "oops"})
-
-        harness.assert_envelope(result, success=False)
-        assert "syntaxerror" in result["error"].lower()
-
-    async def test_http_exception_wrapped_in_envelope(self, harness):
-        _reset_nodejs_singleton()
-        fake_client = MagicMock(name="NodeJSClient")
-        fake_client.execute = AsyncMock(side_effect=ConnectionRefusedError("Cannot connect to host localhost:5682"))
-
-        with patch(
-            "nodes.code._nodejs.acquire_client",
-            return_value=fake_client,
-        ):
-            result = await harness.execute("javascriptExecutor", {"code": "output = 1"})
-
-        harness.assert_envelope(result, success=False)
-        assert "localhost:5682" in result["error"]
-
-
-# ============================================================================
-# typescriptExecutor
-# ============================================================================
-
-
-class TestTypescriptExecutor:
-    async def test_happy_path_forwards_language_typescript(self, harness):
-        _reset_nodejs_singleton()
-        fake_client = MagicMock(name="NodeJSClient")
-        fake_client.execute = AsyncMock(
-            return_value={
-                "success": True,
-                "output": "typed-output",
-                "console_output": "",
-            }
-        )
-
-        with patch(
-            "nodes.code._nodejs.acquire_client",
-            return_value=fake_client,
-        ):
-            result = await harness.execute(
-                "typescriptExecutor",
-                {"code": "const x: number = 1; output = 'typed-output'"},
-            )
-
-        harness.assert_envelope(result, success=True)
-        assert result["result"]["output"] == "typed-output"
-        call_kwargs = fake_client.execute.await_args.kwargs
-        assert call_kwargs["language"] == "typescript"
-
-    async def test_empty_code_short_circuits(self, harness):
-        result = await harness.execute("typescriptExecutor", {"code": ""})
-
-        harness.assert_envelope(result, success=False)
-        assert "invalid parameters" in result["error"].lower()
-
-    async def test_node_server_failure_preserves_console(self, harness):
-        _reset_nodejs_singleton()
-        fake_client = MagicMock(name="NodeJSClient")
-        fake_client.execute = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "TS2304: Cannot find name 'foo'",
-                "console_output": "compiling...\n",
-            }
-        )
-
-        with patch(
-            "nodes.code._nodejs.acquire_client",
-            return_value=fake_client,
-        ):
-            result = await harness.execute("typescriptExecutor", {"code": "output = foo"})
-
-        harness.assert_envelope(result, success=False)
-        assert "ts2304" in result["error"].lower()
 
 
 # ============================================================================

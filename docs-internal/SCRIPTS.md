@@ -155,7 +155,6 @@ Key variables in `.env` (see `.env.template` for the full list):
 | `VITE_CLIENT_PORT` | `.env.template` | App port (Vite dev server; proxies backend prefixes). Equal to `PYTHON_BACKEND_PORT` in production |
 | `PYTHON_BACKEND_PORT` | `.env.template` | Backend port (`.env.dev` moves it one up in dev, behind the Vite proxy) |
 | `WHATSAPP_RPC_PORT` | `.env.template` | WhatsApp API port (plugin-owned) |
-| `NODEJS_EXECUTOR_PORT` | `.env.template` | JS code-executor sidecar, runs on bun (plugin-owned; the env var name is unchanged) |
 | `TEMPORAL_FRONTEND_GRPC_PORT` / `TEMPORAL_UI_PORT` | `.env.template` | Temporal gRPC / Temporal Web UI |
 
 All values live in the serial block declared at the top of `.env.template`; no

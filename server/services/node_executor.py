@@ -262,10 +262,6 @@ class NodeExecutor:
     # without re-implementing the graph walk.
     _NEEDS_CONNECTED_OUTPUTS = frozenset(
         {
-            "pythonExecutor",
-            "montyExecutor",
-            "javascriptExecutor",
-            "typescriptExecutor",
             "webhookResponse",
             "console",
             "socialReceive",

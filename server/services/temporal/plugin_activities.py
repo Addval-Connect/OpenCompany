@@ -7,7 +7,7 @@ register these alongside (or instead of) the single
 scaling knobs:
 
 - ``cls.task_queue`` routes activities to specialised worker pools
-  (``rest-api`` / ``ai-heavy`` / ``code-exec`` / ``triggers-poll`` /
+  (``rest-api`` / ``ai-heavy`` / ``triggers-poll`` /
   ``triggers-event`` / ``android`` / ``browser`` / ``messaging`` /
   ``machina-default``).
 - ``cls.retry_policy`` per-node Temporal retry knobs.

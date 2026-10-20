@@ -235,11 +235,10 @@ Two findings are dismissed as by-design rather than fixed:
 
 | Query | Where | Why |
 |---|---|---|
-| `js/code-injection` | `server/nodejs/src/index.ts` `/execute` | That route **is** the JavaScript executor behind the `javascriptExecutor` / `typescriptExecutor` nodes, so evaluating request-supplied code is its purpose. It binds to localhost and is spawned and called only by the same-machine backend; `vm` is documented as not a security boundary. |
 | `py/path-injection` | containment helpers | See above. |
 
 Inline `// codeql[...]` / `# codeql[...]` comments do **not** suppress
-anything under default setup — several sat in the sidecar for months while
+anything under default setup — several sat unactioned for months while
 the alerts stayed open. Dismiss in the Security tab instead.
 
 ## Dependency update policy (Dependabot disabled)

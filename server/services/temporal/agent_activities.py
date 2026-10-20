@@ -1380,7 +1380,7 @@ async def refresh_agent_tools(payload: Dict[str, Any]) -> Dict[str, Any]:
         kind = getattr(cls, "component_kind", "")
         # Match the catalogue filter: pure ToolNode (kind=='tool') OR
         # dual-purpose ActionNode with usable_as_tool=True (the bulk of
-        # spawnable plugins — twitterSearch / googleGmail / pythonExecutor
+        # spawnable plugins — twitterSearch / googleGmail / httpRequest
         # / fileRead / etc.). Exclude chat-model plugins even when
         # usable_as_tool=True.
         is_agent_delegate = kind == "agent"

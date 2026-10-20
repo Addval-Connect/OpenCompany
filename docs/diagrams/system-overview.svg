@@ -97,12 +97,6 @@
   <text class="tier-label" x="230" y="718">SIDECAR PROCESSES (all backend-spawned)</text>
   <rect class="panel p-orange" x="230" y="726" width="960" height="162" rx="10"/>
 
-  <rect class="box p-orange" x="250" y="742" width="215" height="102" rx="8"/>
-  <text class="h2" x="357" y="766" text-anchor="middle">JS / TS executor</text>
-  <text class="small" x="357" y="786" text-anchor="middle">Express bundle run by bun</text>
-  <text class="small" x="357" y="802" text-anchor="middle">(bun build --target=bun)</text>
-  <text class="dim" x="357" y="820" text-anchor="middle">NODEJS_EXECUTOR_PORT</text>
-
   <rect class="box p-orange" x="485" y="742" width="215" height="102" rx="8"/>
   <text class="h2" x="592" y="766" text-anchor="middle">WhatsApp bridge</text>
   <text class="small" x="592" y="786" text-anchor="middle">edgymeow (Go, whatsmeow)</text>

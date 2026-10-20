@@ -171,8 +171,7 @@ shutdown funnel.
 The backend spawns exactly one JavaScript runtime, bun, and resolves it in one
 place: `core/js_runtime.py` (`OPENCOMPANY_BUN_BIN`, else `bun` on PATH). `uv`
 is resolved through `OPENCOMPANY_UV_BIN` / `shutil.which`. So the bundled
-runtime dirs prepended to PATH (plus the two overrides) satisfy the JS
-executor sidecar (`nodes/code/_runtime.py`, `[bun, dist/index.js]`), the five
+runtime dirs prepended to PATH (plus the two overrides) satisfy the five
 plugin installers that `bun add` into the shared `<DATA_DIR>/packages/` tree
 (claude-code, edgymeow, agent-browser, cf, vercel — `core.js_runtime.add_package`),
 the codex provider (`bun x @openai/codex` when no system `codex` exists), and

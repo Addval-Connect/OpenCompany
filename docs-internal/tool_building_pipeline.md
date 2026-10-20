@@ -180,7 +180,7 @@ tool or crashing.
 | `aiAgent` / `chatAgent` / `<specialized>_agent` | `_execute_delegated_agent` (fire-and-forget background task) |
 | `_builtin_check_delegated_tasks` | `_execute_check_delegated_tasks` |
 | `batteryMonitor` / `wifiAutomation` / ... (16 service types) | `nodes/android/_base.py::execute_android_service_tool` (line 248; imported at `tools.py:227` — snake_case service ID via `SERVICE_ID_MAP` at `_base.py:25`) |
-| `whatsappSend` / `whatsappDb` / `pythonExecutor` / ... | Per-plugin `usable_as_tool=True` handler (the plugin's own `execute()` method) |
+| `whatsappSend` / `whatsappDb` / `processManager` / ... | Per-plugin `usable_as_tool=True` handler (the plugin's own `execute()` method) |
 | `calculatorTool` / `currentTimeTool` / `taskManager` / `writeTodos` | `_execute_<name>` direct implementations |
 | `braveSearch` / `serperSearch` / `perplexitySearch` | `handle_<provider>_search` (httpx async, credential resolution, usage tracking) |
 | All else | `_execute_generic` (catch-all) |
@@ -244,7 +244,7 @@ When `TEMPORAL_PER_TYPE_DISPATCH=true` and the run is happening inside a Tempora
 5. The result returns to the workflow, is appended to the native message
    history, and the next LLM step sees it.
 
-This means tool calls inside an agent loop get Temporal's retry / timeout / heartbeat semantics independently of the parent agent's. A `code-exec` task burns its own retries; a `browser` task survives past the parent's `start_to_close_timeout` via its own heartbeat. See [TEMPORAL_ARCHITECTURE.md](./TEMPORAL_ARCHITECTURE.md).
+This means tool calls inside an agent loop get Temporal's retry / timeout / heartbeat semantics independently of the parent agent's. A `rest-api` task burns its own retries; a `browser` task survives past the parent's `start_to_close_timeout` via its own heartbeat. See [TEMPORAL_ARCHITECTURE.md](./TEMPORAL_ARCHITECTURE.md).
 
 The v1/v2 wire duality was purged; there is no engine-marker refusal path.
 

@@ -13,7 +13,7 @@ Each workflow node executes as a **Temporal activity** with its own isolated con
 | Dispatch | Trigger | Use case |
 |---|---|---|
 | **Legacy single activity** (`execute_node_activity`) | `TEMPORAL_PER_TYPE_DISPATCH=false` | Every node routed through one dispatcher activity. WebSocket round-trip back to the FastAPI server. Stable since Wave 11; kept as the fallback path. |
-| **Per-type activity** (`node.{type}.v{version}`) | `TEMPORAL_PER_TYPE_DISPATCH=true` (production default) | Each plugin gets its own `@activity.defn`. Per-plugin retry / timeout / heartbeat configs apply. With `TEMPORAL_WORKER_POOL_ENABLED=true` (default since Wave 16.4) the activity also carries `task_queue=cls.task_queue`, landing it on its specialised `TemporalWorkerPool` worker (browser / code-exec / ai-heavy / ...). Shipped in F4.A (commit `8261b05`); queue routing activated in Wave 16. |
+| **Per-type activity** (`node.{type}.v{version}`) | `TEMPORAL_PER_TYPE_DISPATCH=true` (production default) | Each plugin gets its own `@activity.defn`. Per-plugin retry / timeout / heartbeat configs apply. With `TEMPORAL_WORKER_POOL_ENABLED=true` (default since Wave 16.4) the activity also carries `task_queue=cls.task_queue`, landing it on its specialised `TemporalWorkerPool` worker (browser / ai-heavy / rest-api / ...). Shipped in F4.A (commit `8261b05`); queue routing activated in Wave 16. |
 | **Agent-as-child-workflow** (`AgentWorkflow`) | `TEMPORAL_AGENT_WORKFLOW_ENABLED=true` | AI Agents (aiAgent, chatAgent, 11 specialized agents, 2 team leads) run as Temporal child workflows. Each LLM turn = activity; each tool call = per-type activity. Mirrors Temporal's AI Cookbook canonical pattern. F4.B infrastructure shipped (commit `a4d009e`); per-agent migrations follow. |
 
 `rlm_agent`, `claude_code_agent` are intentionally excluded from AgentWorkflow — their externalised loops (RLM REPL / Claude CLI `--resume`) require single-process state continuity.
@@ -68,7 +68,7 @@ This invokes `run_standalone_worker()` from `services/temporal/worker.py`.
           Activity / child-workflow scheduling (routed by queue)
                                   |
    machina-tasks        specialised queues (TemporalWorkerPool)
-        |            ai-heavy   code-exec   browser   rest-api  ...
+        |            ai-heavy   rest-api   browser   messaging  ...
   +-----------+     +--------+  +--------+  +-------+  +-------+
   | Manager   |     | Pool   |  | Pool   |  | Pool  |  | Pool  |
   | worker    |     | worker |  | worker |  | worker|  | worker|
@@ -291,7 +291,7 @@ Add more workers = handle more concurrent nodes
 `TemporalWorkerPool` is wired into the `main.py` lifespan (starts right after `TemporalWorkerManager`, stops before it). One activity-only Worker per plugin-declared queue polls its specialised queue, and `MachinaWorkflow._resolve_activity` returns `(activity_name, cls.task_queue)` so per-type activities land there. Setting `TEMPORAL_WORKER_POOL_ENABLED=false` stops the pool and routes every activity back to the single manager worker on `machina-tasks` — **the flag is the rollback channel** (locked default-on by `test_task_queue_coverage.py::TestWorkerPoolDefaultOn`).
 
 ```
-Queue: rest-api         Queue: ai-heavy         Queue: code-exec
+Queue: rest-api         Queue: ai-heavy         Queue: messaging
      |                       |                       |
 +----+----+             +----+----+             +----+----+
 | Worker  |             | Worker  |             | Worker  |
@@ -312,7 +312,6 @@ All knobs live in `services/temporal/worker.py`; every default is env-overridabl
 | `machina-default` | 20 | 10 | — | fixed |
 | `rest-api` | 50 | 25 | 100 | fixed |
 | `ai-heavy` | 4 | 2 | 60 | **resource-based** (80% CPU+mem target) |
-| `code-exec` | 10 | 5 | — | fixed |
 | `triggers-poll` | 100 | 50 | — | fixed |
 | `triggers-event` | 100 | 50 | — | fixed |
 | `android` | 10 | 5 | — | fixed |

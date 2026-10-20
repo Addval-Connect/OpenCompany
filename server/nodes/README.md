@@ -130,7 +130,6 @@ search/      — Web search APIs (brave / serper / perplexity / duckduckgo)
 scraper/     — Apify / Crawlee / TikHub (SDK-backed, flattened like a
                CLI: list_endpoints + call over resource.method ids)
 document/    — RAG pipeline (scrape / download / parse / chunk / embed / store)
-code/        — Python / Monty (sandboxed Python) / JS / TS executors
 filesystem/  — file_read / file_modify / shell / fs_search / gallery
                (gallery is the workspace file explorer; deliberately NOT
                 usable_as_tool — it carries destructive operations, and
@@ -177,7 +176,6 @@ these first before writing new code:
 | `speech/` + `translate/` | `_config` / `_registry` / `_unifier` / `_providers/` | The multi-vendor shape. Capability data is JSON (`services/plugin/capabilities.CapabilityConfig`), registration is `services/provider_registry`, and each `_providers/<vendor>.py` owns that vendor's auth scheme, request transport and response shape |
 | `android/` | `_base.AndroidServiceBase` | 16 Android services inherit; payload translation + `SERVICE_ID_MAP` lives on this base |
 | `android/` | `_base.execute_android_service_tool` | AI-tool dispatcher — called from `services/handlers/tools.py` for direct service tools (the `androidTool` aggregator + `execute_android_toolkit` were retired) |
-| `code/` | `_base.CodeExecutorBase` + `_nodejs.NodeJSClient` | Python/JS/TS executors; `monty_executor/` is sandboxed Python via `pydantic-monty` (enforced limits + opt-in capabilities) |
 | `google/` | `_base.build_google_service` / `track_google_usage` | 7 Google plugins (OAuth + API) |
 | `google/` | `_gmail.fetch_email_details` / `mark_email_as_read` | gmail + gmail_receive |
 | `twitter/` | `_base.call_with_retry` / `format_tweet` / `sync_search_recent` | 4 twitter plugins (XDK + refresh) |
@@ -243,8 +241,8 @@ Common ones you'll trip:
 - Every declared credential class must be registered
   (happens automatically via `__init_subclass__` — just import it).
 - `routing=...` requires `credentials` declared.
-- `task_queue` ∈ `TaskQueue.ALL` (`rest-api` / `ai-heavy` / `code-exec`
-  / `triggers-poll` / `triggers-event` / `android` / `browser` /
+- `task_queue` ∈ `TaskQueue.ALL` (`rest-api` / `ai-heavy` /
+  `triggers-poll` / `triggers-event` / `android` / `browser` /
   `messaging` / `machina-default`).
 - Tool schemas (`usable_as_tool=True` or `ToolNode`) — no `$defs`,
   no `$ref` (LLM-compat).

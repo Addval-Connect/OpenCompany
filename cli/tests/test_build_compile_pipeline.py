@@ -1,9 +1,13 @@
 """Tests for the compile-pipeline additions to ``company build``.
 
-Covers the two new steps wired into ``cli.commands.build.build_command``:
+Covers the steps wired into ``cli.commands.build.build_command``:
 
-- ``[3/6] Building Node.js sidecar`` -> ``bun run --filter opencompany-nodejs-executor build``
-- ``[5/6] Compiling Python bytecode`` -> ``uv run python -m compileall -q -j 0 ...``
+- ``[2/5] Building client`` -> ``bun run --filter react-flow-client build``
+- ``[4/5] Compiling Python bytecode`` -> ``uv run python -m compileall -q -j 0 ...``
+
+(The Node.js sidecar build step was removed with the retired
+``opencompany-nodejs-executor`` package — script execution now goes
+through ``process_manager``.)
 
 The orchestrator is exercised once per test with every external surface
 mocked (toolchain probes, ``run``, ``project_root``) so the assertions
@@ -136,53 +140,7 @@ def test_install_uses_hardlink_backend_off_macos(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Sidecar bundle step ([3/6])
 # ---------------------------------------------------------------------------
-
-
-def test_build_invokes_sidecar_bun_filter(tmp_path: Path):
-    """[3/6] Build Node.js sidecar via the package's ``build`` script."""
-    captured = _run_build_capture_invocations(tmp_path)
-    match = _find_call(
-        captured,
-        lambda c: c[:2] == ["bun", "run"]
-        and "--filter" in c
-        and "opencompany-nodejs-executor" in c,
-    )
-    assert match is not None, (
-        "expected `bun run --filter opencompany-nodejs-executor build` in "
-        f"{[c['argv'] for c in captured]}"
-    )
-    argv = match[1]["argv"]
-    assert "build" in argv, f"sidecar step must invoke the `build` script, got {argv}"
-    # bun rejects --filter BEFORE the run subcommand (it would parse the
-    # next word as a script name) — lock the flag position.
-    assert argv.index("--filter") > argv.index("run"), (
-        f"--filter must come after the `run` subcommand for bun, got {argv}"
-    )
-
-
-def test_sidecar_build_runs_after_client_build(tmp_path: Path):
-    """Sidecar bundle runs AFTER the client build (the workspace install
-    + client build populate ``server/nodejs/node_modules`` with esbuild
-    first).
-    """
-    captured = _run_build_capture_invocations(tmp_path)
-    client = _find_call(captured, lambda c: "react-flow-client" in c)
-    sidecar = _find_call(captured, lambda c: "opencompany-nodejs-executor" in c)
-    assert client is not None and sidecar is not None
-    assert (
-        client[0] < sidecar[0]
-    ), f"client build idx {client[0]} must precede sidecar bundle idx {sidecar[0]}"
-
-
-def test_only_one_sidecar_bundle_invocation(tmp_path: Path):
-    """Sidecar bundle must fire exactly once per build."""
-    captured = _run_build_capture_invocations(tmp_path)
-    matches = [c for c in captured if "opencompany-nodejs-executor" in c["argv"]]
-    assert len(matches) == 1, f"expected exactly 1 sidecar bundle, got {len(matches)}"
-
-
-# ---------------------------------------------------------------------------
-# Python bytecode compile step ([5/6])
+# Python bytecode compile step ([4/5])
 # ---------------------------------------------------------------------------
 
 
@@ -372,31 +330,28 @@ def test_only_one_temporal_install_invocation(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_order_client_then_sidecar_then_uv_then_compileall(tmp_path: Path):
+def test_pipeline_order_client_then_uv_then_compileall(tmp_path: Path):
     """Full ordering invariant for the new pipeline:
 
     1. client build  (``bun run --filter react-flow-client build``)
-    2. sidecar bundle (``bun run --filter opencompany-nodejs-executor build``)
-    3. uv sync       (``uv sync``)
-    4. compileall    (``uv run python -m compileall ...``)
+    2. uv sync       (``uv sync``)
+    3. compileall    (``uv run python -m compileall ...``)
 
     compileall MUST follow uv sync because it invokes ``uv run python``,
     which requires the venv to exist.
     """
     captured = _run_build_capture_invocations(tmp_path)
     client = _find_call(captured, lambda c: "react-flow-client" in c)
-    sidecar = _find_call(captured, lambda c: "opencompany-nodejs-executor" in c)
     uv_sync = _find_call(captured, lambda c: c[:2] == ["uv", "sync"])
     compileall = _find_call(captured, lambda c: "compileall" in c)
     for label, match in (
         ("client", client),
-        ("sidecar", sidecar),
         ("uv_sync", uv_sync),
         ("compileall", compileall),
     ):
         assert match is not None, f"missing pipeline step: {label}"
-    indices = [client[0], sidecar[0], uv_sync[0], compileall[0]]
+    indices = [client[0], uv_sync[0], compileall[0]]
     assert indices == sorted(indices), (
-        f"pipeline order broken: client={client[0]} sidecar={sidecar[0]} "
+        f"pipeline order broken: client={client[0]} "
         f"uv_sync={uv_sync[0]} compileall={compileall[0]}"
     )

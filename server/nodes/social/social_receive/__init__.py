@@ -177,5 +177,5 @@ class SocialReceiveNode(ActionNode):
 
 
 # socialReceive needs the executor's connected_outputs injection
-# (alongside console / pythonExecutor / webhookResponse / socialReceive
-# already in _NEEDS_CONNECTED_OUTPUTS); the legacy entry stays.
+# (alongside console / webhookResponse already in
+# _NEEDS_CONNECTED_OUTPUTS); the legacy entry stays.

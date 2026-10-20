@@ -518,7 +518,6 @@ Queue distribution (live count via
 | `messaging` | WhatsApp / Telegram | 20 |
 | `triggers-event` | Push-based triggers | 100 |
 | `triggers-poll` | Polling triggers (Gmail, etc.) | 100 |
-| `code-exec` | Python / JS / TS sandboxes | 10 |
 | `browser` | Playwright / agent-browser | 4 |
 
 Env overrides: `TEMPORAL_<QUEUE>_CONCURRENCY` (e.g.
@@ -709,10 +708,6 @@ server/
 │   ├── android/                 # 16 Android service nodes
 │   │   ├── _base.py             # AndroidServiceBase
 │   │   └── <service>/__init__.py
-│   ├── code/                    # python/js/ts executors
-│   │   ├── _base.py             # CodeExecutorBase
-│   │   ├── _nodejs.py           # Shared NodeJSClient singleton
-│   │   └── <lang>_executor/__init__.py
 │   ├── filesystem/              # file_read / file_modify / shell / fs_search / gallery
 │   │   ├── _backend.py          # Native workspace-contained filesystem helper
 │   │   └── <op>/__init__.py

@@ -55,7 +55,7 @@ class TestResolveActivityFlagOff:
 
     def test_known_plugin_routes_to_legacy(self, workflow_instance):
         with _set_flag(False):
-            name, queue = workflow_instance._resolve_activity("pythonExecutor")
+            name, queue = workflow_instance._resolve_activity("httpRequest")
         assert name == "execute_node_activity"
         assert queue is None
 
@@ -77,8 +77,8 @@ class TestResolveActivityFlagOn:
 
     def test_known_plugin_routes_per_type(self, workflow_instance):
         with _set_flag(True):
-            name, queue = workflow_instance._resolve_activity("pythonExecutor")
-        assert name == "node.pythonExecutor.v1"
+            name, queue = workflow_instance._resolve_activity("httpRequest")
+        assert name == "node.httpRequest.v1"
         # queue stays None while temporal_worker_pool_enabled is off —
         # the single manager worker polls only the default queue.
         assert queue is None
@@ -119,10 +119,10 @@ class TestResolveActivityPoolRouting:
         from services.node_registry import get_node_class
 
         with _set_flag(True, pool=True):
-            name, queue = workflow_instance._resolve_activity("pythonExecutor")
-        assert name == "node.pythonExecutor.v1"
-        assert queue == get_node_class("pythonExecutor").task_queue
-        assert queue == "code-exec"
+            name, queue = workflow_instance._resolve_activity("httpRequest")
+        assert name == "node.httpRequest.v1"
+        assert queue == get_node_class("httpRequest").task_queue
+        assert queue == "rest-api"
 
     def test_pool_on_ai_agent_routes_to_ai_heavy(self, workflow_instance):
         with _set_flag(True, pool=True):
@@ -131,7 +131,7 @@ class TestResolveActivityPoolRouting:
 
     def test_pool_off_is_the_rollback_channel(self, workflow_instance):
         with _set_flag(True, pool=False):
-            _, queue = workflow_instance._resolve_activity("pythonExecutor")
+            _, queue = workflow_instance._resolve_activity("httpRequest")
         assert queue is None
 
     def test_pool_on_unknown_type_still_falls_back_to_legacy(self, workflow_instance):
@@ -196,7 +196,7 @@ class TestAgentWorkflowDispatch:
     def test_non_agent_types_stay_on_activity_path(self, workflow_instance):
         """Tool / utility / model nodes shouldn't accidentally route
         through AgentWorkflow even when F4.B is on."""
-        for t in ("pythonExecutor", "calculatorTool", "openaiChatModel"):
+        for t in ("httpRequest", "calculatorTool", "openaiChatModel"):
             with self._set_flags(per_type=True, agent_wf=True):
                 dispatch = workflow_instance._resolve_dispatch(t)
             assert dispatch["kind"] == "activity", f"{t} is not an agent type; must NOT route to AgentWorkflow"

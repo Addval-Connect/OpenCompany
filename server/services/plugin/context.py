@@ -38,7 +38,7 @@ class NodeContext:
     #: credential lookup. See constants.DEFAULT_CREDENTIAL_CUSTOMER_ID.
     credential_customer_id: str = "default"
     workspace_dir: Optional[str] = None
-    # Original outputs/nodes/edges for graph-aware nodes (console, pythonExecutor, …)
+    # Original outputs/nodes/edges for graph-aware nodes (console, webhookResponse, …)
     outputs: Dict[str, Any] = field(default_factory=dict)
     nodes: list = field(default_factory=list)
     edges: list = field(default_factory=list)
