@@ -14,7 +14,8 @@ metadata:
 
 Pipeline de 4 pasos sobre el consolidado de A3 (ruta en el `context`, `fileRead`). ÚNICO punto de
 escritura del sistema — ningún otro agente escribe en Odoo. Odoo por la tool `odoo_jsonrpc`
-(host/db/credenciales fijos en el nodo); aritmética exacta en `javascriptExecutor`. Skill adicional
+(host/db/credenciales fijos en el nodo); la aritmética la valida Odoo en escritura (constraints del
+módulo carga_kdx) y el read-back la confirma. Skill adicional
 solo si hay rechazos: `administrar-casos-de-borde-carga`.
 
 Precondición: no ejecutes si quedan `pendientes[]` con `respuesta: null` o líneas de destino 1 con
@@ -36,8 +37,9 @@ Precondición: no ejecutes si quedan `pendientes[]` con `respuesta: null` o lín
 ## Paso 1 — Construir el payload
 
 Lee el consolidado; por cada movimiento de destino 1 (nunca `movimientos_contables`/`excluidos`)
-arma la línea con el mapeo de abajo. Deriva el nombre y calcula precio/total en `javascriptExecutor`
-(no en el prompt). Clave de idempotencia por línea: `<custodian_id>-<account>-<period>-mov-<N>`.
+arma la línea con el mapeo de abajo. Deriva el nombre y calcula precio/total con los redondeos de
+abajo; Odoo valida en escritura y el read-back confirma. Clave de idempotencia por línea:
+`<custodian_id>-<account>-<period>-mov-<N>`.
 Campo obligatorio faltante → devuelve esa línea como pendiente `otro`, no rellenes con default.
 `fileModify` del payload.
 
@@ -54,9 +56,10 @@ header vacío; salta al paso 4.
 
 Casi todos los rechazos son decidibles antes leyendo el producto. En pocas llamadas, no una por
 línea:
-1. Local (`javascriptExecutor`): id+name presentes, `line_ids` no vacío, `total_amount ==
+1. Revisión del payload (antes de escribir): id+name presentes, `line_ids` no vacío, `total_amount ==
    round(qty × price, decimales)`, `currency_id` = moneda del instrumento, `article_107_flag` bool,
-   `operation_date` no futura y en el mes del header.
+   `operation_date` no futura y en el mes del header. Las constraints de Odoo (carga_kdx) son la
+   validación definitiva en escritura.
 2. Odoo (solo lectura): resuelve instrumentos en bloque
    (`product.product` `domain=[["is_investment_product","=",true],["administrator_id","=",<c>],["account_number","=",<a>]]`),
    indexa por `(name,series,currency)` normalizado; toda línea sin match predice R1. FX: para líneas

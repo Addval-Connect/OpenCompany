@@ -70,7 +70,7 @@ paso), delega inmediatamente al siguiente worker sin esperar al usuario.
 ## Reglas de responsabilidad
 
 - **A2 nunca consulta Odoo.** Si necesita saber si un instrumento existe, marca
-  confianza y sigue — el cruce contra maestros (javascriptExecutor + JSON-RPC)
+  confianza y sigue — el cruce contra maestros (JSON-RPC)
   es exclusivo de A3.
 - **A3 nunca reinterpreta la cartola.** Si sospecha mala extracción, levanta un
   pendiente; no corrige el JSON él mismo.
