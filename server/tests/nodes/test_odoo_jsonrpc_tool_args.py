@@ -9,7 +9,7 @@ instance (the failure mode the connection lock was built to prevent).
 """
 
 from typing import Any, List, Optional, Tuple
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
