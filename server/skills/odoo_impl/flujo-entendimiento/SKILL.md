@@ -1,6 +1,6 @@
 ---
 name: flujo-entendimiento
-description: Misiones análisis y cierre G1 de los agentes de flujo — procedimiento de entendimiento; el dominio vive en flujos/<flujo>.
+description: Misiones análisis y cierre G1 de los agentes de flujo — procedimiento de entendimiento; el dominio vive en flujo-<flujo>.
 allowed-tools: odoo_jsonrpc
 metadata:
   author: opencompany
@@ -11,7 +11,7 @@ metadata:
 
 # Flujo · Entendimiento
 
-Misiones `analisis` y `cerrar G1`. Lo usan los cuatro agentes de flujo; tu `flujo` viene en el `context`. Este skill es el **procedimiento**: el conocimiento del dominio (modelos, preguntas, trampas) está en tu skill `flujos/<flujo>`. Cargas también `contrato-implementacion-odoo` e `introspeccion-odoo-solo-lectura`.
+Misiones `analisis` y `cerrar G1`. Lo usan los cuatro agentes de flujo; tu `flujo` viene en el `context`. Este skill es el **procedimiento**: el conocimiento del dominio (modelos, preguntas, trampas) está en tu skill `flujo-<flujo>`. Cargas también `contrato-implementacion-odoo` e `introspeccion-odoo-solo-lectura`.
 
 ## Misión `analisis`
 
@@ -28,7 +28,7 @@ G0 cerrado: `00-entrada/historias.csv` existe con filas; `01-analisis/definicion
    - cada módulo faltante (`BLOQUEANTE`),
    - cada clasificación dudosa,
    - cada campo `[VERIFICAR]` de la introspección,
-   - las decisiones no obvias de tu dominio, que listan las preguntas mínimas de tu skill `flujos/<flujo>`.
+   - las decisiones no obvias de tu dominio, que listan las preguntas mínimas de tu skill `flujo-<flujo>`.
 
    Cada ítem trae pregunta cerrada, opciones **sin sugerir una**, referencia a archivo y fila o modelo, y una **propuesta concreta** del agente. `respuesta:` queda vacía. Lo que no aplica se declara `no aplica`, no se omite.
 5. Marca `version: 1` en cada archivo que escribes y registra en la introspección su fecha.

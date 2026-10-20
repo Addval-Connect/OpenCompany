@@ -1,6 +1,6 @@
 ---
 name: plantilla-skill-de-dominio
-description: Estructura canónica de un skill de dominio flujos/<flujo> — guía para escribir los cuatro skills de dominio; no la carga ningún agente.
+description: Estructura canónica de un skill de dominio flujo-<flujo> — guía para escribir los cuatro skills de dominio; no la carga ningún agente.
 allowed-tools: odoo_jsonrpc
 metadata:
   author: opencompany
@@ -9,9 +9,15 @@ metadata:
 
 ---
 
-# Plantilla de skill de dominio: `flujos/<flujo>`
+# Plantilla de skill de dominio: `flujo-<flujo>`
 
 Cada flujo (`financiero`, `ventas_servicios`, `compras_aprobaciones`, `inventario_fabricacion`) tiene **un** skill de dominio con esta estructura. Los skills de procedimiento (`flujo-entendimiento`, `flujo-configuracion`, `flujo-implementacion`, `introspeccion-odoo-solo-lectura`) le piden exactamente estas secciones por nombre; si falta una, el agente no la inventa: escribe una definición abierta. Es **conocimiento**, no procedimiento: no repitas aquí cómo se hace una misión.
+
+**Dónde vive.** Los cuatro skills de dominio son carpetas planas dentro del grupo `odoo_impl` —
+`odoo_impl/flujo-financiero/`, `odoo_impl/flujo-ventas-servicios/`, `odoo_impl/flujo-compras-aprobaciones/`,
+`odoo_impl/flujo-inventario-fabricacion/` — con su `SKILL.md` en la raíz de cada una. La plataforma
+descubre skills a dos niveles (grupo/skill) y los nombres no admiten `/`: el nombre del skill es
+`flujo-<flujo>` (kebab-case), no `flujos/<flujo>`.
 
 **Regla de procedencia.** Todo hecho de Odoo (nombre de campo, clave de `selection`, xmlid, comportamiento de una versión) lleva su estado: `[verificado: <instancia>, <fecha>]` o `[hipótesis]`. Una hipótesis se confirma con `fields_get` antes de usarla y nunca se escribe como dato. `fields_get` sigue siendo la única autoridad.
 

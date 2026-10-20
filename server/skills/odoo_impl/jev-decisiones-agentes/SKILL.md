@@ -84,7 +84,7 @@ Una llamada por historia de tu flujo. `state` = `{"hu": <fila>, "instancia": {"m
 }
 ```
 
-Las opciones de `modelo_principal` salen del **mapa de modelos de tu skill `flujos/<flujo>`** (hasta 255): JEV solo puede elegir un modelo que tú ya listaste, nunca inventa uno.
+Las opciones de `modelo_principal` salen del **mapa de modelos de tu skill `flujo-<flujo>`** (hasta 255): JEV solo puede elegir un modelo que tú ya listaste, nunca inventa uno.
 
 - `modelo_principal` y `clasificacion` ≥ 0,8: los escribes en `matriz-brechas-<flujo>.csv`. **Salida segura:** escribes la propuesta de JEV igualmente en la fila, pero abres un ítem G1 `clasificacion_dudosa` para esa historia, que el consultor confirma. Una clasificación bajo umbral nunca llega a G2 sin confirmar.
 - `esfuerzo` y `riesgo`: redondea el score al nivel más cercano (`S`/`M`/`L` y `bajo`/`medio`/`alto`). Son orientativos; se corrigen en G1 sin ítem aparte.

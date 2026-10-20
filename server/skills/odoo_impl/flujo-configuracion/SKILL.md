@@ -11,7 +11,7 @@ metadata:
 
 # Flujo · Configuración (diseño)
 
-Misiones `diseno`, `cruzar requiere_de` y `cerrar G2`. Lo usan los cuatro agentes de flujo. El procedimiento está aquí; los modelos, las dependencias típicas y las decisiones de dominio están en tu skill `flujos/<flujo>`. Cargas también `contrato-implementacion-odoo` y `convencion-ids-externos`.
+Misiones `diseno`, `cruzar requiere_de` y `cerrar G2`. Lo usan los cuatro agentes de flujo. El procedimiento está aquí; los modelos, las dependencias típicas y las decisiones de dominio están en tu skill `flujo-<flujo>`. Cargas también `contrato-implementacion-odoo` y `convencion-ids-externos`.
 
 Las decisiones de diseño son **deterministas**: salen de tu introspección y de las respuestas del consultor. No uses JEV para decidir qué se llena a mano o qué se configura.
 
