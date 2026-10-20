@@ -319,24 +319,40 @@ class WorkflowIntrospectNode(ToolNode):
         def _query() -> Dict[str, Any]:
             con = _connect_readonly(db_path)
             try:
-                key = target.lower()
-                row = con.execute(
+                rows = con.execute(
                     "SELECT id, name, slug, description, updated_at, data "
-                    "FROM workflows WHERE lower(name)=? OR lower(id)=? OR lower(slug)=?",
-                    (key, key, key),
-                ).fetchone()
-                if row is None:
-                    listing = [
-                        f"{r['name']} ({r['slug']})"
-                        for r in con.execute(
-                            "SELECT name, slug FROM workflows ORDER BY name"
-                        ).fetchall()
-                    ]
+                    "FROM workflows ORDER BY updated_at DESC"
+                ).fetchall()
+                key = target.lower()
+                exact = [
+                    r for r in rows
+                    if key in ((r["name"] or "").lower(), (r["id"] or "").lower(), (r["slug"] or "").lower())
+                ]
+                # LLM ergonomics: the model says "CartolaTax", the workflow is
+                # "CartolaTax — Statement Import". Exact match wins; otherwise
+                # substring over name/slug — and if that is still ambiguous,
+                # name the candidates instead of guessing.
+                fuzzy = [
+                    r for r in rows
+                    if key in (r["name"] or "").lower()
+                    or key in (r["slug"] or "").lower()
+                ]
+                matches = exact or fuzzy
+                if not matches:
+                    listing = [f"{r['name']} ({r['slug']})" for r in rows]
                     raise NodeUserError(
                         f"Workflow {target!r} not found in namespace "
                         f"{namespace!r}. Available: "
                         f"{'; '.join(listing) if listing else '(none)'}"
                     )
+                if len(matches) > 1:
+                    listing = [f"{r['name']} ({r['slug']})" for r in matches]
+                    raise NodeUserError(
+                        f"Workflow {target!r} is ambiguous in namespace "
+                        f"{namespace!r}: {'; '.join(listing)}. Use the exact "
+                        "name, id or slug."
+                    )
+                row = matches[0]
                 params_rows = con.execute(
                     "SELECT node_id, parameters FROM node_parameters "
                     "WHERE node_id LIKE ? ORDER BY node_id",

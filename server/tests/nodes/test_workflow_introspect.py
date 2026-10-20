@@ -210,6 +210,31 @@ async def test_get_workflow_include_filters(host) -> None:
     assert params_only.nodes is None and params_only.edges is None and params_only.parameters
 
 
+async def test_get_workflow_resolves_by_substring_when_unambiguous(host) -> None:
+    # LLM ergonomics: the model says "Set", the workflow is "Set Auditor".
+    out = await WorkflowIntrospectNode().get_workflow(
+        _ctx(),
+        WorkflowIntrospectParams(operation="get_workflow", namespace="alpha", workflow="auditor"),
+    )
+    assert out.workflow["id"] == WF_ID
+
+
+async def test_get_workflow_ambiguous_substring_names_candidates(host) -> None:
+    _make_ns_db(
+        host, "amb", [
+            {"id": "a1", "name": "Set Auditor Dos", "slug": "Set_Auditor_Dos_1"},
+            {"id": "a2", "name": "Set Auditor Tres", "slug": "Set_Auditor_Tres_1"},
+        ]
+    )
+    with pytest.raises(NodeUserError, match="ambiguous"):
+        await WorkflowIntrospectNode().get_workflow(
+            _ctx(),
+            WorkflowIntrospectParams(
+                operation="get_workflow", namespace="amb", workflow="set auditor"
+            ),
+        )
+
+
 async def test_get_workflow_unknown_name_lists_candidates(host) -> None:
     with pytest.raises(NodeUserError, match="Set Auditor"):
         await WorkflowIntrospectNode().get_workflow(
