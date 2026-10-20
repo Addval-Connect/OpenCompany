@@ -30,7 +30,7 @@ base y no hay vuelta atrás salvo restaurar.
 
 | Parte | Regla | Ejemplo |
 |---|---|---|
-| `prefijo_proyecto` | Fijo por proyecto, declarado en `blueprint.yaml` como `prefijo_xmlid`. Nunca `base`, nunca el nombre de un módulo de Odoo. | `adv_acme` |
+| `prefijo_proyecto` | Fijo por proyecto, declarado en `proyecto.yaml` como `prefijo_xmlid`. Nunca `base`, nunca el nombre de un módulo de Odoo. | `adv_acme` |
 | `objeto_corto` | Abreviatura estable del modelo (tabla abajo). | `partner` |
 | `clave_natural` | Dato **inmutable** del registro, normalizado. NO un contador. | `761234567` |
 
@@ -60,7 +60,8 @@ identidad del registro (ej. bodega + ubicación) — nunca a partir de la posici
 
 ## Normalización (obligatoria, sin excepciones)
 
-- Solo `[a-z0-9_.]`. Minúsculas siempre.
+- Solo `[a-z0-9_]` en cada segmento. Minúsculas siempre. El punto separa módulo de nombre y no
+  forma parte de ningún segmento: la regex de verificación es `^[a-z0-9_]+\.[a-z0-9_]+$`.
 - Sin acentos ni ñ: `categ_logistica`, no `categ_logística`.
 - Espacios, guiones y `/` → `_`. Nunca dos `_` seguidos; nunca `_` al final.
 - RUT chileno: sin puntos, sin guion, **con** dígito verificador → `76.123.456-7` → `761234567`.
@@ -129,12 +130,13 @@ Reglas de referencia:
 - `boolean`: `1`/`0` o `True`/`False`. Vacío = falso. Un `boolean` como `"sí"` es `E210`.
 - `date` / `datetime`: `YYYY-MM-DD` y `YYYY-MM-DD HH:MM:SS` en UTC. Cualquier otro formato es `E210`.
 
-## Verificación antes de cargar
+## Reglas del xmlid antes de cargar
 
-1. La columna `id` existe, es la primera y no tiene celdas vacías.
-2. Todos los `id` del archivo son únicos (duplicado → `E310`).
-3. Todos empiezan con el `prefijo_xmlid` del `blueprint.yaml`.
-4. Todos cumplen `^[a-z0-9_]+\.[a-z0-9_]+$`.
-5. Cada `<campo>/id` referenciado existe: en un archivo anterior del mismo lote, o en la instancia
-   (`ir.model.data`, ver `odoo-rpc-en-opencompany`). Si no → `E300`.
-6. Ningún archivo referencia un xmlid definido en un archivo con `NN` **mayor** al propio → `E320`.
+Las reglas de **formato** del xmlid son estas (el `id` existe, es la primera columna y no tiene celdas
+vacías; los `id` son únicos, `E310`; empiezan con el `prefijo_xmlid`; cumplen
+`^[a-z0-9_]+\.[a-z0-9_]+$`).
+
+La **verificación completa antes de cargar** — referencias resueltas, orden y aciclicidad — es trabajo
+del validador: `flujo-implementacion`, misión `validacion`. La regla de orden que allí se verifica dice
+que **el grafo `depende_de` es acíclico y ninguna referencia apunta a un objeto que se cargue
+después** (ya no se infiere de los nombres de archivo).

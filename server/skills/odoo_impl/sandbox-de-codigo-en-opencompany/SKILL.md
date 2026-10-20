@@ -152,7 +152,7 @@ filas que esperabas del archivo antes de cargar.
 
 ## YAML y JSON del proyecto
 
-**No existe `yaml` en ningún sandbox.** `blueprint.yaml`, `casos.yaml` y los `.meta.json` son
+**No existe `yaml` en ningún sandbox.** `proyecto.yaml`, los `blueprint-<flujo>.yaml`, los `casos-<flujo>.yaml` y los `.meta.json` son
 archivos chicos: léelos con `file_read` y razona sobre el texto directamente. No intentes parsearlos
 en un sandbox — `import yaml` no está y no hay reemplazo.
 

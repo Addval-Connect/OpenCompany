@@ -169,6 +169,10 @@
     "icon": "lucide:Monitor",
     "color": "#8be9fd"
   },
+  "odoo_jsonrpc": {
+    "icon": "lucide:Database",
+    "color": "#bd93f9"
+  },
   "github": {
     "icon": "lobehub:Github",
     "color": "#8250df"
