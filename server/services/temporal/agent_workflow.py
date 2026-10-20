@@ -639,6 +639,16 @@ class AgentWorkflow:
         # call set_active_namespace for per-tenant DB/credential routing.
         if "credential_customer_id" not in payload and context.get("credential_customer_id"):
             payload = {**payload, "credential_customer_id": context["credential_customer_id"]}
+        # Carry the authenticated principal the same way. Tool nodes derive
+        # their scope owner from ``user_id`` (SimpleMemoryNode._scope /
+        # data_source._paths.owner_id: "mirrors SimpleMemoryNode._scope").
+        # Without it every tool activity executed as principal "owner"
+        # while the Memory panel and the canvas path read with the real WS
+        # principal (the JWT sub) — agent-written memory landed in a
+        # different MemoryScope namespace_id hash and was invisible to the
+        # panel and to every other path (2026-10-20 report).
+        if "user_id" not in payload and context.get("user_id"):
+            payload = {**payload, "user_id": context["user_id"]}
         # Stable per-run execution id, forwarded into every tool-call
         # activity so session-keyed nodes (browser) reuse one instance
         # across iterations instead of minting a fresh uuid per call
@@ -1737,6 +1747,14 @@ class AgentWorkflow:
                     # created in the tenant DB, and credential-scoped tools
                     # read the owner's credentials.db.
                     "credential_customer_id": payload.get("credential_customer_id"),
+                    # Authenticated principal — tool nodes derive their
+                    # scope owner from it (SimpleMemoryNode._scope /
+                    # data_source._paths.owner_id). Without it every tool
+                    # executed as "owner" while the Memory panel and the
+                    # canvas path read with the real WS principal: agent
+                    # memory landed under a different scope hash than the
+                    # panel reads (see the user_id carry in run()).
+                    "user_id": payload.get("user_id"),
                     # Namespace-aware workspace: filesystem tools (fsSearch/
                     # fileRead/fileModify) root here. Without it get_backend
                     # falls back to the root-level workspace (no namespaces/
