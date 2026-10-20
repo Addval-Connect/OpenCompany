@@ -264,6 +264,66 @@ async def test_long_strings_are_truncated_with_marker(host) -> None:
 
 
 # ---------------------------------------------------------------------------
+# export_workflow — the workspace hand-off
+# ---------------------------------------------------------------------------
+
+
+async def test_export_writes_full_definition_and_indexes_artifacts(tmp_path, monkeypatch) -> None:
+    _make_ns_db(tmp_path, "alpha", [_sample_workflow()])
+    monkeypatch.setattr(
+        "nodes.workflow.workflow_introspect._namespaces_root", lambda: tmp_path / "namespaces"
+    )
+    ctx = NodeContext(
+        node_id="t:workflowIntrospect:1",
+        node_type="workflowIntrospect",
+        workflow_id="w1",
+        workspace_dir=str(tmp_path / "ws"),
+    )
+    out = await WorkflowIntrospectNode().export_workflow(
+        ctx,
+        WorkflowIntrospectParams(operation="export_workflow", namespace="alpha", workflow="Set Auditor"),
+    )
+    # Default path: estructura/<ns>__<slug>.json — relative to the workspace.
+    assert out.file_path == "estructura/alpha__Set_Auditor_1.json"
+    written = tmp_path / "ws" / "estructura" / "alpha__Set_Auditor_1.json"
+    assert written.is_file()
+    on_disk = json.loads(written.read_text(encoding="utf-8"))
+    assert on_disk["workflow"]["node_count"] == 2
+    assert len(on_disk["edges"]) == 1
+    assert on_disk["parameters"]["aiAgent:1"]["system_message"] == "Eres A1."
+    # The artifact index points at the prose artifacts with exact JSON paths.
+    assert ("aiAgent:1", "system_message") in {
+        (a["node"], a["field"]) for a in out.artifacts
+    }
+    assert out.artifact_count == 1
+    assert all("parameters[" in a["json_path"] for a in out.artifacts)
+    # Pretty-printed for line pagination: more than one line.
+    assert out.line_count > 1
+
+
+async def test_export_rejects_escaping_file_path(tmp_path, monkeypatch) -> None:
+    _make_ns_db(tmp_path, "alpha", [_sample_workflow()])
+    monkeypatch.setattr(
+        "nodes.workflow.workflow_introspect._namespaces_root", lambda: tmp_path / "namespaces"
+    )
+    ctx = NodeContext(
+        node_id="t:workflowIntrospect:1",
+        node_type="workflowIntrospect",
+        workflow_id="w1",
+        workspace_dir=str(tmp_path / "ws"),
+    )
+    with pytest.raises(NodeUserError):
+        await WorkflowIntrospectNode().export_workflow(
+            ctx,
+            WorkflowIntrospectParams(
+                operation="export_workflow", namespace="alpha", workflow="Set Auditor",
+                file_path="../../outside.json",
+            ),
+        )
+    assert not (tmp_path / "outside.json").exists()
+
+
+# ---------------------------------------------------------------------------
 # Read-only enforcement
 # ---------------------------------------------------------------------------
 

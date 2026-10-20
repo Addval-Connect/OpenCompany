@@ -61,14 +61,15 @@ _TOTAL_CAP_FLOOR = 2_000
 _TRUNC_SUFFIX = "…[truncated, +{} chars]"
 
 WorkflowIntrospectOperation = Literal[
-    "list_namespaces", "list_workflows", "get_workflow",
+    "list_namespaces", "list_workflows", "get_workflow", "export_workflow",
 ]
 
 _INCLUDE = {"displayOptions": {"show": {"operation": ["get_workflow"]}}}
 _WORKFLOW = _INCLUDE
+_FILE_PATH = {"displayOptions": {"show": {"operation": ["export_workflow"]}}}
 _NAMESPACE = {
     "displayOptions": {
-        "show": {"operation": ["list_workflows", "get_workflow"]},
+        "show": {"operation": ["list_workflows", "get_workflow", "export_workflow"]},
     }
 }
 
@@ -195,6 +196,89 @@ def _fit_parameters(parameters: Dict[str, Any]) -> tuple[Dict[str, Any], List[st
         cap = max(cap // 2, _TOTAL_CAP_FLOOR)
 
 
+def _workflow_metadata(
+    row: Dict[str, Any],
+    nodes: List[Dict[str, Any]],
+    edges: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "slug": row["slug"],
+        "description": row["description"],
+        "updated_at": row["updated_at"],
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
+
+
+def _prose_artifacts(parameters: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Index the PROSE artifacts of a workflow definition.
+
+    Type-agnostic on purpose: anything with a persisted
+    ``system_message`` is a prompt artifact, any ``skills_config``
+    entry with inline ``instructions`` is a skill artifact. The graph
+    (nodes/edges) is deliberately NOT an artifact — it is structure;
+    A2/A3 read it directly from the exported JSON.
+    """
+    artifacts: List[Dict[str, Any]] = []
+    for node_id, params in sorted(parameters.items()):
+        if not isinstance(params, dict):
+            continue
+        sm = params.get("system_message")
+        if isinstance(sm, str) and sm.strip():
+            artifacts.append(
+                {
+                    "node": node_id,
+                    "field": "system_message",
+                    "json_path": f"parameters[{node_id!r}].system_message",
+                    "chars": len(sm),
+                }
+            )
+        skills = params.get("skills_config")
+        if isinstance(skills, dict):
+            for skill_name, cfg in skills.items():
+                if not isinstance(cfg, dict):
+                    continue
+                instructions = cfg.get("instructions")
+                if isinstance(instructions, str) and instructions.strip():
+                    artifacts.append(
+                        {
+                            "node": node_id,
+                            "field": f"skills_config.{skill_name}.instructions",
+                            "json_path": (
+                                f"parameters[{node_id!r}]"
+                                f".skills_config[{skill_name!r}].instructions"
+                            ),
+                            "chars": len(instructions),
+                        }
+                    )
+    return artifacts
+
+
+def _atomic_write_text(path: Path, text: str) -> int:
+    """Write ``text`` to ``path`` via temp-file + rename, return byte size.
+
+    The path is already contained (``resolve_media`` ran the two-layer
+    check); this adds the crash-atomic replacement so a partially
+    written export is never what a later mission reads.
+    """
+    import uuid as _uuid
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.tmp-{os.getpid()}-{_uuid.uuid4().hex[:8]}"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+    return len(text.encode("utf-8"))
+
+
 class WorkflowIntrospectParams(BaseModel):
     operation: WorkflowIntrospectOperation = "list_namespaces"
     namespace: str = Field(
@@ -212,6 +296,14 @@ class WorkflowIntrospectParams(BaseModel):
         description="graph = nodes+edges only; params = persisted node parameters only.",
         json_schema_extra=_INCLUDE,
     )
+    file_path: str = Field(
+        default="",
+        description=(
+            "Workspace-relative destination for export_workflow. "
+            "Empty = estructura/<namespace>__<slug>.json."
+        ),
+        json_schema_extra=_FILE_PATH,
+    )
     model_config = ConfigDict(extra="ignore")
 
 
@@ -226,6 +318,11 @@ class WorkflowIntrospectOutput(BaseModel):
     edges: Optional[List[Dict[str, Any]]] = None
     parameters: Optional[Dict[str, Dict[str, Any]]] = None
     truncated: Optional[List[str]] = None
+    file_path: Optional[str] = None
+    bytes_written: Optional[int] = None
+    line_count: Optional[int] = None
+    artifacts: Optional[List[Dict[str, Any]]] = None
+    artifact_count: Optional[int] = None
     model_config = ConfigDict(extra="allow")
 
 
@@ -242,14 +339,18 @@ class WorkflowIntrospectNode(ToolNode):
     tool_description = (
         "Read-only introspection of OpenCompany workflows across namespaces on this "
         "host. list_namespaces: which namespaces exist. list_workflows(namespace): "
-        "id/name/slug/description/updated_at per workflow. get_workflow(namespace, "
-        "workflow, include): the full structural material — nodes (id/type/label), "
-        "edges (source/target/sourceHandle/targetHandle — which agent owns which "
-        "tool), and every node's persisted parameters (system_message prompts, "
-        "skills_config with inline skills). Payloads are large: get_workflow output "
-        "is audit MATERIAL, not chat text — save it into the workspace with "
-        "file_modify and analyze the file instead of echoing it. Read-only: "
-        "credentials databases are never read and nothing can be written."
+        "id/name/slug/description/updated_at per workflow. export_workflow(namespace, "
+        "workflow): writes the FULL definition — nodes, edges with handles (which "
+        "agent owns which tool), and every node's persisted parameters "
+        "(system_message prompts, skills_config with inline skills) — as a "
+        "pretty-printed JSON file in the workspace (default "
+        "estructura/<ns>__<slug>.json) and returns ONLY the summary plus the "
+        "artifact index (the json_path of every agent prompt and inline skill). "
+        "This is the operation to use for audit material: analyze the FILE with "
+        "file_read/fs_search; never echo its content through context. "
+        "get_workflow(namespace, workflow, include) returns the same material "
+        "inline — only for small workflows or single fields. Read-only: "
+        "credentials databases are never read and no workflow can be modified."
     )
     component_kind = "tool"
     handles = (
@@ -307,12 +408,92 @@ class WorkflowIntrospectNode(ToolNode):
     async def get_workflow(
         self, ctx: NodeContext, params: WorkflowIntrospectParams
     ) -> WorkflowIntrospectOutput:
-        db_path = _resolve_namespace(params.namespace)
-        namespace = db_path.parent.name
-        target = (params.workflow or "").strip()
-        if not target:
+        namespace, row, nodes, edges, parameters = await self._load_definition(
+            params.namespace, params.workflow
+        )
+        output = WorkflowIntrospectOutput(
+            operation="get_workflow",
+            namespace=namespace,
+            workflow=_workflow_metadata(row, nodes, edges),
+        )
+        if params.include in ("all", "graph"):
+            output.nodes = nodes
+            output.edges = edges
+        if params.include in ("all", "params"):
+            capped, touched = _fit_parameters(parameters)
+            output.parameters = capped
+            output.truncated = touched
+        return output
+
+    @Operation("export_workflow")
+    async def export_workflow(
+        self, ctx: NodeContext, params: WorkflowIntrospectParams
+    ) -> WorkflowIntrospectOutput:
+        """Write the FULL definition into the workspace; return only paths.
+
+        The point of this operation: a large workflow's definition must
+        never travel through an LLM context just to end up in a file.
+        The JSON lands pretty-printed (``indent=1``) so file_read's
+        line-based pagination and fs_search's grep both work on it, and
+        the response carries the artifact index — the exact JSON path of
+        every prose artifact (agent prompts, inline skills) — so missions
+        can reference artifacts without holding their text.
+        """
+        namespace, row, nodes, edges, parameters = await self._load_definition(
+            params.namespace, params.workflow
+        )
+        payload = {
+            "workflow": _workflow_metadata(row, nodes, edges),
+            "nodes": nodes,
+            "edges": edges,
+            "parameters": parameters,
+        }
+        default_name = f"estructura/{namespace}__{row['slug'] or row['id']}.json"
+        rel_path = (params.file_path or "").strip() or default_name
+        from services.media.workspace import resolve_media, workspace_root
+
+        target = resolve_media(rel_path, ctx=ctx)  # contained; raises NodeUserError
+        text = json.dumps(payload, indent=1, ensure_ascii=False, default=str)
+        bytes_written = await asyncio.to_thread(_atomic_write_text, target, text)
+        # Report the path workspace-relative — the same shape every
+        # workspace tool (file_read / fs_search / file_modify) spells.
+        root = workspace_root(ctx)
+        display = (
+            target.relative_to(root).as_posix()
+            if target.is_relative_to(root)
+            else target.name
+        )
+        artifacts = _prose_artifacts(parameters)
+        return WorkflowIntrospectOutput(
+            operation="export_workflow",
+            namespace=namespace,
+            workflow=_workflow_metadata(row, nodes, edges),
+            file_path=display,
+            bytes_written=bytes_written,
+            line_count=text.count("\n") + 1,
+            artifacts=artifacts,
+            artifact_count=len(artifacts),
+        )
+
+    # ------------------------------------------------------------------
+    # Shared read path
+    # ------------------------------------------------------------------
+
+    async def _load_definition(
+        self, namespace: str, target: str
+    ) -> tuple[str, Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """Read one workflow definition read-only from its namespace DB.
+
+        Returns ``(namespace, workflow_row, nodes, edges, parameters)``
+        with parameters keyed by the SHORT node id (workflow-id prefix
+        stripped) — the same key the canvas and the mission texts use.
+        """
+        db_path = _resolve_namespace(namespace)
+        resolved_ns = db_path.parent.name
+        wanted = (target or "").strip()
+        if not wanted:
             raise NodeUserError(
-                "workflow is required for get_workflow — a name, id or slug "
+                "workflow is required — a name, id or slug "
                 "(list_workflows shows them)."
             )
 
@@ -323,7 +504,7 @@ class WorkflowIntrospectNode(ToolNode):
                     "SELECT id, name, slug, description, updated_at, data "
                     "FROM workflows ORDER BY updated_at DESC"
                 ).fetchall()
-                key = target.lower()
+                key = wanted.lower()
                 exact = [
                     r for r in rows
                     if key in ((r["name"] or "").lower(), (r["id"] or "").lower(), (r["slug"] or "").lower())
@@ -341,15 +522,15 @@ class WorkflowIntrospectNode(ToolNode):
                 if not matches:
                     listing = [f"{r['name']} ({r['slug']})" for r in rows]
                     raise NodeUserError(
-                        f"Workflow {target!r} not found in namespace "
-                        f"{namespace!r}. Available: "
+                        f"Workflow {wanted!r} not found in namespace "
+                        f"{resolved_ns!r}. Available: "
                         f"{'; '.join(listing) if listing else '(none)'}"
                     )
                 if len(matches) > 1:
                     listing = [f"{r['name']} ({r['slug']})" for r in matches]
                     raise NodeUserError(
-                        f"Workflow {target!r} is ambiguous in namespace "
-                        f"{namespace!r}: {'; '.join(listing)}. Use the exact "
+                        f"Workflow {wanted!r} is ambiguous in namespace "
+                        f"{resolved_ns!r}: {'; '.join(listing)}. Use the exact "
                         "name, id or slug."
                     )
                 row = matches[0]
@@ -406,24 +587,4 @@ class WorkflowIntrospectNode(ToolNode):
                 parsed = {"_raw": pr.get("parameters")}
             parameters[short] = parsed if isinstance(parsed, dict) else {"_raw": parsed}
 
-        output = WorkflowIntrospectOutput(
-            operation="get_workflow",
-            namespace=namespace,
-            workflow={
-                "id": row["id"],
-                "name": row["name"],
-                "slug": row["slug"],
-                "description": row["description"],
-                "updated_at": row["updated_at"],
-                "node_count": len(nodes),
-                "edge_count": len(edges),
-            },
-        )
-        if params.include in ("all", "graph"):
-            output.nodes = nodes
-            output.edges = edges
-        if params.include in ("all", "params"):
-            capped, touched = _fit_parameters(parameters)
-            output.parameters = capped
-            output.truncated = touched
-        return output
+        return resolved_ns, row, nodes, edges, parameters
