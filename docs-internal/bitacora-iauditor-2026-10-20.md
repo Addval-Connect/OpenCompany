@@ -162,3 +162,34 @@ por-namespace — lección 4 de CartolaTax). El camino por chat no depende de es
    vez, pero el needle de verificación mal elegido sí se corrigió gracias al read-back.
 4. La resolución difusa (exacto → substring → ambiguo con candidatos) es ergonomía del
    LLM, no un lujo: el modelo nunca va a citar el nombre largo exacto la primera vez.
+
+## 9. Primera corrida real (22:42–23:12) — hallazgo de plataforma: retry_task deadlock
+
+La prueba conversacional ("audita el flujo del namespace addval-tax") validó el ciclo
+E1–E3 con recuperación: export (480KB/1106 líneas/41 artefactos), delegaciones por
+tanda, 5 elucidaciones escritas, y la re-delegación automática del faltante
+("Re-elucidar artefacto aiAgent-1...") funcionó. Luego el run quedó congelado ~10 min.
+
+**Causa raíz (bug de plataforma, `core/database.py::acquire_subagent_permit`)**:
+el lease id es determinista — `sha256(task_id + activity_id + attempt_temporal)`.
+Una tarea **reintentada** (`retry_task`) deriva el MISMO lease que su intento
+original; la fila quedó `status='released'`, el acquire la encontraba por permit_id
+y devolvía `acquired=False` eternamente (la fila existía → el INSERT nunca corría;
+el chequeo solo aceptaba 'active'). El runner giraba en el poll sin logs y COORD,
+protocolo mediante, no avanzaba con tareas queued. Confirmado dos veces: `task_b9dc`
+(desbloqueada con cancel por chat) y `task_b330d4` (A3, attempt 0 failed → mismo
+patrón). Introducido con el lease v2 (commit `77dc7db9`). Fix en la rama:
+re-adquirir leases `released` del mismo root (+3 tests).
+
+**Otros hallazgos de la corrida** (para hardening posterior, no bloquean):
+- A1 (deepseek) leyó el JSON de 480KB en UN `file_read` → el budget de contexto lo
+  cortó (493KB→384KB) y el artefacto buscado quedó fuera → "no se encontró el
+  artefacto". El grep-first de la misión debe ser OBLIGATORIO, no "si lo necesitas".
+- COORD aceptó tareas cuya verificación de archivo falló (la red E4 las recupera,
+  pero conviene no aceptarlas).
+- A2 completó con `[]` en ~2 min: pasada superficial; la misión debe exigir
+  cobertura por archivo.
+- Payloads Temporal hasta 1.8MB (TMPRL1103, límite de aviso 512KB): el JSON grande
+  cruza contextos en los file_read del loop de A1. Vigilar.
+- Los cancels por chat (task_manager cancel_task) son Temporal-native y limpios:
+  la vía de desbloqueo del operador.
