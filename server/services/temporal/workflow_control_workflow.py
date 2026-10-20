@@ -377,7 +377,7 @@ class WorkflowControlWorkflow:
                 # ContextVar from this key. Omitting it stamped the poll
                 # with "owner": wrong DB, wrong credentials (the
                 # msMailReceive 401 incident, multitenant.md §6).
-                "credential_customer_id": listener_data.get("credential_customer_id", "owner"),
+                "credential_customer_id": listener_data.get("credential_customer_id", "default"),
             }
             try:
                 result = await workflow.execute_activity(

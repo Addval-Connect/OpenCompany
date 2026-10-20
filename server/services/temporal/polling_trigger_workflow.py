@@ -165,7 +165,7 @@ class PollingTriggerWorkflow:
                     "params": params,
                     "seen_ids": [],
                     "baseline_only": True,
-                    "credential_customer_id": listener_data.get("credential_customer_id", "owner"),
+                    "credential_customer_id": listener_data.get("credential_customer_id", "default"),
                 }
             else:
                 await workflow.sleep(timedelta(seconds=poll_interval))
@@ -175,7 +175,7 @@ class PollingTriggerWorkflow:
                     "params": params,
                     "seen_ids": list(seen_ids),
                     "baseline_only": False,
-                    "credential_customer_id": listener_data.get("credential_customer_id", "owner"),
+                    "credential_customer_id": listener_data.get("credential_customer_id", "default"),
                 }
 
             try:
