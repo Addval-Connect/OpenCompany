@@ -358,6 +358,18 @@ async def _execute_native_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
                 call["raw_arguments"] = raw_arguments
             if parse_error:
                 call["parse_error"] = parse_error
+            # Observability (2026-10-20): pairs with the "[tool-args]"
+            # warning in execute_as_tool. When a report says "the tool
+            # never received X", this line shows whether the MODEL emitted
+            # X at all — separating provider-side arg loss from tool-side
+            # validation drops. raw_arguments only logs its LENGTH (it can
+            # hold credentials); the parsed keys are the useful signal.
+            activity.logger.info(
+                "[llm-step tool-call] name=%s args_keys=%s parse_error=%s",
+                tool_call.name,
+                sorted((tool_call.args or {}).keys()),
+                parse_error or "-",
+            )
             calls.append(call)
         result = {
             "kind": "tool_calls",

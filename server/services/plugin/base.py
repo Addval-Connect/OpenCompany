@@ -677,6 +677,22 @@ class BaseNode:
             # overwrite an operator's persisted value even though the model
             # never attempted to set that field.
             input_payload = validated_input.model_dump(exclude_unset=True)
+            # Observability (2026-10-20): a silent key drop at this boundary
+            # is undiagnosable from the tool's behavior alone — the call
+            # simply "worked" without the argument. extra="ignore" models
+            # and exclude_unset both drop keys without any signal. Log the
+            # delta loudly so a report like "the tool never received
+            # host/db/api_key" can be answered from the log alone.
+            dropped_keys = set(tool_args) - set(input_payload)
+            if dropped_keys:
+                logger.warning(
+                    "[tool-args] %s dropped %s model-supplied keys during "
+                    "ToolInput validation (raw keys=%s); the tool never saw "
+                    "them",
+                    type(self).type,
+                    sorted(dropped_keys),
+                    sorted(tool_args),
+                )
 
             if input_model is self.Params:
                 # Validate the persisted subset on its own before combining
