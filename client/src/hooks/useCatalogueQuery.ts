@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient, type QueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { get as idbGet, set as idbSet } from '../lib/idbStore';
 
 import { useWebSocket } from '../contexts/WebSocketContext';
 
