@@ -148,7 +148,7 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
     # All other credentials are namespace-scoped.
     _INSTANCE_LEVEL_SUFFIXES = ("_client_id", "_client_secret")
     if any(provider.endswith(s) for s in _INSTANCE_LEVEL_SUFFIXES):
-        credential_customer_id = "owner"
+        credential_customer_id = "default"
     else:
         credential_customer_id = getattr(getattr(websocket, "state", None), "active_namespace", None) or "default"
 

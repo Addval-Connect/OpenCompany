@@ -197,7 +197,7 @@ class WorkflowService:
         outputs: Dict[str, Any] = None,
         extras: Optional[Dict[str, Any]] = None,
         user_id: str = "owner",
-        credential_customer_id: str = "owner",  # kept for call-site compat; ContextVar already set at request entry
+        credential_customer_id: str = "default",  # kept for call-site compat; ContextVar already set at request entry
     ) -> Dict[str, Any]:
         """Execute a single workflow node."""
         # Resolve slug from DB if caller passed only workflow_id.
@@ -506,7 +506,7 @@ class WorkflowService:
         start_time,
         workflow_id: Optional[str] = None,
         user_id: str = "owner",
-        credential_customer_id: str = "owner",
+        credential_customer_id: str = "default",
     ) -> Dict:
         """Execute nodes sequentially (fallback mode)."""
         execution_id = uuid4().hex
@@ -596,7 +596,7 @@ class WorkflowService:
         generation: int = 0,
         user_id: str = "owner",
         temporal_namespace: str = "default",
-        credential_customer_id: str = "owner",
+        credential_customer_id: str = "default",
     ) -> Dict[str, Any]:
         """Deploy workflow in event-driven mode.
 

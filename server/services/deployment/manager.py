@@ -175,7 +175,7 @@ class DeploymentManager:
         generation: int = 0,
         user_id: str = "owner",
         temporal_namespace: str = "default",
-        credential_customer_id: str = "owner",  # kept for call-site compat; now in listener_args for Temporal activities
+        credential_customer_id: str = "default",  # kept for call-site compat; now in listener_args for Temporal activities
     ) -> Dict[str, Any]:
         """Deploy workflow in event-driven mode."""
         # Generate workflow_id if not provided
