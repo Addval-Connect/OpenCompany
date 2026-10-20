@@ -103,7 +103,7 @@ def test_complete_override_validates():
 
 def test_no_override_validates():
     args = OdooJsonRpcToolInput(model="res.partner", method="search_count")
-    assert args.host is None
+    assert args.host == ""  # empty string = not provided (plain str, no anyOf)
 
 
 # --------------------------------------------------------------------------- #
