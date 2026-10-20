@@ -294,6 +294,18 @@ if [[ "$DATA_DIR_VALUE" == "$APP_DIR"/* ]]; then
     fi
 fi
 
+# Prune the registry-scanned trees before extracting. `tar x` overlays but
+# never deletes, so anything removed from the repo lingers on the server
+# forever — and skills/ + nodes/ are AUTO-DISCOVERED trees: a stale folder
+# keeps registering dead skills / node plugins on every boot. Seen
+# 2026-10-20: three dead generations of odoo_impl skills (52 entries in the
+# Master Skill panel for 25 real ones). Both trees are 100% tarball-owned
+# (no runtime state lives inside them — DATA_DIR and .venv are elsewhere),
+# so wiping them here is always safe. client/dist is likewise a pure build
+# artifact; pruning it stops hashed-asset accumulation.
+say "Pruning tarball-owned trees (skills, nodes, client/dist)"
+rm -rf "$APP_DIR/server/skills" "$APP_DIR/server/nodes" "$APP_DIR/client/dist"
+
 say "Unpacking $(basename "$TARBALL")"
 tar xzf "$TARBALL" -C "$APP_DIR"
 
