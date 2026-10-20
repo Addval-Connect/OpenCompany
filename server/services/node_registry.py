@@ -130,8 +130,8 @@ def iter_tool_node_classes():
 
     1. Pure ToolNode (``component_kind == "tool"``) — calculator,
        duckduckgoSearch, writeTodos, agentBuilder, ...
-    2. Dual-purpose ActionNode (``usable_as_tool=True``) — pythonExecutor,
-       gmail, twitter*, brave_search, all 16 android service nodes, ...
+    2. Dual-purpose ActionNode (``usable_as_tool=True``) — gmail,
+       twitter*, brave_search, all 16 android service nodes, ...
     3. SpecializedAgentBase subclasses (``component_kind == "agent"``) —
        routed via ``delegate_to_*`` dispatch in
        ``services/handlers/tools.py``.

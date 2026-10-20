@@ -13,18 +13,13 @@
  * sources, backend tests) and force-include the few files the .npmignore
  * hides but the desktop needs (server/uv.lock).
  *
- * The JS executor sidecar is built here with the sidecar package's own
- * `bun build` script (a self-contained bundle with express inlined, run by
- * the bundled bun at runtime) rather than copied from the checkout, so a
- * stale or missing dist/ in the working tree can never reach a release.
- *
  *   bun run scripts/stage.ts                        # host target runtime
  *   bun run scripts/stage.ts --target mac-arm64,mac-x64
  *   bun run scripts/stage.ts --skip-runtimes        # app-root only
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { DESKTOP_DIR, REPO_ROOT, STAGE_DIR, fail, log, parseTargetArg, readJson, run } from "./_lib";
 import { fetchRuntimes, pinnedVersions } from "./fetch-runtimes";
@@ -40,7 +35,6 @@ const DROP_PREFIXES = [
   "client/public/",
   "server/tests/",
   "server/scripts/",
-  "server/nodejs/", // built below with the sidecar's own bun build
   "server/experiments/",
   "server/.venv/",
 ];
@@ -52,7 +46,7 @@ const DROP_SEGMENTS = ["__pycache__", ".pytest_cache", "node_modules", ".vite"];
 const DROP_SUFFIXES = [".db", ".db-journal", ".db-shm", ".db-wal", ".sqlite", ".log", ".pyc", ".pyo"];
 
 /** Files the .npmignore hides (lockfiles) but the desktop must ship. */
-const FORCE_INCLUDE = ["server/uv.lock", "server/pyproject.toml", "server/nodejs/package.json", ".env.template", "package.json"];
+const FORCE_INCLUDE = ["server/uv.lock", "server/pyproject.toml", ".env.template", "package.json"];
 
 const BUN = process.platform === "win32" ? "bun.exe" : "bun";
 
@@ -85,24 +79,6 @@ function copyInto(rel: string): void {
   copyFileSync(src, dest);
 }
 
-function bundleSidecar(): void {
-  const sidecarDir = join(REPO_ROOT, "server", "nodejs");
-  const built = join(sidecarDir, "dist", "index.js");
-  const outfile = join(APP_ROOT, "server", "nodejs", "dist", "index.js");
-  // One definition of the build: the sidecar package's own script
-  // (`bun build --target=bun`, which inlines express). It resolves through
-  // the sidecar's node_modules, so run it from there.
-  run(BUN, ["run", "build"], { cwd: sidecarDir });
-  if (!existsSync(built)) fail(`sidecar build produced no ${built}`);
-  mkdirSync(dirname(outfile), { recursive: true });
-  copyFileSync(built, outfile);
-  const text = readFileSync(outfile, "utf-8");
-  if (/^\s*(import|export)[^\n]*['"]express['"]/m.test(text) || /require\(["']express["']\)/.test(text)) {
-    fail("sidecar bundle still references express externally; inlining failed");
-  }
-  log(`sidecar bundled -> ${posix.relative(REPO_ROOT.replace(/\\/g, "/"), outfile.replace(/\\/g, "/"))}`);
-}
-
 function stageAppRoot(): { files: number } {
   rmSync(APP_ROOT, { recursive: true, force: true });
   mkdirSync(APP_ROOT, { recursive: true });
@@ -115,8 +91,7 @@ function stageAppRoot(): { files: number } {
   if (!existsSync(join(APP_ROOT, "client", "dist", "index.html"))) {
     fail("client/dist/index.html not staged — build the client first (bun run --filter react-flow-client build)");
   }
-  bundleSidecar();
-  return { files: all.size + 1 };
+  return { files: all.size };
 }
 
 async function main(): Promise<void> {

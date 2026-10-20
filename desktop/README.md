@@ -14,8 +14,8 @@ and the backend contract in
 This directory is a standalone bun package (not a workspace member).
 
 ```bash
-# once, from the repo root: build the client + sidecar the shell serves
-bun install && bun run --filter react-flow-client build && bun run --filter opencompany-nodejs-executor build
+# once, from the repo root: build the client the shell serves
+bun install && bun run --filter react-flow-client build
 
 cd desktop
 bun install

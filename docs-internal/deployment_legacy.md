@@ -34,7 +34,7 @@ company deploy destroy                                           # terraform des
 
 | Path | Responsibility |
 |------|----------------|
-| `cli/commands/serve.py` | Single-port runtime: uvicorn fronts API + WS + built SPA. `serve` supervises exactly one process — the Node.js code-exec sidecar, WhatsApp and the Temporal dev server are backend-owned and spawn on demand |
+| `cli/commands/serve.py` | Single-port runtime: uvicorn fronts API + WS + built SPA. `serve` supervises exactly one process — WhatsApp and the Temporal dev server are backend-owned and spawn on demand |
 | `cli/commands/deploy/` | Verbs (`up.py` / `status.py` / `destroy.py`), `_secrets.py`, `_state.py`, `_terraform.py` (Terraform driver), `providers/` (`gcp.py` / `aws.py` provider CLI adapters) |
 | `cli/terraform/gcp/` | HCL module (`main.tf` / `variables.tf` / `outputs.tf`) + `startup.sh.tftpl` cloud-init template |
 
@@ -78,7 +78,7 @@ The project previously deployed using Docker Compose with an nginx reverse proxy
 
 Every port number in this Docker section (3000 / 3010 / 3020 / 5000 / 9400 / 6379) is the
 historical compose-era value, kept verbatim as a record. The current runtime declares its
-serial port block once in `.env.template` (`PYTHON_BACKEND_PORT`, `NODEJS_EXECUTOR_PORT`,
+serial port block once in `.env.template` (`PYTHON_BACKEND_PORT`,
 `WHATSAPP_RPC_PORT`, ...); nothing below applies to it.
 
 **Frontend (`client/Dockerfile`):**

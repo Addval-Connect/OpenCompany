@@ -38,7 +38,7 @@ specialization is conveyed only through:
 
 1. Connected skills (usually via a Master Skill node seeded with the
    domain-specific folder in `server/skills/`).
-2. Connected tools (e.g. `coding_agent` typically has `pythonExecutor` wired
+2. Connected tools (e.g. `coding_agent` typically has `shell` wired
    to `input-tools`).
 3. Frontend cosmetics (icon + color from the plugin folder / `visuals.json`,
    plus `display_name` / `subtitle` on the plugin class). The old

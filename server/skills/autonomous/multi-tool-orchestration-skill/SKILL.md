@@ -1,7 +1,7 @@
 ---
 name: multi-tool-orchestration-skill
 description: Coordinate multiple tools together for complex multi-step tasks
-allowed-tools: "delegate_to_ai_agent python_executor javascript_executor duckduckgo_search http_request calculator_tool current_time_tool"
+allowed-tools: "delegate_to_ai_agent process_manager duckduckgo_search http_request calculator_tool current_time_tool"
 metadata:
   author: opencompany
   version: "1.0"
@@ -15,7 +15,7 @@ You are an agent skilled at coordinating multiple tools together to accomplish c
 ## Why Multi-Tool Orchestration?
 
 Complex real-world tasks often require multiple tools working together:
-- **Data gathering** (web_search, http_request) + **Processing** (python_code) + **Delivery** (whatsapp_send)
+- **Data gathering** (web_search, http_request) + **Processing** (process_manager) + **Delivery** (whatsapp_send)
 - **Time awareness** (current_time) + **Calculation** (calculator) + **Scheduling** (scheduler)
 - **Location** (gmaps) + **Communication** (social_send) + **Memory** (memory)
 
@@ -30,7 +30,7 @@ Tools execute in order, each passing results to the next:
 │              SEQUENTIAL PIPELINE                             │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│   [web_search] ──▶ [python_code] ──▶ [whatsapp_send]       │
+│   [web_search] ──▶ [process_manager] ──▶ [whatsapp_send]       │
 │       │                │                   │                │
 │       │                │                   │                │
 │   "Find stock      "Calculate         "Send summary        │
@@ -53,7 +53,7 @@ Tools execute in order, each passing results to the next:
 {"tool": "web_search", "query": "AAPL GOOGL MSFT stock price today"}
 ```
 
-2. **Process Data** (python_code):
+2. **Process Data** (process_manager):
 ```python
 import json
 
@@ -95,7 +95,7 @@ Gather data from multiple sources simultaneously, then process together:
 │                                                              │
 │   [web_search: weather] ──────┐                             │
 │                               │                              │
-│   [web_search: news] ─────────┼──▶ [python_code] ──▶ Output │
+│   [web_search: news] ─────────┼──▶ [process_manager] ──▶ Output │
 │                               │     "Combine &               │
 │   [current_time] ─────────────┘      Format"                │
 │                                                              │
@@ -199,7 +199,7 @@ Use tool results to improve subsequent tool calls:
 │              ITERATIVE REFINEMENT                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│   [web_search v1] ──▶ [python_code: analyze]                │
+│   [web_search v1] ──▶ [process_manager: analyze]                │
 │         │                      │                             │
 │         │              "Results incomplete"                  │
 │         │                      │                             │
@@ -209,7 +209,7 @@ Use tool results to improve subsequent tool calls:
 │         │                      │                             │
 │         │              "Results better"                      │
 │         │                      │                             │
-│         └──────────────────────┼──▶ [python_code: combine]  │
+│         └──────────────────────┼──▶ [process_manager: combine]  │
 │                                │                             │
 │                                ▼                             │
 │                          Final Result                        │
@@ -256,20 +256,20 @@ print(json.dumps(combined, indent=2))
 
 **Task**: "Plan a trip from New York to San Francisco next week, find hotels, and send me an itinerary"
 
-**Tools Used**: `current_time`, `web_search`, `python_code`, `whatsapp_send`
+**Tools Used**: `current_time`, `web_search`, `process_manager`, `whatsapp_send`
 
 **Orchestration:**
 
 ```
 Step 1: Get current date (current_time)
         ↓
-Step 2: Calculate "next week" dates (python_code)
+Step 2: Calculate "next week" dates (process_manager)
         ↓
 Step 3: Search for flights (web_search: "NYC to SFO flights [dates]")
         ↓
 Step 4: Search for hotels (web_search: "San Francisco hotels [dates]")
         ↓
-Step 5: Combine and format itinerary (python_code)
+Step 5: Combine and format itinerary (process_manager)
         ↓
 Step 6: Send to user (whatsapp_send)
 ```
@@ -327,18 +327,18 @@ print(json.dumps(itinerary, indent=2))
 
 **Task**: "Generate a weekly sales report with charts and email it to the team"
 
-**Tools Used**: `http_request` (API), `python_code`, `http_request` (email)
+**Tools Used**: `http_request` (API), `process_manager`, `http_request` (email)
 
 **Orchestration:**
 
 ```
 Step 1: Fetch sales data from API (http_request)
         ↓
-Step 2: Process and analyze data (python_code)
+Step 2: Process and analyze data (process_manager)
         ↓
-Step 3: Generate text summary (python_code)
+Step 3: Generate text summary (process_manager)
         ↓
-Step 4: Format as HTML report (python_code)
+Step 4: Format as HTML report (process_manager)
         ↓
 Step 5: Send via email API (http_request)
 ```
@@ -347,21 +347,21 @@ Step 5: Send via email API (http_request)
 
 **Task**: "When I get home, turn on the lights, set temperature to 72F, and play my evening playlist"
 
-**Tools Used**: `location`, `http_request` (smart home API), `python_code`
+**Tools Used**: `location`, `http_request` (smart home API), `process_manager`
 
 **Orchestration:**
 
 ```
 Step 1: Check current location (location tool)
         ↓
-Step 2: Calculate distance to home (python_code)
+Step 2: Calculate distance to home (process_manager)
         ↓
 Step 3: If within 1 mile:
         ├── Turn on lights (http_request to smart home API)
         ├── Set thermostat (http_request to smart home API)
         └── Start playlist (http_request to music API)
         ↓
-Step 4: Confirm all actions (python_code)
+Step 4: Confirm all actions (process_manager)
 ```
 
 ## Orchestration with Delegation
@@ -383,12 +383,12 @@ Next: Send itinerary via WhatsApp and confirm delivery"
 
 | Task Type | Primary Tools | Supporting Tools |
 |-----------|--------------|------------------|
-| **Research** | web_search, http_request | python_code (analysis) |
-| **Calculation** | calculator, python_code | current_time |
-| **Communication** | whatsapp_send, http_request | python_code (formatting) |
-| **Scheduling** | current_time, calculator | python_code (date math) |
-| **Data Processing** | python_code, javascript_code | http_request (APIs) |
-| **Location-based** | gmaps, location | python_code, whatsapp_send |
+| **Research** | web_search, http_request | process_manager (analysis) |
+| **Calculation** | calculator, process_manager | current_time |
+| **Communication** | whatsapp_send, http_request | process_manager (formatting) |
+| **Scheduling** | current_time, calculator | process_manager (date math) |
+| **Data Processing** | process_manager, javascript_code | http_request (APIs) |
+| **Location-based** | gmaps, location | process_manager, whatsapp_send |
 
 ## Best Practices
 
@@ -412,7 +412,7 @@ GOOD: web_search("AAPL GOOGL MSFT stock prices today")
 Instead of multiple calculator calls:
 calculator(10 * 5) → calculator(50 + 20) → calculator(70 / 2)
 
-Use python_code:
+Use process_manager:
 result = ((10 * 5) + 20) / 2  # Single execution
 ```
 
@@ -444,7 +444,7 @@ await web_search("stocks")   // Could run in parallel
 ```
 // Don't use 5 tools when 1 suffices
 Task: "What's 2 + 2?"
-BAD:  current_time → python_code → calculator → format → return
+BAD:  current_time → process_manager → calculator → format → return
 GOOD: calculator(2 + 2) or just respond "4"
 ```
 

@@ -45,7 +45,7 @@ Default to `browser`; reach for `browserHarness` when the task needs the user's 
 
 ## Security caveats (know before enabling widely)
 
-- Upstream is **alpha**; the HN launch thread reported an unaddressed RCE and prompt-injection exposure. The `run_python` op executes agent-authored Python **outside** the Monty sandbox (same trust level as `pythonExecutor`, but with the user's real browser attached).
+- Upstream is **alpha**; the HN launch thread reported an unaddressed RCE and prompt-injection exposure. The `run_python` op executes agent-authored Python **outside** any sandbox (same trust level as a `process_manager` script, but with the user's real browser attached).
 - It drives the user's real, logged-in Chrome — the skill instructs agents to never touch accounts/purchases beyond the explicit task, but treat the node as `destructive + open_world` (its annotations say so).
 - Node is visible in **dev mode only** (not in `enabled_nodes` — same posture as `browser`).
 

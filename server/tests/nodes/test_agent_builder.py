@@ -627,7 +627,7 @@ class TestCatalogueVisibility:
         assert types == {"coding_agent", "web_agent"}
 
     async def test_dual_purpose_plugins_in_available_tools(self):
-        """Plugins like twitterSearch / googleGmail / pythonExecutor are
+        """Plugins like twitterSearch / googleGmail / processManager are
         ``component_kind='square'`` ActionNodes with ``usable_as_tool=True``.
         They form the bulk of useful LLM-callable tools; the catalogue
         MUST include them, not just the ~7 pure ToolNodes."""
@@ -642,8 +642,8 @@ class TestCatalogueVisibility:
             "googleGmail": _node_class_full(
                 "square", "Gmail", usable_as_tool=True, group=("google", "tool")
             ),
-            "pythonExecutor": _node_class_full(
-                "square", "Python Executor", usable_as_tool=True, group=("code", "tool")
+            "processManager": _node_class_full(
+                "square", "Process Manager", usable_as_tool=True, group=("utility", "tool")
             ),
             "openaiChatModel": _node_class_full(
                 "model", "OpenAI", usable_as_tool=True, group=("model", "tool")
@@ -657,7 +657,7 @@ class TestCatalogueVisibility:
         assert "calculatorTool" in types, "pure ToolNode plugins remain visible"
         assert "twitterSearch" in types, "dual-purpose plugins (usable_as_tool=True) must surface"
         assert "googleGmail" in types
-        assert "pythonExecutor" in types
+        assert "processManager" in types
         assert "openaiChatModel" not in types, (
             "chat-model plugins must be excluded even when usable_as_tool=True "
             "— they're configured via input-model, not spawned as agent tools."

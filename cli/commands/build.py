@@ -1,9 +1,8 @@
 """``company build`` -- replaces ``scripts/build.js``.
 
-Checks toolchain (node, bun, python, uv), then runs the 6-step
+Checks toolchain (node, bun, python, uv), then runs the 5-step
 build: ``.env`` bootstrap -> ``bun install`` -> client build ->
-JS executor sidecar bundle (bun build) -> ``uv sync`` -> compile Python bytecode
--> pooch-fetch Temporal binary.
+``uv sync`` -> compile Python bytecode -> pooch-fetch Temporal binary.
 
 Layers ``.env.dev`` (when present in the checkout) BEFORE running
 those steps so the build's ``DATA_DIR`` matches the runtime's
@@ -33,7 +32,7 @@ from cli.platform_ import node_modules_dir, project_root, server_dir
 
 
 # Source dirs / entry-point modules under ``server/`` that ``company build``
-# pre-compiles to plain .pyc bytecode in step [5/6]. Public so tests and
+# pre-compiles to plain .pyc bytecode in step [4/5]. Public so tests and
 # ``scripts/install.js`` (which mirrors this list) stay in sync — both
 # the install pipeline and tests should read this constant rather than
 # duplicate the list. Excludes ``.venv/`` (compiled by ``uv sync`` via
@@ -183,10 +182,9 @@ def build_command() -> None:
     # ---- toolchain ---------------------------------------------------
     console.print("[bold]Checking dependencies...[/]\n")
     # bun installs the workspace, runs every JS build script below
-    # (`bun install`, `bun run --filter ...`, the sidecar's `bun build`)
-    # and is the runtime for the JS executor sidecar and the plugin CLIs,
-    # so a missing bun is fatal here rather than a confusing failure
-    # inside step [1/6].
+    # (`bun install`, `bun run --filter ...`) and is the runtime for
+    # the plugin CLIs, so a missing bun is fatal here rather than a
+    # confusing failure inside step [1/5].
     bun_version = capture(["bun", "--version"])
     console.print(f"  bun: {bun_version or '[red]not found[/]'}")
     if not bun_version:
@@ -228,13 +226,13 @@ def build_command() -> None:
         env_path.write_text(content, encoding="utf-8")
         if generated:
             console.log(
-                f"[0/6] Created .env from template (generated fresh secrets: {', '.join(generated)})"
+                f"[0/5] Created .env from template (generated fresh secrets: {', '.join(generated)})"
             )
         else:
-            console.log("[0/6] Created .env from template")
+            console.log("[0/5] Created .env from template")
 
     if not is_postinstall:
-        console.log("[1/6] Installing dependencies...")
+        console.log("[1/5] Installing dependencies...")
         # Hardlink from the cache instead of copying (bun's documented
         # default on Linux/Windows, but observed to fall back to copies on
         # Windows). Copies re-write ~600 MB per install, which Defender
@@ -244,22 +242,14 @@ def build_command() -> None:
         backend = [] if sys.platform == "darwin" else ["--backend=hardlink"]
         run(["bun", "install", *backend], cwd=root)
     else:
-        console.log("[1/6] Dependencies already installed by package manager")
+        console.log("[1/5] Dependencies already installed by package manager")
 
-    console.log("[2/6] Building client...")
+    console.log("[2/5] Building client...")
     # bun requires --filter AFTER the ``run`` subcommand (before it, bun
     # treats the next word as a script name).
     run(["bun", "run", "--filter", "react-flow-client", "build"], cwd=root)
 
-    # Bundle the JS executor sidecar (server/nodejs) with `bun build
-    # --target=bun` into one self-contained dist/index.js (express
-    # inlined) that nodes/code/_runtime.py runs on bun. Saves the
-    # TypeScript transpile on every launch and needs no node_modules at
-    # runtime, which is what lets the desktop bundle copy a single file.
-    console.log("[3/6] Building JS executor sidecar...")
-    run(["bun", "run", "--filter", "opencompany-nodejs-executor", "build"], cwd=root)
-
-    console.log("[4/6] Installing Python dependencies...")
+    console.log("[3/5] Installing Python dependencies...")
     # ``server/`` is its own standalone uv project; ``uv sync`` at that
     # directory resolves ``server/pyproject.toml`` and materialises
     # ``server/.venv``. The CLI lives in a separate venv (or system
@@ -282,7 +272,7 @@ def build_command() -> None:
     # Compiling `.venv/` here would be duplicate work and fails on
     # cookiecutter template files inside packages like crawlee that
     # aren't real Python.
-    console.log("[5/6] Compiling Python bytecode...")
+    console.log("[4/5] Compiling Python bytecode...")
     run(
         uv_run(
             "python", "-m", "compileall", "-q", "-j", "0", *COMPILEALL_SOURCE_DIRS
@@ -298,7 +288,7 @@ def build_command() -> None:
     # then asserts every extracted path exists; non-zero exit aborts
     # the build via ``run(check=True)``. Idempotent on re-build (pooch
     # cache hit) so this step is sub-second once the tarball is on disk.
-    console.log("[6/6] Installing Temporal binaries...")
+    console.log("[5/5] Installing Temporal binaries...")
     run(
         uv_run("python", "-m", "services.temporal._install"),
         cwd=server_cwd,

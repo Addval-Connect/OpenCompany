@@ -91,9 +91,9 @@ Execute battery check
 **Discovery Process:**
 ```
 1. IDENTIFY: This is a mathematical calculation
-2. CHECK: Do I have python_code or calculator tool?
+2. CHECK: Do I have process_manager or calculator tool?
 
-   IF python_code connected:
+   IF process_manager connected:
       Use Code Mode for complex calculation
 
    ELIF calculator connected:

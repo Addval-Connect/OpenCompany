@@ -6,7 +6,7 @@ import { latestResultForNode } from '../executionResults';
 const result = (nodeId: string, marker: string): ExecutionResult => ({
   success: true,
   nodeId,
-  nodeType: 'pythonExecutor',
+  nodeType: 'processManager',
   nodeName: nodeId,
   timestamp: marker,
   executionTime: 1,

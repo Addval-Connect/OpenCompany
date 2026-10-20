@@ -127,10 +127,6 @@ class TestPhase3aCoverage:
         "chatTrigger",
         "console",
         "teamMonitor",
-        # code
-        "pythonExecutor",
-        "javascriptExecutor",
-        "typescriptExecutor",
         # process
         "processManager",
         # workflow
@@ -541,7 +537,7 @@ class TestPhase5NodeGroups:
         from services.node_spec import list_node_groups
 
         tools = set(list_node_groups()["tool"]["types"])
-        for expected in ["pythonExecutor", "javascriptExecutor", "httpRequest"]:
+        for expected in ["httpRequest", "calculatorTool", "duckduckgoSearch"]:
             assert expected in tools
 
     def test_trigger_group_includes_known_triggers(self):
@@ -807,10 +803,6 @@ class TestUIHintsInNodeSpec:
         hints = spec.get("uiHints", {})
         assert hints.get("isMemoryPanel") is True
         assert hints.get("hasCodeEditor") is True
-
-    def test_python_executor_carries_code_editor(self):
-        spec = get_node_spec("pythonExecutor")
-        assert spec.get("uiHints", {}).get("hasCodeEditor") is True
 
     def test_gmaps_create_carries_location_panel(self):
         spec = get_node_spec("gmaps_create")
@@ -1137,18 +1129,6 @@ class TestWave10GContractInvariants:
             props = schema.get("properties") or {}
             gated = [name for name, p in props.items() if (p.get("displayOptions") or {}).get("show", {}).get("operation")]
             assert gated, f"{t}: no field declares displayOptions.show.operation; " "every per-op field would render at once"
-
-    def test_code_executors_declare_code_editor(self):
-        """The ParameterRenderer `case 'code'` widget only fires when
-        the Pydantic field emits `editor: 'code'`. Without this the
-        code executor falls back to a plain string input."""
-        from services.node_input_schemas import get_node_input_schema
-
-        for t in ("pythonExecutor", "javascriptExecutor", "typescriptExecutor"):
-            schema = get_node_input_schema(t)
-            code_field = (schema.get("properties") or {}).get("code")
-            assert code_field, f"{t}: `code` field missing from input schema"
-            assert code_field.get("editor") == "code", f"{t}.code: expected `editor: 'code'`, got {code_field.get('editor')!r}"
 
     def test_plugin_meta_icon_refs_are_wellformed(self):
         """A plugin may point at a library glyph from its own ``meta.json``

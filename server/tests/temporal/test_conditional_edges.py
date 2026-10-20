@@ -41,9 +41,9 @@ def _branching_graph():
     """py-1 emits ``result.answer = 42``; two gated branches read it."""
     nodes_ = [
         {"id": "start-1", "type": "start", "data": {"label": "Start"}},
-        {"id": "py-1", "type": "pythonExecutor", "data": {"label": "Source"}},
-        {"id": "match-1", "type": "pythonExecutor", "data": {"label": "Matching"}},
-        {"id": "miss-1", "type": "pythonExecutor", "data": {"label": "Non-matching"}},
+        {"id": "py-1", "type": "httpRequest", "data": {"label": "Source"}},
+        {"id": "match-1", "type": "httpRequest", "data": {"label": "Matching"}},
+        {"id": "miss-1", "type": "httpRequest", "data": {"label": "Non-matching"}},
     ]
     edges = [
         {"id": "e0", "source": "start-1", "target": "py-1", "targetHandle": "input-main"},
@@ -169,7 +169,7 @@ class TestSkipIsNotTransitive:
         scheduled = _install_fakes(monkeypatch)
 
         nodes_, edges = _branching_graph()
-        nodes_.append({"id": "tail-1", "type": "pythonExecutor", "data": {"label": "Tail"}})
+        nodes_.append({"id": "tail-1", "type": "httpRequest", "data": {"label": "Tail"}})
         edges.append({"id": "e3", "source": "miss-1", "target": "tail-1", "targetHandle": "input-main"})
 
         result = await _run((nodes_, edges), "wf-cond-run3")

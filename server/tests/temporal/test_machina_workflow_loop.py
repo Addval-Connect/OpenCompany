@@ -7,7 +7,7 @@ the skip branch inside the scheduling loop, which completes it without
 putting anything into ``running``. The old exit check (``if not
 running: break``) then terminated the workflow before the next
 ``_find_ready_nodes`` pass could pick up the just-unblocked downstream
-nodes: a ``start -> pythonExecutor`` graph returned
+nodes: a ``start -> httpRequest`` graph returned
 ``success=false`` with only the start node in the trace and ZERO
 activities scheduled. The deployed path never sees this because
 triggers are pre-executed before the loop.
@@ -41,7 +41,7 @@ def _patch_workflow_logger(monkeypatch):
 def _graph():
     nodes_ = [
         {"id": "start-1", "type": "start", "data": {"label": "Start"}},
-        {"id": "py-1", "type": "pythonExecutor", "data": {"label": "Py"}},
+        {"id": "py-1", "type": "httpRequest", "data": {"label": "Py"}},
     ]
     edges = [
         {
@@ -107,7 +107,7 @@ class TestSkippedTriggerUnblocksDownstream:
         )
 
         assert scheduled == ["py-1"], (
-            "The downstream pythonExecutor must be scheduled after the "
+            "The downstream httpRequest must be scheduled after the "
             "start trigger is auto-completed. Pre-fix the loop broke out "
             "before re-evaluating readiness and nothing was scheduled."
         )

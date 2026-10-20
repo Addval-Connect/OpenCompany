@@ -105,7 +105,6 @@ class ToolBridgeAdapter:
         "calculatorTool": "Math operations: add, subtract, multiply, divide, power, sqrt, mod, abs. Args: operation, a, b",
         "currentTimeTool": "Get current date/time. Args: timezone (optional)",
         "duckduckgoSearch": "Web search via DuckDuckGo. Args: query, max_results (optional)",
-        "pythonExecutor": "Execute Python code. Args: code (must set output variable)",
         "httpRequest": "HTTP request. Args: url, method (GET/POST/PUT/DELETE), body (optional)",
         "httpRequestTool": "HTTP request. Args: url, method (GET/POST/PUT/DELETE), body (optional)",
         "braveSearch": "Web search via Brave. Args: query",

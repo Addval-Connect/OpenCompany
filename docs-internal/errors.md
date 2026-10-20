@@ -471,11 +471,11 @@ uv then downloads its 3.12 into `~/.local/share/uv`, the venvs are usable by the
 
 ## 19. JS/TS Executor Fails on a Fresh npm Install: `Cannot find package 'express'`
 
-**Historical note (moot on the bun channel)**: the sidecar is now built with `bun build src/index.ts --target=bun --outfile=dist/index.js`, a self-contained bundle with `express` inlined, and runs as `bun dist/index.js` (`nodes/code/_runtime.py` via `core/js_runtime.py`). There is no runtime dependency left to resolve, so the root `express` dependency this fix added has been removed again. Kept for the record.
+**Historical note (moot on the bun channel)**: the sidecar was built with `bun build src/index.ts --target=bun --outfile=dist/index.js`, a self-contained bundle with `express` inlined, and ran as `bun dist/index.js` (`nodes/code/_runtime.py` via `core/js_runtime.py` — both retired 2026-10; script execution goes through `processManager`). There was no runtime dependency left to resolve, so the root `express` dependency this fix added was removed again. Kept for the record. `docs-lint: ignore`
 
 **Symptom** (npm era): On a machine set up with `npm install -g @zeenie-ai/opencompany`, the first JavaScript or TypeScript executor node run failed with `Node.js executor did not become ready`, and the sidecar log showed `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from .../server/nodejs/dist/index.js`.
 
-**Root cause** (npm era): The sidecar bundle was built with esbuild's `--packages=external`, so Express stayed a runtime dependency, but it was declared only in `server/nodejs/package.json`. The package excludes every `node_modules`, and `nodes/code/_runtime.py` only checks that `dist/index.js` exists, so nothing ever installed Express on an npm-installed copy. Source checkouts never saw it because `bun install` provisions the workspace.
+**Root cause** (npm era): The sidecar bundle was built with esbuild's `--packages=external`, so Express stayed a runtime dependency, but it was declared only in `server/nodejs/package.json` and `nodes/code/_runtime.py` only checked that `dist/index.js` existed, so nothing ever installed Express on an npm-installed copy. Source checkouts never saw it because `bun install` provisions the workspace. `docs-lint: ignore`
 
 **Fix** (npm era): `express` was declared in the root `package.json` `dependencies`, so npm installed it beside the package and Node resolved it from `server/nodejs/dist` by walking up to the package root. Superseded by the `--target=bun` bundle above.
 
@@ -540,15 +540,9 @@ bun add -g @zeenie-ai/opencompany
 
 **Workaround**: run `company build` once from the installed package (it runs `bun install` there, which creates the directory), then `company start`. **Fix, when shipped**: require `node_modules` only for `dev`; keep the server venv and the built client as the check for `start` / `serve`.
 
-## 26. OPEN: JS / TS executor nodes fail on a registry install because the sidecar bundle is not in the tarball
+## 26. CLOSED: JS / TS executor nodes failed on a registry install because the sidecar bundle was not in the tarball
 
-**Status**: open in 0.2.0 and 0.2.1. `tar -tzf` of the published tarball lists `client/dist/` but no `server/nodejs/dist/`; the npm-era 0.1.1 tarball had it.
-
-**Symptom**: `javascriptExecutor` / `typescriptExecutor` return the "JavaScript executor is unavailable" envelope on a `bun add -g` install; the backend log shows the sidecar spawn refusing because `server/nodejs/dist/index.js` does not exist.
-
-**Root cause**: `bun pm pack` honours a nested `.gitignore` even for paths under an explicit root `files` entry. `server/nodejs/.gitignore` lists `dist/`, so the bundle `company build` had just produced is dropped at pack time (npm's packer kept it). Verified with `bun pm pack --dry-run`: adding `server/nodejs/dist/` to `files` alone changes nothing; removing the nested rule includes the file (the root `.gitignore`'s `dist` rule still keeps it untracked).
-
-**Workaround**: `company build` from the installed package rebuilds the bundle. **Fix, when shipped**: drop `dist/` from `server/nodejs/.gitignore`, add `server/nodejs/dist/` to the root `files` list, and change `test_sidecar_dist_is_gitignored` to assert the root rule instead.
+**Status**: obsolete. The `javascriptExecutor` / `typescriptExecutor` / `pythonExecutor` / `montyExecutor` nodes and the `server/nodejs` sidecar were retired (script execution goes through `processManager`), so the missing-bundle failure mode no longer exists. Root cause kept for the record: `bun pm pack` honours a nested `.gitignore` even for paths under an explicit root `files` entry — `server/nodejs/.gitignore` listed `dist/`, so the bundle `company build` had just produced was dropped at pack time.
 
 ## 27. OPEN: `install.sh` on a bare box fails at `error: unzip is required to install bun`
 

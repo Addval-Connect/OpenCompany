@@ -356,7 +356,7 @@ def _allowed_tool_types() -> set[str]:
     Includes:
     - Pure ToolNode plugins (``component_kind == 'tool'``).
     - Dual-purpose ActionNode plugins with ``usable_as_tool=True``
-      (e.g. ``twitterSearch``, ``googleGmail``, ``pythonExecutor``,
+      (e.g. ``twitterSearch``, ``googleGmail``, ``httpRequest``,
       ``fileRead``). These are the bulk of the actually-useful tools;
       excluding them was the source of "only a few nodes visible" reports.
     - Excludes chat-model plugins (``component_kind == 'model'``) even

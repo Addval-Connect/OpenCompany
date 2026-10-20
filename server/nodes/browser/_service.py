@@ -406,7 +406,7 @@ class BrowserService:
             reader.join(timeout=1)
 
 
-# -- Module-level lazy singleton (NodeJSClient pattern) -----------------
+# -- Module-level lazy singleton ----------------------------------------
 
 _instance: Optional[BrowserService] = None
 
