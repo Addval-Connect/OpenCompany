@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from services.plugin import NodeContext, Operation, TaskQueue, ToolNode
 
@@ -40,6 +47,22 @@ class TaskManagerParams(BaseModel):
     scan_limit: int = Field(default=250, ge=1, le=500)
     categories: Optional[List[Literal["failure", "activity", "child", "signal", "timer", "workflow"]]] = None
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_missing_operation(cls, data: Any) -> Any:
+        """LLM-robustness: assign-shaped calls that omit ``operation``
+        silently degraded to the ``list_tasks`` default — nothing was
+        created and the lead saw an empty result. Observed in production
+        (2026-10-19, CartolaTax): the model sent title/mission/
+        assignee_node_id but dropped ``operation`` on two assign calls;
+        the calls degraded to list_tasks and the mangled tool response
+        hid the mistake. Infer the intent from the payload shape. An
+        explicit operation always wins."""
+        if isinstance(data, dict) and not data.get("operation"):
+            if data.get("assignee_node_id") and data.get("mission"):
+                return {**data, "operation": "assign_task"}
+        return data
 
     @field_validator("context", "acceptance_criteria", mode="before")
     @classmethod
@@ -153,6 +176,27 @@ def _resolve_teammate(config: Dict[str, Any], args: Dict[str, Any]) -> Dict[str,
     return matches[0]
 
 
+# Fields a task LIST carries to the lead. ``taskManager`` results are
+# exempt from ``bound_tool_output`` by design ("bounded by other means",
+# services/tool_output.py) — but ``list_tasks`` with ``include_history``
+# returns every task's full mission/context/result, and production
+# (2026-10-19, CartolaTax) blew the model context window with 22 unbounded
+# rows (~60 KB) on one list call. Lists are state summaries: the lead
+# rehydrates details per task with ``get_task``.
+_LIST_FIELDS = (
+    "id", "title", "status", "assigned_to", "revision", "current_attempt",
+    "team_execution_id", "created_at", "completed_at", "error",
+)
+
+
+def _summarize_tasks(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Project task rows onto their bounded list shape."""
+    return [
+        {k: t.get(k) for k in _LIST_FIELDS} if isinstance(t, dict) else t
+        for t in tasks
+    ]
+
+
 async def _execute_task_manager(args: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     from services.agent_team import get_agent_team_service
 
@@ -176,7 +220,7 @@ async def _execute_task_manager(args: Dict[str, Any], config: Dict[str, Any]) ->
             )
         else:
             tasks = await service.list_durable_tasks(**scope, status=args.get("status_filter"))
-        return {"success": True, "operation": operation, "tasks": tasks, "count": len(tasks)}
+        return {"success": True, "operation": operation, "tasks": _summarize_tasks(tasks), "count": len(tasks)}
     if operation == "get_task":
         task_id = str(args.get("task_id") or "")
         if not task_id:

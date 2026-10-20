@@ -14,9 +14,9 @@ metadata:
 
 Pipeline de 5 pasos en orden sobre el `cartola.json` de A2 (ruta en el `context`, `fileRead`).
 Enriquece el JSON con `fileModify` y devuelve UN resultado al COORD. Odoo se consulta con la tool
-`odoo_jsonrpc` (host/db/credenciales fijos en el nodo, invisibles); la aritmética exacta en
-`javascriptExecutor`. No reinterpretas la cartola (eso es A2): si sospechas mala extracción, levanta
-pendiente, no corrijas el JSON.
+`odoo_jsonrpc` (host/db/credenciales fijos en el nodo, invisibles); la aritmética la valida Odoo en
+escritura (constraints del módulo carga_kdx) y el read-back la confirma. No reinterpretas la
+cartola (eso es A2): si sospechas mala extracción, levanta pendiente, no corrijas el JSON.
 
 Skills adicionales, solo si aplican: `armar-lote-de-pendientes` (consolidar dudas para el usuario) y
 `aplicar-respuestas-al-json` (tras respuestas del usuario).
@@ -78,7 +78,7 @@ normalizado, (3) similitud nombre+serie con umbral (menos confiable → refléja
 Banchile no publica identificador (separa por el literal "Serie"). Sin match → pendiente
 `instrumento_sin_match`, no lo fuerces. Nunca subas la confianza por presión de completar.
 
-## Paso 4 — Validar y calcular totales (en `javascriptExecutor`, NO el LLM)
+## Paso 4 — Validar y calcular totales (cruce contra la cartola; Odoo valida en escritura)
 
 - `total_sistema = cantidad × precio_unitario`; `fee = total_cartola − total_sistema` (registra con
   su signo, no lo fuerces a cero; no se carga al Kárdex — línea contable P-04).

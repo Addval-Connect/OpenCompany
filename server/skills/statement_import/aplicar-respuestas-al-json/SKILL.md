@@ -37,8 +37,8 @@ cartola y de `cartola/pendientes.json`, más las respuestas del usuario. Lee con
    toda la sesión, no solo de la línea que originó la pregunta.
 5. **Revalida** la consolidación completa: el COORD re-asignará
    los pasos de validación y detección de duplicado de `consolida-informacion` si cambió
-   el instrumento o cliente. La aritmética se recomputa en **javascriptExecutor**
-   (`javascript_code`), no en el prompt. Considera efectos en cascada.
+   el instrumento o cliente. La aritmética la valida Odoo en escritura (constraints del
+   módulo carga_kdx) y el read-back la confirma. Considera efectos en cascada.
 6. Si quedan pendientes nuevos, agrégalos a un nuevo lote
    (`armar-lote-de-pendientes`); no los mezcles como resueltos.
 
