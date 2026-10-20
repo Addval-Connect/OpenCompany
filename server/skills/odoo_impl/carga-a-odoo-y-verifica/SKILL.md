@@ -1,135 +1,74 @@
 ---
 name: carga-a-odoo-y-verifica
 description: >-
-  Runbook completo del Agente A5: aplica la configuración por RPC, carga los archivos validados con
-  load() en orden de dependencias, verifica con read-back, y ejecuta los casos de QA de cada flujo.
-  ÚNICO punto de escritura del sistema. Ejecuta los pasos en orden.
+  Runbook completo del agente CARGA: aplica la configuración por RPC, carga los archivos con
+  veredicto cargable usando load() en el orden del grafo depende_de, verifica con read-back, y
+  ejecuta los casos de QA de cada flujo. ÚNICO punto de escritura del sistema. Ejecuta los pasos
+  en orden.
 allowed-tools: odoo_jsonrpc file_read file_modify fs_search sandboxed_python javascript_code write_todos
 metadata:
-  agente: A5
+  agente: CARGA
   tipo: MIX
   prioridad: P0
-  depende_de: valida-archivos-completados
-  siguiente_agente: COORD
+  depende_de: flujo-implementacion
+  siguiente_agente: Coordinador
   icon: "🚀"
   author: addval
-  version: "1.0"
+  version: "2.0"
   category: odoo_impl
 ---
 
-# Cargar a Odoo y verificar (runbook A5)
+# Cargar a Odoo y verificar (runbook CARGA)
 
 **Único punto de escritura del sistema.** Ningún otro agente escribe en Odoo. Lo que hagas acá es lo
 único que no se deshace con un archivo corregido: deshacer una carga significa restaurar la base de
 datos.
 
-Lee `odoo-rpc-en-opencompany` (transporte, `load()`, taxonomía, **el bucle de corrección**, reglas de
-entorno),
+Lee `odoo-rpc-transporte` (transporte, `load()`, economía de llamadas), `taxonomia-errores-odoo`
+(la definición única de los códigos), `bucle-de-correccion` (**el bucle** — obligatorio antes del
+paso 2b), `entornos-y-seguridad` (reglas de entorno),
 `scripts-verificados-de-carga-odoo` (**obligatorio antes del paso 2c** — trae el script ya probado que
 convierte el CSV en `fields` + `data` aplicando los remapeos y xmlids ya aprendidos; cópialo, no lo
 escribas),
 `sandbox-de-codigo-en-opencompany` (qué sandbox puede abrir un
-archivo y cuál no), `orden-de-carga-odoo`, `convencion-ids-externos` y
-`contrato-implementacion-odoo`. De `flujos-de-referencia`, abre solo los flujos del proyecto: sus
-"casos canónicos de QA" son la base del paso 5. Skill adicional solo si hay rechazos que no son de
+archivo y cuál no), `convencion-ids-externos` y
+`contrato-implementacion-odoo`. El orden de carga **no** viene de un skill aparte: sale del grafo
+`depende_de` de los blueprints (paso 2). Los casos de QA los escribe cada flujo en
+`09-qa/casos-<flujo>.yaml`; tú los ejecutas (paso 5). Skill adicional solo si hay rechazos que no son de
 dato: `administrar-casos-de-borde-odoo`.
 
-Escribes en `08-carga/` y `09-qa/`, en ninguna otra carpeta. La única excepción es
-`02-instancia/capacidades-instancia.json`, a cuyas listas **agregas** entradas sin borrar las
-existentes (`resultado_ultimo_ensayo` es la única clave que se sobrescribe, porque describe *esta*
-corrida). Nunca toques `introspeccion.json`.
+Escribes en `08-carga/` y `09-qa/`, en ninguna otra carpeta. `08-carga/capacidades-instancia.json`
+lo creas y lo escribes **solo tú**: a sus listas **agregas** entradas sin borrar las existentes
+(`resultado_ultimo_ensayo` es la única clave que se sobrescribe, porque describe *esta* corrida).
 
 ## Precondiciones (verifícalas; no las asumas)
 
-1. `07-validacion/` existe y dice qué archivos pasaron. **Solo cargas esos.** Un archivo
-   `CON_ERRORES` o `DETENIDO` no se carga ni parcialmente. La lista es la que trae el resultado de A4,
-   con el nombre de clave que A4 haya usado (`cargables`, `archivos_ok`, `resumen_archivos_ok`…): lo
-   que importa es el veredicto por archivo, no el nombre del campo. Si el resultado dice que se puede
-   avanzar y trae la lista de archivos válidos, tienes tu lista — no te detengas por una clave que se
-   llama distinto. Si **no** hay veredicto por archivo en ninguna forma, entonces sí es un pendiente.
-2. **Entorno confirmado.** `file_read` del `blueprint.yaml` → `entorno_objetivo`. Si es `production` y
-   la misión no trae confirmación explícita de **base de datos y rama**, no escribas: pendiente
-   `entorno_produccion` y devuelve el control. "Adelante" no es una confirmación de entorno.
-3. Cero pendientes con `respuesta: null` que afecten a los modelos a cargar.
+1. **Veredictos por archivo.** Lee `07-validacion/veredicto-<flujo>.json` de cada flujo: un veredicto
+   por archivo, `cargable` | `con_errores` | `detenido`. **Solo cargas los `cargable`.** Un archivo
+   `con_errores` o `detenido` no se carga ni parcialmente. Si un flujo no tiene veredictos, sus
+   archivos son un pendiente para ese flujo — no los cargues.
+2. **Entorno confirmado.** `file_read` de `03-blueprint/proyecto.yaml` → `entorno_objetivo`,
+   `base_datos` y `rama`. Si `entorno_objetivo` es `production` y la misión no trae confirmación
+   explícita de **base de datos y rama**, no escribas: pendiente `entorno_produccion` y devuelve el
+   control. "Adelante" no es una confirmación de entorno.
+3. **Ancla contable cumplida.** No cargues ningún archivo de un flujo que no sea el ancla mientras los
+   objetos con `ancla: true` de `blueprint-financiero.yaml` no estén `cargado` en `estado-carga.json`
+   con read-back correcto (ver `contrato-implementacion-odoo` → "Ancla contable cumplida").
+4. Cero pendientes con `respuesta: null` que afecten a los modelos a cargar.
 
 ## Paso 1 — Aplicar la configuración (`fuente: configuracion`)
 
-Del `blueprint.yaml`, los objetos `fuente: configuracion` los escribes tú directo, en el orden `nn`.
-Pocos registros, valores decididos en el diseño.
+Los objetos `fuente: configuracion` salen de `03-blueprint/configuracion-<flujo>.yaml` de cada flujo
+(registros y ajustes): ahí están los valores decididos en el diseño — antes no había de dónde
+sacarlos. El orden lo da el grafo `depende_de` de los blueprints.
 
-## Prechecks obligatorios para `account.account` (plan de cuentas)
+## Prechecks de `account.account` y la localización
 
-Antes de cargar cualquier archivo que incluya `account.account`, ejecuta estos tres checks. Cada uno
-que falle genera un pendiente con **propuesta de corrección concreta** — no reintentes el `load` sin
-que el consultor haya respondido.
-
-### Check 1 — xmlid de la empresa
-
-El CSV casi siempre referencia la empresa con un xmlid del proyecto (ej. `adv_ecominera.company_ecominera`).
-Si ese xmlid no existe en la instancia, **todo el batch de 200-500 cuentas se cae completo** porque
-`load()` es transaccional.
-
-```python
-# Verifica si el xmlid de empresa del CSV existe
-odoo_jsonrpc(model="ir.model.data", method="search_read",
-  domain=[["module","=","<prefijo_proyecto>"],["name","=","company_<slug>"]],
-  fields=["id","res_id","model"])
-# Si devuelve vacío → el xmlid no existe
-```
-
-Si no existe, **no inventes** ni uses `base.main_company` directamente. En su lugar genera el
-pendiente `xmlid_empresa_faltante` con esta propuesta lista para aprobar:
-
-```
-PROBLEMA: El CSV usa '<prefijo>.company_<slug>' como company_ids, pero ese xmlid no existe en la instancia.
-PROPUESTA: Crear el xmlid apuntando a la empresa principal (res_id=1):
-  model="ir.model.data", method="create",
-  values={"module":"<prefijo>","name":"company_<slug>","model":"res.company","res_id":1}
-ACCIÓN REQUERIDA: Confirmar que res_id=1 es la empresa correcta para este proyecto.
-          Si hay varias empresas, indicar el id de la que corresponde.
-```
-
-Con la confirmación del consultor, ejecutas el `create` de `ir.model.data` y cargas el CSV.
-
-### Check 2 — constraint `current_year_earnings` (`l10n_cl`)
-
-Odoo solo permite **una** cuenta por compañía con `user_type_id` (o `account_type` en v17+) igual a
-`current_year_earnings`. `l10n_cl` la instala automáticamente; si el CSV del proyecto trae otra,
-`load()` rechaza el batch completo con `There can only be one account of type...`.
-
-```python
-# ¿Ya existe una cuenta current_year_earnings?
-odoo_jsonrpc(model="account.account", method="search_read",
-  domain=[["account_type","=","equity_unaffected"]],   # v17+
-  fields=["code","name","id"])
-# Para v16: domain=[["user_type_id.type","=","equity_unaffected"]]
-```
-
-Si devuelve al menos una cuenta → cualquier cuenta del CSV con ese tipo es un conflicto. Genera
-el pendiente `constraint_cuenta_resultado` con propuesta concreta:
-
-```
-PROBLEMA: Ya existe la cuenta '<code> - <name>' (id=X) con tipo current_year_earnings (instalada por l10n_cl).
-          El CSV incluye la cuenta '<code_csv> - <name_csv>' con el mismo tipo → el batch falla completo.
-PROPUESTA A (recomendada): Excluir '<code_csv>' del archivo de carga; la cuenta de l10n_cl ya cumple la función.
-PROPUESTA B: Reclasificar '<code_csv>' a tipo 'income' o 'equity' en el CSV antes de cargar.
-ACCIÓN REQUERIDA: Confirmar cuál propuesta aplica, o indicar si '<code_csv>' debe reemplazar a '<code>'.
-```
-
-### Check 3 — xmlids de `company_ids` / `company_id` en analíticos y diarios
-
-El mismo problema del Check 1 afecta a `account.analytic.account`, `account.journal`, y cualquier
-modelo que use `company_ids/id` o `company_id/id` con un xmlid del proyecto.
-
-```python
-# Lista todos los xmlids del prefijo proyecto que apuntan a res.company
-odoo_jsonrpc(model="ir.model.data", method="search_read",
-  domain=[["module","=","<prefijo_proyecto>"],["model","=","res.company"]],
-  fields=["name","res_id"])
-```
-
-Si la lista está vacía y el CSV usa `<prefijo>.company_*`, todos los archivos que referencien empresa
-están bloqueados. Un solo pendiente agrupa todos los modelos afectados.
+Antes de cargar cualquier archivo que incluya `account.account` (xmlid de empresa, única cuenta de
+resultado del ejercicio, `company_ids`/`company_id` en analíticos y diarios), aplica los prechecks de
+`localizacion-chile` — ahí viven, con la forma actual de Odoo 19. Cada check que falle genera un
+pendiente con **propuesta de corrección concreta**; no reintentes el `load` sin la respuesta del
+consultor.
 
 ---
 
@@ -149,27 +88,21 @@ iteración con resultado garantizado y deja en el historial un error que parece 
 Cuando la persona instale el módulo, **la introspección anterior quedó vieja**: un `fields_get`
 cacheado antes de instalar `l10n_cl` no conoce sus campos, y usarlo produce un `E110` que parece un
 error de diseño. Vuelve a introspectar los modelos afectados, actualiza
-`02-instancia/introspeccion.json`, y recarga solo los archivos `detenido`.
+`02-instancia/introspeccion-<flujo>.json`, y recarga solo los archivos `detenido`.
 
 **Antes de escribir un campo que no viste en la introspección, `fields_get` ese modelo.** Este paso
 es donde se inventan nombres de campo: el diseño dice "zona horaria de la compañía" o "moneda USD" y
 el nombre plausible no existe (`res.company.tz`, `res.currency.code` — ninguno de los dos es real).
 Un rechazo `Invalid field 'X' in 'Y'` es **`E110`**: lo corriges tú con `fields_get` y reintentas
 **una** vez con el campo verificado; el procedimiento completo y las trampas conocidas están en
-`odoo-rpc-en-opencompany`. Nunca pruebes un segundo nombre a ojo, y nunca escribas el dato en un
+`odoo-rpc-transporte`. Nunca pruebes un segundo nombre a ojo, y nunca escribas el dato en un
 campo "parecido" para que la llamada pase.
 
-**Los ajustes de la aplicación son parte de esta etapa, y sí se hacen por RPC.** Antes de escribir los
-objetos, enciende lo que el blueprint necesita en `res.config.settings`: sin
-`group_analytic_accounting` la contabilidad analítica no aparece en el menú aunque los planes existan;
-sin `group_stock_adv_location` no hay rutas; sin `group_stock_multi_locations` no hay ubicaciones; sin
-`group_uom` no hay unidades de medida. Un modelo que existe con el menú oculto le llega al usuario como
-"no está configurado", no como un error, así que no lo descubres por un rechazo: lo lees con
-`default_get` al principio del paso. El patrón (`default_get` → `create` con solo lo que cambias →
-**`execute()`**, que es lo que aplica) y la línea que no cruzas (`group_*` sí, `module_*` **no**,
-porque instala un módulo) están en `odoo-rpc-en-opencompany` → `res.config.settings`. Anota cada ajuste
-que encendiste en `08-carga/bitacora-configuracion.jsonl` y en `capacidades-instancia.json`: un ajuste
-aplicado sin registro es indistinguible de uno que ya venía puesto.
+**Los ajustes de la aplicación son parte de esta etapa, y sí se hacen por RPC** — el procedimiento
+completo (`default_get` → `create` con solo lo que cambias → **`execute()`**, y la línea que no
+cruzas: `group_*` sí, `module_*` **no**) vive en `ajustes-de-aplicacion`. Anota cada ajuste
+que encendiste en `08-carga/bitacora-configuracion.jsonl` y en `08-carga/capacidades-instancia.json`:
+un ajuste aplicado sin registro es indistinguible de uno que ya venía puesto.
 
 **Antes de crear, busca.** Los objetos de configuración son justo los que la localización suele haber
 creado ya — el plan de cuentas de `l10n_cl` es el caso clásico, y duplicarlo deja dos planes
@@ -189,24 +122,24 @@ Registra cada objeto en `08-carga/bitacora-<modelo>.jsonl` igual que una carga.
 
 ## Paso 2 — Construir el plan de carga
 
-**No supongas el orden por el nombre del archivo.** El prefijo `NN` es el orden de dependencias
-*cuando existe*; en varios proyectos los archivos llegan sin prefijo, y entonces el orden alfabético
-es orden arbitrario y produce `E300` en cascada. Deriva el plan, y déjalo escrito antes de la primera
-escritura.
+**No supongas el orden por el nombre del archivo.** El orden alfabético es orden arbitrario y produce
+`E300` en cascada. El orden lo da el grafo de dependencias de los blueprints de **todos** los flujos
+(`depende_de` y `requiere_de`); deriva el plan y déjalo escrito antes de la primera escritura.
 
-1. `fs_search` sobre `06-completadas/` para la lista real de archivos. Crúzala con `cargables` de
-   `07-validacion`: **solo entra al plan lo que está en ambas.**
+1. `fs_search` sobre `06-completadas/` para la lista real de archivos. Crúzala con los veredictos
+   `cargable` de los `07-validacion/veredicto-<flujo>.json`: **solo entra al plan lo que está en
+   ambas.**
 2. **Un mismo modelo en dos archivos es una colisión, no dos cargas.** Si `res.partner.csv` y
    `res_partner.csv` (variantes con punto y con guion bajo del mismo modelo) traen xmlids comunes con
    columnas distintas, cargar los dos deja el registro con los valores del último y pierde en silencio
    las columnas que solo traía el otro. Compara los conjuntos de `id`: si se solapan, carga **un
    solo** archivo — el que trae el superconjunto de filas y columnas — y reporta la colisión como
    alerta con los dos nombres. No los fusiones tú.
-3. **Orden.** Primero el `nn` del `blueprint.yaml`, que es la autoridad. Para lo que no esté ahí,
-   derívalo de las referencias: un archivo que trae una columna `<campo>/id` con xmlids del prefijo
-   del proyecto depende del archivo que **produce** esos xmlids. Orden topológico: primero los que no
-   referencian a nadie. Un ciclo (A referencia a B y B a A) no se resuelve reordenando: carga A sin la
-   columna que apunta a B, carga B, y vuelve a cargar A completo — `load()` actualiza, no duplica.
+3. **Orden.** El orden sale del grafo `depende_de` (y `requiere_de`) de los blueprints de todos los
+   flujos: un archivo que trae una columna `<campo>/id` con xmlids del prefijo del proyecto depende
+   del archivo que **produce** esos xmlids. Orden topológico: primero los que no referencian a nadie.
+   Un ciclo (A referencia a B y B a A) no se resuelve reordenando: carga A sin la columna que apunta
+   a B, carga B, y vuelve a cargar A completo — `load()` actualiza, no duplica.
 4. Un solo `sandboxed_python` te da el grafo entero sin arrastrar los CSVs al historial: abre cada
    ruta de la lista, y devuelve por archivo solo `{modelo, campos, ids, refs}` — `refs` son los
    valores no vacíos de las columnas `<campo>/id`. El parser está en
@@ -231,8 +164,8 @@ Mantén el estado en `08-carga/estado-carga.json`, un objeto por archivo:
 `load()` sea idempotente hace que reanudar sea seguro; que sea seguro no lo hace gratis: cada recarga
 son llamadas y contexto.
 
-**Lee también `02-instancia/capacidades-instancia.json`** (lo crea A1, y es chico). Es lo que esta
-instancia ya te enseñó, y te ahorra rondas enteras:
+**Lee también `08-carga/capacidades-instancia.json`** (lo escribes solo tú, y es chico). Es lo que
+esta instancia ya te enseñó, y te ahorra rondas enteras:
 
 - `metodos_bloqueados` — no vuelvas a llamar nada de esa lista. Es un `E520` garantizado.
 - `remapeos_confirmados` — cabeceras cuyo campo real ya se verificó con `fields_get`. Aplícalos al
@@ -260,33 +193,15 @@ Es memoria de **esta** instancia, no doctrina: si contradice lo que Odoo respond
 corriges el archivo. Un remapeo que la instancia ya no acepta se borra, no se conserva "porque antes
 funcionaba".
 
-El bucle, hasta **5 rondas** (la mecánica completa de reintentos y la regla de progreso están en
-`odoo-rpc-en-opencompany` → "El bucle de corrección"):
-
-```
-verifica los módulos del plan (un search_read)  -> los archivos de un módulo ausente: detenido
-ronda = 1
-mientras queden archivos en pendiente|diferido|parcial y ronda <= 5:
-    progreso = 0
-    por cada archivo del plan, en orden:
-        si estado es cargado o detenido -> siguiente
-        intenta cargarlo (los lotes de abajo)
-        todo entró            -> cargado,  progreso += 1
-        E110 / E220           -> corrígelo y reintenta YA, en esta misma ronda
-        E300 / E320           -> diferido (su dependencia entra en esta ronda o la próxima)
-        E200 / E210 / E400    -> aparta esas filas, recarga el lote sin ellas -> parcial
-        E100                  -> detenido (el archivo no está en condiciones)
-        E510                  -> detenido + pendiente modulo_faltante (no lo instalas tú)
-        E500                  -> detén el bucle completo y devuelve el control
-    si progreso == 0 -> corta el bucle: lo que queda no es un problema de orden
-    ronda += 1
-```
+El bucle de rondas, la regla de progreso y qué corrige CARGA por su cuenta frente a lo que detiene
+están en `bucle-de-correccion` — **síguelo; no lo reimplementes aquí**. Lo que sí es tuyo, archivo por
+archivo:
 
 Escribe `estado-carga.json` **al final de cada archivo**, no al final del bucle. Si el turno se corta
 —se agota el presupuesto de iteraciones, cae la instancia— la siguiente ejecución reanuda desde ahí en
 vez de repetir la carga entera.
 
-**En la misma escritura, acumula `02-instancia/capacidades-instancia.json`.** Es el archivo que hace
+**En la misma escritura, acumula `08-carga/capacidades-instancia.json`.** Es el archivo que hace
 que la próxima corrida no repita tus descubrimientos, y solo sirve si lo escribes cuando el hecho
 todavía está fresco:
 
@@ -336,12 +251,11 @@ Por archivo:
    intérprete real, y volver a derivar la mecánica es de donde salió la mayor parte del costo de las
    corridas anteriores.
 
-   El nombre del archivo es el que devolvió `fs_search`, tal cual — con punto o con guion bajo, con
-   prefijo `NN` o sin él. Un nombre "normalizado" a mano es un `file not found` y dos iteraciones
-   perdidas.
+   El nombre del archivo es el que devolvió `fs_search`, tal cual — con punto o con guion bajo. Un
+   nombre "normalizado" a mano es un `file not found` y dos iteraciones perdidas.
 
    Requisito previo, una vez por modelo: `fields_get` guardado en
-   `05-plantillas/campos-<modelo>.json`. El script lo lee de ahí en vez de llamar a Odoo, así que la
+   `08-carga/campos-<modelo>.json`. El script lo lee de ahí en vez de llamar a Odoo, así que la
    introspección se paga una vez y no una vez por lote.
 
    **`javascript_code` no sirve para este paso**: su sandbox no tiene `require` ni `fs`, y su
@@ -511,24 +425,21 @@ reportes como éxito silencioso.
 
 ## Paso 5 — Ejecutar el QA
 
-Genera `09-qa/casos.yaml` desde los casos canónicos de la referencia de cada flujo, cruzados con los
-`criterios_aceptacion` de `00-entrada/historias.csv`. Un caso por criterio verificable.
+**CARGA no genera los casos: los ejecuta.** Los casos viven en `09-qa/casos-<flujo>.yaml` — los
+escribe el agente de cada flujo (conoce el dominio), con el formato único del contrato
+(`valores` con `*_xmlid`; aserciones como expresiones). Un caso por criterio verificable.
 
 ```yaml
 - id: QA-007
   hu: [HU-014]
-  flujo: ventas
+  flujo: ventas_servicios
   descripcion: Cotización a cliente mayorista aplica lista de precios
   pasos:
-    - modelo: sale.order
-      metodo: create
-      valores: {partner_id_xmlid: adv_acme.partner_761234567, order_line: [...]}
-    - modelo: sale.order
-      metodo: action_confirm
+    - {modelo: sale.order, metodo: create, valores: {partner_id_xmlid: adv_acme.partner_761234567, order_line: []}}
+    - {modelo: sale.order, metodo: action_confirm}
   aserciones:
     - "pricelist_id == adv_acme.pricelist_mayorista"
     - "amount_total == 119000"
-    - "len(picking_ids) == 1"
 ```
 
 Ejecución:
@@ -561,20 +472,21 @@ No puedes reconstruir staging tú (es una operación de Odoo.sh, no de RPC). Lo 
 es **reportar si se hizo o no**. Sin ese dato, el informe de cierre se lee como "listo para
 producción" y no lo es.
 
-## Salida (un resultado al COORD)
+## Salida (un resultado al Coordinador)
 
 ```json
 {
   "resultado_carga": {
     "rondas": 3,
     "cierre_bucle": "todo_cargado",
+    "ancla_cumplida": true,
     "archivos_ok": 6,
     "archivos_error": 1,
     "archivos_parciales": 1,
     "registros_creados": 1689,
     "registros_actualizados": 4,
     "por_modelo": [
-      {"modelo": "res.partner", "creados": 306, "actualizados": 4,
+      {"modelo": "res.partner", "flujo": "ventas_servicios", "creados": 306, "actualizados": 4,
        "rango_xmlid": "adv_acme.partner_*", "errores": {}}
     ],
     "errores": [
@@ -584,7 +496,7 @@ producción" y no lo es.
     "bitacoras": ["08-carga/bitacora-res.partner.jsonl"],
     "plan": "08-carga/plan-carga.json",
     "estado": "08-carga/estado-carga.json",
-    "capacidades": "02-instancia/capacidades-instancia.json",
+    "capacidades": "08-carga/capacidades-instancia.json",
     "resumen": "08-carga/resumen-carga.md"
   },
   "resultado_qa": {
@@ -606,14 +518,14 @@ producción" y no lo es.
 parcial como completa.
 
 `cierre_bucle` es uno de `todo_cargado` | `sin_progreso` | `tope_rondas` | `detenido_E500`, y es el
-dato que dice si vale la pena volver a ejecutar A5. `todo_cargado` cierra la etapa. `sin_progreso`
+dato que dice si vale la pena volver a ejecutar CARGA. `todo_cargado` cierra la etapa. `sin_progreso`
 significa que lo que falta necesita una decisión del consultor: volver a ejecutar sin cambiar nada da
 exactamente el mismo resultado y cuesta lo mismo. `tope_rondas` sí se reanuda tal cual — el estado
 está en `estado-carga.json` y la siguiente corrida sigue desde ahí.
 
 ## Nunca
 
-- No cargues un archivo que no está en `cargables`.
+- No cargues un archivo cuyo veredicto en `veredicto-<flujo>.json` no es `cargable`.
 - No escribas en producción sin confirmación explícita de base de datos y rama.
 - No ejecutes el QA en producción.
 - No uses `create` en bucle donde va `load()`: pierdes el xmlid y la idempotencia.
@@ -633,7 +545,7 @@ está en `estado-carga.json` y la siguiente corrida sigue desde ahí.
   orden distinto, unas filas apartadas). Dos rechazos idénticos seguidos son un bucle, no un
   reintento — y una ronda sin progreso cierra el bucle, no lo reinicia.
 - No pierdas un lote por una fila mala: recárgalo sin las filas rechazadas y repórtalas.
-- No infieras el orden de carga del nombre del archivo cuando no hay prefijo `NN`, y no cargues dos
+- No infieras el orden de carga del nombre del archivo — el orden sale del grafo `depende_de` — y no cargues dos
   variantes del mismo modelo (`res.partner.csv` y `res_partner.csv`) como si fueran dos archivos.
 - No reintentes ciegamente un rechazo de negocio; pasa por `administrar-casos-de-borde-odoo`.
 - No crees datos maestros que no estaban en el blueprint para que una referencia resuelva.

@@ -29,6 +29,21 @@ server/skills/
 ├── gcloud/                   # gcloud-skill (Google Cloud CLI)
 ├── github/                   # github-skill (gh CLI)
 ├── language_agent/           # speech-skill, translation-skill
+├── odoo_impl/                # Sistema multiagente de implementación Odoo 19 (v2)
+│     Coordinador: orquestacion-del-proyecto, puntos-de-control-consultor,
+│     correo-consultor, jev-decisiones-coordinador · D0: descubrimiento-odoo,
+│     catalogo-de-flujos · Flujos: flujo-entendimiento, flujo-configuracion,
+│     flujo-implementacion, introspeccion-odoo-solo-lectura,
+│     plantilla-skill-de-dominio · CARGA: carga-a-odoo-y-verifica,
+│     bucle-de-correccion, ajustes-de-aplicacion, entornos-y-seguridad ·
+│     Compartidos: contrato-implementacion-odoo, jev-decisiones-agentes,
+│     odoo-rpc-transporte, taxonomia-errores-odoo, odoo19-diferencias,
+│     localizacion-chile · Sobrevivientes v1 con ajustes:
+│     administrar-casos-de-borde-odoo, convencion-ids-externos,
+│     scripts-verificados-de-carga-odoo, sandbox-de-codigo-en-opencompany
+│     (guía de instalación y system prompt del Coordinador en
+│     docs-internal/odoo-multiagente/; la versión anterior quedó archivada
+│     en docs-internal/ARCHIVE/odoo_impl-v1-2026-10-20/)
 ├── payments_agent/           # stripe-skill
 ├── productivity_agent/       # Google Workspace + Microsoft 365 skills
 │     google-gmail-skill, google-calendar-skill, google-drive-skill,

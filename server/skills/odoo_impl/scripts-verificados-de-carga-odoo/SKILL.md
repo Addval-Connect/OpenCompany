@@ -36,7 +36,7 @@ Tu criterio se gasta en lo que el script no puede decidir: si un match ambiguo e
 No la reordenes ni te saltes pasos; cada uno existe porque su ausencia produjo un fallo real.
 
 ```
-1. una vez por modelo:  odoo_jsonrpc  fields_get  ->  guardalo en 05-plantillas/campos-<modelo>.json
+1. una vez por modelo:  odoo_jsonrpc  fields_get  ->  guardalo en 08-carga/campos-<modelo>.json
 2. por archivo:         sandboxed_python  S1  ->  {fields, data, avisos, filas_a_apartar...}
 3. lee "avisos" y "descartes_columna" ANTES de llamar a Odoo
 4. quita de "data" las filas de "filas_a_apartar_antes_de_enviar"  (son rechazos garantizados)
@@ -87,8 +87,7 @@ el modulo: los crea la **plantilla contable** al aplicarse, con xmlid `account.<
 Por eso el script decide por el **modelo relacionado del campo** (`relation` de `fields_get`), no por el
 prefijo del valor: si apunta a uno de los modelos de `GENERADOS_POR_PLANTILLA` y el valor es `l10n_*`,
 sale en `xmlids_por_resolver_antes_de_enviar` con el modelo destino. **Resuelvelo por dominio antes de
-llamar a `load`** (procedimiento en `odoo-rpc-en-opencompany` → `E300` sobre un xmlid de la
-localizacion), y anota el resultado en `xmlids_resueltos` para que la proxima corrida lo sustituya sola.
+llamar a `load`** (procedimiento en `localización-chile` → el caso del xmlid `l10n_*`), y anota el resultado en `xmlids_resueltos` para que la proxima corrida lo sustituya sola.
 
 ```python
 # =========== PARAMETROS: las 3 lineas que cambias por archivo ===========
@@ -175,7 +174,7 @@ GENERADOS_POR_PLANTILLA = ["account.tax", "account.account", "account.journal", 
 
 ES_XMLID = re.compile(r"^[a-z0-9_]+\.[A-Za-z0-9_.\-]+$")
 
-campos = json.loads(leer("05-plantillas/campos-" + MODELO + ".json"))["campos"]
+campos = json.loads(leer("08-carga/campos-" + MODELO + ".json"))["campos"]
 
 remap = {}
 xmlmap = {}
