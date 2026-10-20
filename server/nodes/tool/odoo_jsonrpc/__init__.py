@@ -7,12 +7,22 @@ When an LLM drives it against Odoo it *invents* the instance hostname from the
 statement's bank name (``inversiones.odoo.com``, ``am635a.odoo.com`` …), which
 never authenticates and loops forever.
 
-This node is a ``ToolNode`` with a split schema: the connection (host / db /
-username / api_key) lives in ``Params`` — server-controlled, never exposed to
-the model — while the LLM only chooses the *business* call (model, method,
-domain/fields/values). The server builds ``https://{host}/jsonrpc`` and performs
-the two-step ``common.login`` -> ``object.execute_kw`` handshake itself, so the
-host can never be hallucinated.
+This node is a ``ToolNode`` with a split schema. The connection (host / db /
+username / api_key) lives in ``Params`` — operator-edited on the node panel —
+while the LLM chooses the *business* call (model, method, domain/fields/values).
+The server builds ``https://{host}/jsonrpc`` and performs the two-step
+``common.login`` -> ``object.execute_kw`` handshake itself.
+
+Per-call instance override (2026-10-20): the model MAY pass a complete
+connection (``host`` + ``db`` + ``username`` + ``api_key``) in the tool call to
+reach a different Odoo instance than the one configured on the node — multi-
+instance workloads (one agent, several tenants' Odoo). The override is
+ATOMIC: all four fields or none, so the model can never half-hallucinate a
+host while silently reusing the persisted credentials of another instance
+(the failure mode that motivated the lock). When the connection fields are
+omitted the persisted node config is used unchanged. The host goes through
+the same sanitisation as the operator's (scheme / path stripped, single
+hostname), so ``https://{host}/jsonrpc`` stays well-formed either way.
 """
 
 from __future__ import annotations
@@ -32,10 +42,16 @@ from services.plugin import (
 
 
 # --------------------------------------------------------------------------- #
-# Persisted connection config — SERVER-CONTROLLED, never a model argument.
+# Persisted connection config — the FALLBACK when the model does not supply
+# a per-call instance override (see OdooJsonRpcToolInput).
 # --------------------------------------------------------------------------- #
 class OdooJsonRpcParams(BaseModel):
-    """Odoo connection settings, edited by the operator in the node panel."""
+    """Odoo connection settings, edited by the operator in the node panel.
+
+    Used as-is whenever the model omits the connection override. When the
+    model supplies a complete override, ``timeout`` is still taken from
+    here — it is an operational knob, not instance identity.
+    """
 
     host: str = Field(
         default="",
@@ -86,8 +102,43 @@ OdooMethod = Literal[
 
 
 class OdooJsonRpcToolInput(BaseModel):
-    """One locked schema visible to the LLM. No host/db/credentials here."""
+    """One locked schema visible to the LLM.
 
+    By default the model only picks the business call — the connection is
+    the one configured on the node. It MAY override the target instance per
+    call by passing the COMPLETE connection (host + db + username +
+    api_key); the override is validated atomically (all four or none) so a
+    hallucinated host can never be paired with the persisted credentials
+    of another instance.
+    """
+
+    # ---- Per-call instance override (optional, all-or-nothing) ---------- #
+    host: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override: Odoo instance hostname WITHOUT scheme or path "
+            "(e.g. my-db.odoo.com). Pass ONLY together with db, username "
+            "and api_key — omit all four to use the instance configured "
+            "on the node."
+        ),
+    )
+    db: Optional[str] = Field(
+        default=None,
+        description="Override: Odoo database name of the target instance.",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Override: Odoo login of the target instance.",
+    )
+    api_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override: Odoo API key / password of the target instance "
+            "(used for JSON-RPC login)."
+        ),
+    )
+
+    # ---- Business call --------------------------------------------------- #
     model: str = Field(
         description=(
             "Odoo model name, e.g. 'product.product', 'res.partner', "
@@ -163,8 +214,28 @@ class OdooJsonRpcToolInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    _CONNECTION_FIELDS = ("host", "db", "username", "api_key")
+
     @model_validator(mode="after")
     def _validate_by_method(self) -> "OdooJsonRpcToolInput":
+        # Instance override is atomic: all four connection fields or none.
+        # A partial override would pair a (possibly hallucinated) host with
+        # the persisted credentials of ANOTHER instance — the exact failure
+        # the connection lock was built to prevent.
+        provided = [f for f in self._CONNECTION_FIELDS if getattr(self, f)]
+        if provided and len(provided) != len(self._CONNECTION_FIELDS):
+            missing = [
+                f for f in self._CONNECTION_FIELDS if not getattr(self, f)
+            ]
+            raise ValueError(
+                "instance connection override is all-or-nothing: got "
+                + ", ".join(provided)
+                + " but missing "
+                + ", ".join(missing)
+                + ". Either pass the complete host/db/username/api_key of "
+                "the target instance, or omit all four to use the instance "
+                "configured on the node."
+            )
         if self.method == "call" and not self.method_name:
             raise ValueError("method='call' requires method_name")
         if self.method in ("read", "write", "unlink") and not self.ids:
@@ -206,8 +277,9 @@ class OdooJsonRpcNode(ToolNode):
     group = ("tool", "ai")
     description = (
         "Call the Odoo ORM (search_read/read/create/write/…) over JSON-RPC. "
-        "Connection host and credentials are configured on the node; the model "
-        "only chooses the business call."
+        "Connects to the instance configured on the node, or to another "
+        "instance when the model passes a complete per-call connection "
+        "override (host/db/username/api_key)."
     )
     component_kind = "tool"
     tool_name = "odoo_jsonrpc"
@@ -219,8 +291,12 @@ class OdooJsonRpcNode(ToolNode):
         "needed. To import rows that carry an external id use method='load' "
         "with fields as the header (first entry 'id') and values as the data "
         "rows — it is idempotent and registers xmlids, which create cannot. "
-        "You never provide a URL, database, or credentials — they are fixed on "
-        "the node. Returns {ok, result} or {ok:false, error}."
+        "By default the call runs against the instance configured on the "
+        "node. To target a DIFFERENT instance instead, pass the complete "
+        "connection: host (hostname without scheme/path), db, username and "
+        "api_key — all four together or none at all; never mix an override "
+        "with the node's stored credentials. Returns {ok, result} or "
+        "{ok:false, error}."
     )
     handles = (
         {
@@ -381,6 +457,20 @@ class OdooJsonRpcNode(ToolNode):
                     "No Odoo call provided. The model must supply model + method."
                 )
 
+        # Per-call instance override: when the model supplied a COMPLETE
+        # connection (validated atomically in the ToolInput), it wins over
+        # the persisted config. `timeout` stays from the persisted config —
+        # an operational knob, not instance identity. When no override is
+        # present the persisted config is used unchanged (the default path).
+        if isinstance(params, OdooJsonRpcToolInput) and params.host:
+            cfg = OdooJsonRpcParams(
+                host=params.host,
+                db=params.db or "",
+                username=params.username or "",
+                api_key=params.api_key or "",
+                timeout=cfg.timeout,
+            )
+
         missing = [
             name
             for name in ("host", "db", "username", "api_key")
@@ -390,7 +480,9 @@ class OdooJsonRpcNode(ToolNode):
             raise NodeUserError(
                 "Odoo node is not configured: missing "
                 + ", ".join(missing)
-                + ". Set them on the node panel."
+                + ". Set them on the node panel, or pass the complete "
+                "instance connection (host, db, username, api_key) in the "
+                "tool call."
             )
 
         host = cfg.host.strip().rstrip("/")
