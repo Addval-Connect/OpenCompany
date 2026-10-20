@@ -165,6 +165,10 @@
     "icon": "lobehub:googlecloud",
     "skill": "gcloud-skill"
   },
+  "canvas": {
+    "icon": "lucide:Monitor",
+    "color": "#8be9fd"
+  },
   "github": {
     "icon": "lobehub:Github",
     "color": "#8250df"

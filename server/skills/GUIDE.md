@@ -42,6 +42,9 @@ server/skills/
 ├── terminal/                 # Shell skills (shell, bash, powershell, wsl, process-manager)
 ├── travel_agent/             # geocoding-skill, nearby-places-skill
 ├── vercel/                   # vercel-skill (Vercel CLI)
+├── wiki/                     # LLM Wiki pattern skills (workspace knowledge base)
+│     wiki-schema, wiki-bootstrap, wiki-ingest, wiki-query, wiki-lint,
+│     wiki-graph
 ├── vertex_agent/             # vertex-agent-skill, vertex-agent-admin-skill
 └── web_agent/                # Web automation skills
       browser-skill, browser-harness-skill, http-request-skill, apify-skill,
