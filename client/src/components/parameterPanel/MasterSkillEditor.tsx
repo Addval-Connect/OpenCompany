@@ -50,7 +50,7 @@ import { useNodeStatus, useWebSocket } from '../../contexts/WebSocketContext';
 import { NodeIcon } from '../../assets/icons';
 import { theme } from '../../styles/theme';
 import { cn } from '@/lib/utils';
-import { useFolderSkills } from '../../hooks/useFolderSkills';
+import { useAllSkills, useFolderSkills } from '../../hooks/useFolderSkills';
 import { useNodeAllowlist } from '../../hooks/useNodeAllowlist';
 
 // Skill configuration stored in node parameters
@@ -74,6 +74,7 @@ interface AvailableSkill {
   color: string;
   description: string;
   isUserSkill?: boolean;  // True if this is a user-created skill from database
+  folder?: string;        // Top-level folder the skill lives in ("All skills" view)
 }
 
 // User skill from database
@@ -108,6 +109,12 @@ interface PendingSkillData {
 const EMPTY_USER_SKILLS: UserSkill[] = [];
 const EMPTY_FOLDER_SKILLS: AvailableSkill[] = [];
 const REQUIRED_ASSISTANT_SKILL = 'skill';
+
+// Dropdown sentinel for the flat "All skills" view. UI-only state: it is
+// NEVER written to the node's `skill_folder` parameter — that param is
+// read by downstream surfaces (Connected Skills scan, persisted config),
+// so it must keep pointing at a real folder.
+const ALL_SKILLS = '__all_skills__';
 
 interface MasterSkillEditorProps {
   skillsConfig: MasterSkillConfig;
@@ -194,10 +201,20 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
     [foldersQuery.data, isSkillFolderDisabled],
   );
   const foldersLoaded = !foldersQuery.isLoading;
+  const allSkillCount = useMemo(
+    () => availableFolders.reduce((n, f) => n + f.skill_count, 0),
+    [availableFolders],
+  );
 
   const folderSkillsQuery = useFolderSkills(skillFolder);
   const folderSkills = folderSkillsQuery.data ?? EMPTY_FOLDER_SKILLS;
   const folderLoading = folderSkillsQuery.isLoading;
+
+  // "All skills" flat view (see ALL_SKILLS): local view state, never a
+  // parameter. The catalogue only fetches while the view is active.
+  const [viewAll, setViewAll] = useState(false);
+  const allSkillsQuery = useAllSkills(viewAll);
+  const allSkills = allSkillsQuery.data ?? EMPTY_FOLDER_SKILLS;
 
   // Inline editing state (no modal)
   const [isCreatingNew, setIsCreatingNew] = useState(false);
@@ -219,14 +236,21 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
     return () => el.removeEventListener('keydown', handler);
   });
 
-  // Build list of available skills - from folder scan, node definitions, and user skills
+  // Build list of available skills - from folder scan (or the flat
+  // all-folders catalogue), and user skills
   const availableSkills = useMemo<AvailableSkill[]>(() => {
     const skills: AvailableSkill[] = [];
 
-    // Add folder skills (backend-sourced). The legacy fallback to
-    // built-in skill nodeDefinitions has been removed — SKILL_NODE_TYPES
-    // was ['masterSkill'] and the filter always returned an empty list.
-    if (skillFolder && folderSkills.length > 0) {
+    if (viewAll) {
+      // Flat catalogue across every folder; hide skills under
+      // allowlist-disabled folders — same policy the dropdown applies.
+      skills.push(
+        ...allSkills.filter((s) => !s.folder || !isSkillFolderDisabled(s.folder)),
+      );
+    } else if (skillFolder && folderSkills.length > 0) {
+      // Add folder skills (backend-sourced). The legacy fallback to
+      // built-in skill nodeDefinitions has been removed — SKILL_NODE_TYPES
+      // was ['masterSkill'] and the filter always returned an empty list.
       skills.push(...folderSkills);
     }
 
@@ -244,15 +268,17 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
     });
 
     return skills;
-  }, [skillFolder, folderSkills, userSkills]);
+  }, [viewAll, allSkills, skillFolder, folderSkills, userSkills, isSkillFolderDisabled]);
 
-  // Filter skills based on search query
+  // Filter skills based on search query (name, description, and — in the
+  // "All skills" view — the origin folder, e.g. "odoo" finds odoo_impl skills)
   const filteredSkills = useMemo(() => {
     if (!searchQuery.trim()) return availableSkills;
     const query = searchQuery.toLowerCase();
     return availableSkills.filter(skill =>
       skill.displayName.toLowerCase().includes(query) ||
-      skill.description.toLowerCase().includes(query)
+      skill.description.toLowerCase().includes(query) ||
+      (skill.folder?.toLowerCase().includes(query) ?? false)
     );
   }, [availableSkills, searchQuery]);
 
@@ -337,6 +363,10 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
   // queryClient.prefetchQuery is a no-op when the data is already
   // cached, so subsequent panel opens are free.
   useEffect(() => {
+    // Skip the bulk prefetch in the "All skills" view: it would fire a
+    // request per skill (100+) the moment the view opens. The per-selection
+    // fetch effect and handleToggleSkill already load content on demand.
+    if (viewAll) return;
     if (availableSkills.length === 0) return;
     for (const skill of availableSkills) {
       if (skill.isUserSkill) continue;
@@ -354,7 +384,7 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
         staleTime: Infinity,
       });
     }
-  }, [availableSkills, queryClient, sendRequest, getCachedSkillContent]);
+  }, [viewAll, availableSkills, queryClient, sendRequest, getCachedSkillContent]);
 
   // When selecting a user skill, load its data into pendingSkillData for editing.
   // Guarded by initializedSkillRef so it runs ONCE per selection -- re-running on
@@ -646,13 +676,19 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
           </div>
         </div>
 
-        {/* Skill Folder Dropdown */}
+        {/* Skill Folder Dropdown — first entry is the flat "All skills" view */}
         <div className="shrink-0 border-b border-border p-2">
           <Select
-            value={skillFolder || 'assistant'}
+            value={viewAll ? ALL_SKILLS : (skillFolder || 'assistant')}
             onValueChange={(value) => {
-              onSkillFolderChange?.(value);
               setSelectedSkillName(null);
+              if (value === ALL_SKILLS) {
+                // UI-only view: the node's skill_folder parameter is untouched.
+                setViewAll(true);
+                return;
+              }
+              setViewAll(false);
+              onSkillFolderChange?.(value);
             }}
             disabled={!foldersLoaded}
           >
@@ -663,6 +699,9 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
               </div>
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={ALL_SKILLS}>
+                All skills ({allSkillCount})
+              </SelectItem>
               {availableFolders.map((f) => (
                 <SelectItem key={f.name} value={f.name}>
                   {f.name} ({f.skill_count})
@@ -674,15 +713,15 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
 
         {/* Skills List */}
         <div className="flex-1 overflow-y-auto">
-          {folderLoading ? (
+          {folderLoading || allSkillsQuery.isLoading ? (
             <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Scanning folder...
+              {viewAll ? 'Loading all skills...' : 'Scanning folder...'}
             </div>
           ) : filteredSkills.length === 0 ? (
             <div className="mt-6 flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
               <Inbox className="h-10 w-10 opacity-50" />
-              <p>{skillFolder ? `No skills found in skills/${skillFolder}/` : 'No skills found'}</p>
+              <p>{!viewAll && skillFolder ? `No skills found in skills/${skillFolder}/` : 'No skills found'}</p>
             </div>
           ) : (
             <div className="divide-y divide-border">
@@ -735,6 +774,14 @@ const MasterSkillEditor: React.FC<MasterSkillEditorProps> = ({
                       >
                         {skill.displayName}
                       </span>
+                      {viewAll && skill.folder && (
+                        <DSBadge
+                          className="h-4 max-w-[90px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap bg-fg-muted/10 px-1 text-[10px] font-normal text-fg-muted"
+                          title={skill.folder}
+                        >
+                          {skill.folder}
+                        </DSBadge>
+                      )}
                       {isCustomized && (
                         <TooltipProvider>
                           <Tooltip>
