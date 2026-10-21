@@ -147,7 +147,7 @@ por-namespace — lección 4 de CartolaTax). El camino por chat no depende de es
    flujo del namespace addval-tax" y revisar el informe.
 4. Opcional (Fase 3+): `dataSource` (`data`) para lecturas JSON acotadas de los
    elucidaciones grandes; `processManager` para troceo por script.
-5. Opcional: sincronizar disk↔inline con `server/scripts/materialize_skills_config.py`
+5. Opcional: sincronizar disk↔inline con `server/scripts/materialize_skills_config.py` (docs-lint: ignore)
    (untracked, de la sesión ArmandoOdoo) si se importan workflows a hosts frescos.
 
 ## 8. Lecciones
