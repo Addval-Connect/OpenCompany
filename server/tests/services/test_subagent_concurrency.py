@@ -53,3 +53,32 @@ async def test_acquire_and_release_are_idempotent(concurrency_database):
     assert await concurrency_database.release_subagent_permit("root-1", "call-1")
     assert await concurrency_database.acquire_subagent_permit("root-1", "call-2", 1)
 
+
+@pytest.mark.asyncio
+async def test_released_lease_of_same_root_is_reacquirable(concurrency_database):
+    """The retry_task deadlock (IAuditor, 2026-10-20): a delegation lease id
+    is deterministic (task id + activity id + attempt), so a RETRIED task
+    derives the very same id. The released row used to poison the lookup
+    forever — acquired=False on every poll. A released lease of the SAME
+    root must be re-acquirable, claiming a fresh slot."""
+    assert await concurrency_database.acquire_subagent_permit("root-1", "call-1", 1)
+    assert await concurrency_database.release_subagent_permit("root-1", "call-1")
+    assert await concurrency_database.acquire_subagent_permit("root-1", "call-1", 1)
+    # The re-acquire claimed a real slot: capacity is exhausted again.
+    assert not await concurrency_database.acquire_subagent_permit("root-1", "call-2", 1)
+
+
+@pytest.mark.asyncio
+async def test_released_lease_of_another_root_is_never_reacquired(concurrency_database):
+    assert await concurrency_database.acquire_subagent_permit("root-1", "call-1", 2)
+    assert await concurrency_database.release_subagent_permit("root-1", "call-1")
+    assert not await concurrency_database.acquire_subagent_permit("root-2", "call-1", 2)
+
+
+@pytest.mark.asyncio
+async def test_active_lease_reacquire_does_not_double_claim(concurrency_database):
+    assert await concurrency_database.acquire_subagent_permit("root-1", "call-1", 1)
+    # Idempotent re-acquire while ACTIVE succeeds — without claiming a slot.
+    assert await concurrency_database.acquire_subagent_permit("root-1", "call-1", 1)
+    assert not await concurrency_database.acquire_subagent_permit("root-1", "call-2", 1)
+
