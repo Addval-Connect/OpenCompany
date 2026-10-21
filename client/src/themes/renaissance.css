@@ -380,10 +380,9 @@
     0 4px 0 var(--border-strong),
     0 6px 12px rgba(58, 32, 8, 0.25);
   position: relative;
-  transition: transform var(--dur-default) var(--ease-emphasis);
+  /* No transform transition / hover lift — nodes stay still (see base.css). */
 }
 :root[data-theme="renaissance"] .node:hover {
-  transform: translateY(-2px);
   box-shadow:
     0 0 0 1px var(--gold-bright) inset,
     0 0 0 3px var(--bg-elevated) inset,

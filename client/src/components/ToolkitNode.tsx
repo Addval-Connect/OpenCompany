@@ -128,7 +128,9 @@ const ToolkitNode: React.FC<NodeProps<NodeData>> = ({ id, type, data, isConnecta
             justifyContent: 'center',
             fontSize: theme.fontSize.xs,
             fontWeight: '400',
-            transition: theme.transitions.fast,
+            // Scoped to visual props: the shorthand '0.2s ease' transitions
+            // ALL properties (incl. transform) — nodes must not move.
+            transition: 'background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease',
             zIndex: 30,
           }}
           title="Edit Skill Parameters"
