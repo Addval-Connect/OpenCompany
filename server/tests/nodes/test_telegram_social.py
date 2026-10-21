@@ -433,6 +433,160 @@ class TestTelegramReceive:
 
 
 # ============================================================================
+# telegramGetAttachment (ActionNode + AI tool — downloads file_id into the
+# workspace attachments/ folder; Outlook download_attachments pattern)
+# ============================================================================
+
+
+class TestTelegramGetAttachment:
+    PAYLOAD = b"%PDF-1.4 telegram attachment test bytes"
+
+    @staticmethod
+    def _connected_bot(payload=b"%PDF-1.4 telegram attachment test bytes"):
+        """Stub service whose bot resolves and downloads a real Telegram file."""
+        svc = _make_telegram_service(connected=True)
+        bot = MagicMock(name="Bot")
+        tg_file = MagicMock(name="TelegramFile")
+        tg_file.file_path = "documents/invoice_42.pdf"
+        bot.get_file = AsyncMock(return_value=tg_file)
+        bot.download_file = AsyncMock(return_value=payload)
+        svc._require_bot = MagicMock(return_value=bot)
+        return svc
+
+    async def test_happy_path_saves_into_workspace_attachments(self, harness, tmp_path):
+        svc = self._connected_bot()
+        ctx = harness.build_context(workspace_dir=str(tmp_path))
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": "DOC-1", "file_name": "invoice_42.pdf", "kind": "document"},
+                context=ctx,
+            )
+
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["downloaded"] is True
+        assert payload["file_id"] == "DOC-1"
+        # Slugified stem keeps the real extension (documentParser globs *.pdf).
+        assert payload["filename"].startswith("invoice-42-")
+        assert payload["filename"].endswith(".pdf")
+        assert payload["rel_path"].startswith("attachments/")
+        # file_path is absolute and lives under the workspace attachments/ dir.
+        assert payload["file_path"].startswith(str(tmp_path))
+        assert "attachments/" in payload["file_path"]
+        # The bytes actually landed on disk, atomically, unmodified.
+        from pathlib import Path
+
+        target = Path(payload["file_path"])
+        assert target.is_file()
+        assert target.read_bytes() == self.PAYLOAD
+        assert payload["size_bytes"] == len(self.PAYLOAD)
+        import hashlib
+
+        assert payload["sha256"] == hashlib.sha256(self.PAYLOAD).hexdigest()
+
+    async def test_synthesises_name_and_extension_when_absent(self, harness, tmp_path):
+        svc = self._connected_bot()
+        ctx = harness.build_context(workspace_dir=str(tmp_path))
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": "VOICE-9", "file_name": "voice_note.ogg"},
+                context=ctx,
+            )
+
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["downloaded"] is True
+        # Real usage: the receive trigger always delivers media.file_name
+        # (synthesised in _service._normalize_media via _SYNTHETIC_EXT), so
+        # the Telegram-native extension survives the slugify.
+        assert payload["filename"].startswith("voice-note-")
+        assert payload["filename"].endswith(".ogg")
+
+    async def test_fully_synthesised_name_falls_back_to_mime_extension(
+        self, harness, tmp_path
+    ):
+        svc = self._connected_bot()
+        ctx = harness.build_context(workspace_dir=str(tmp_path))
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": "VOICE-9", "kind": "voice", "mime_type": "audio/ogg"},
+                context=ctx,
+            )
+
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["downloaded"] is True
+        # Both the name and the extension are synthesised here. Python's
+        # mime db maps audio/ogg -> .oga (not .ogg) — the shared helper in
+        # telegram_receive uses mimetypes.guess_extension, so the OGG family
+        # extension is what lands; the receive trigger's media.file_name
+        # normally pre-empts this path with the canonical .ogg.
+        assert payload["filename"].startswith("telegram-voice-")
+        assert payload["filename"].endswith((".ogg", ".oga"))
+
+    async def test_not_connected_short_circuits(self, harness):
+        svc = _make_telegram_service(connected=False)
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": "DOC-1"},
+            )
+
+        harness.assert_envelope(result, success=False)
+        assert "not connected" in result["error"].lower()
+
+    async def test_missing_file_id_gives_user_error(self, harness):
+        svc = self._connected_bot()
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": ""},
+            )
+
+        harness.assert_envelope(result, success=False)
+        assert "file_id is required" in result["error"]
+
+    async def test_bot_download_failure_surfaces_as_user_error(self, harness, tmp_path):
+        svc = _make_telegram_service(connected=True)
+        bot = MagicMock(name="Bot")
+        bot.get_file = AsyncMock(side_effect=Exception("Bad Request: wrong file id specified"))
+        svc._require_bot = MagicMock(return_value=bot)
+        ctx = harness.build_context(workspace_dir=str(tmp_path))
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": "BROKEN"},
+                context=ctx,
+            )
+
+        harness.assert_envelope(result, success=False)
+        assert "wrong file id" in result["error"].lower()
+
+    async def test_empty_telegram_payload_surfaces_as_user_error(self, harness, tmp_path):
+        svc = self._connected_bot(payload=b"")
+        ctx = harness.build_context(workspace_dir=str(tmp_path))
+
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramGetAttachment",
+                {"file_id": "EMPTY-1"},
+                context=ctx,
+            )
+
+        harness.assert_envelope(result, success=False)
+        assert "empty file" in result["error"].lower()
+
+
+# ============================================================================
 # socialSend
 # ============================================================================
 

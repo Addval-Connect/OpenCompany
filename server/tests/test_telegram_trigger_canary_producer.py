@@ -44,7 +44,20 @@ class TestTelegramProducerCanaryEmit:
 
         assert inspect.iscoroutinefunction(dispatch_telegram_message_received)
 
-    def test_dispatcher_uses_canary_path_only(self):
+    def test_dispatcher_uses_dual_delivery(self):
+        """Contract (fix/telegram-attachments): DUAL delivery, mirroring
+        ``nodes.twitter._events.dispatch_twitter_event_received``.
+
+        1. ``event_waiter.dispatch`` MUST resolve in-process waiters —
+           canvas-Run trigger nodes schedule as activities whose body
+           registers a waiter; ``emit`` never signals it (its Visibility
+           query only matches EventType-tagged listener/controller
+           workflows), so a telegramReceive-triggered canvas Run never
+           fired after Wave 13 removed this call.
+        2. ``emit`` MUST still fan out to Temporal-durable
+           TriggerListenerWorkflow consumers AND broadcast to FE on the
+           ``telegram_message_received`` wire key.
+        """
         from nodes.telegram import _events
 
         src = inspect.getsource(_events.dispatch_telegram_message_received)
@@ -56,11 +69,13 @@ class TestTelegramProducerCanaryEmit:
             "consumers AND broadcasts to FE on the "
             "telegram_message_received wire key."
         )
-        assert not _EVENT_WAITER_DISPATCH_PATTERN.search(src), (
-            "dispatch_telegram_message_received must NOT call "
-            "event_waiter.dispatch — telegramReceive is canary-registered "
-            "and the legacy collector path has zero consumers (removed "
-            "in Wave 13)."
+        assert _EVENT_WAITER_DISPATCH_PATTERN.search(src), (
+            "dispatch_telegram_message_received must ALSO call "
+            "event_waiter.dispatch — canvas-Run telegramReceive waiters "
+            "are only resolvable in-process (emit's Visibility query "
+            "matches listener/controller workflows, never the canvas "
+            "Run's activity waiter). Removing this call silently killed "
+            "every telegram-triggered canvas Run."
         )
 
     @pytest.mark.asyncio
@@ -93,6 +108,43 @@ class TestTelegramProducerCanaryEmit:
         # subject is the chat_id cast to str — CloudEvents spec requires string.
         assert envelope.subject == "12345"
         assert emit_calls[0]["wire_routing_key"] == "telegram_message_received"
+
+    @pytest.mark.asyncio
+    async def test_runtime_also_resolves_in_process_waiters(self, monkeypatch):
+        """The in-process dispatch must carry the SAME payload that emit
+        receives — downstream nodes read media.file_id off the waiter
+        result to feed telegramGetAttachment."""
+        from nodes.telegram import _events
+        from services.events import dispatch as dispatch_mod
+        from services import event_waiter
+
+        emit_calls: List[Any] = []
+
+        async def fake_emit(event, **kwargs):
+            emit_calls.append(event)
+            return event
+
+        dispatch_calls: List[Any] = []
+
+        def fake_dispatch(event_type, data):
+            dispatch_calls.append((event_type, data))
+            return 1
+
+        monkeypatch.setattr(dispatch_mod, "emit", fake_emit)
+        monkeypatch.setattr(event_waiter, "dispatch", fake_dispatch)
+
+        payload = {
+            "chat_id": 12345,
+            "media": {"kind": "document", "file_id": "DOC-1", "file_name": "a.pdf"},
+        }
+        await _events.dispatch_telegram_message_received(payload)
+
+        assert len(emit_calls) == 1
+        assert len(dispatch_calls) == 1
+        wire_type, dispatched = dispatch_calls[0]
+        assert wire_type == "telegram_message_received"
+        assert dispatched == payload, "in-process dispatch must carry the full event payload"
+        assert dispatched["media"]["file_id"] == "DOC-1"
 
 
 class TestTelegramPluginSelfRegistersCanary:

@@ -149,21 +149,34 @@ async def dispatch_telegram_message_received(
 ) -> None:
     """Dispatch an incoming Telegram message via the canary CloudEvents path.
 
-    Single delivery: :func:`services.events.dispatch.emit` Signals running
-    :class:`TriggerListenerWorkflow` consumers via Temporal Visibility AND
-    broadcasts the envelope to FE on the ``telegram_message_received``
-    wire key. telegramReceive is canary-registered so no legacy
-    ``event_waiter`` waiter is ever registered for it.
+    Dual delivery (mirrors :func:`nodes.twitter._events.dispatch_twitter_event_received`):
+
+    1. **In-process event_waiter waiters** via
+       :func:`event_waiter.dispatch` — canvas-Run trigger nodes
+       schedule as activities (MachinaWorkflow's durable wait) whose body
+       registers a waiter here; ``dispatch.emit`` never resolves it, so
+       without this call a canvas Run on a telegramReceive-triggered
+       workflow never fires. The canary-registry note below refers to the
+       *deployment* collector, not these mid-graph waiters.
+    2. **Temporal-durable listeners** via
+       :func:`services.events.dispatch.emit`: Signals running
+       :class:`TriggerListenerWorkflow` consumers via Temporal Visibility
+       AND broadcasts the envelope to FE on the ``telegram_message_received``
+       wire key.
 
     ``namespace`` is the Temporal namespace resolved from the credential owner
     of the bot that received this message.  Defaults to the server default
     (pre-Fase-6 single-tenant behaviour); Fase 6 wires in the real namespace
     from the credential customer id stored on TelegramService.
     """
+    from services import event_waiter
     from services.events.dispatch import emit
 
+    payload = dict(event_data)
+    event_waiter.dispatch(_MESSAGE_LEGACY_EVENT_TYPE, payload)
+
     await emit(
-        telegram_message_received(dict(event_data)),
+        telegram_message_received(payload),
         wire_routing_key=_MESSAGE_LEGACY_EVENT_TYPE,
         namespace=namespace,
     )
