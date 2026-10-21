@@ -22,7 +22,7 @@ Tres tareas acordadas en planificación previa a la ejecución:
 **Modo conservador de git**: no se usó `git add -A`/`-u` a ciegas; staging
 explícito por commit. Los archivos *untracked* ajenos a esta sesión
 (`bitacora-armandoodoo-2026-10-20.md`, `bitacora-cartolatax-2026-10-13.md`,
-`server/scripts/materialize_skills_config.py`) **no fueron tocados**.
+`server/scripts/materialize_skills_config.py`) **no fueron tocados** (docs-lint: ignore).
 
 ## 2. Commits
 
