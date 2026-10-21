@@ -204,8 +204,8 @@ def kill_orphaned_opencompany_processes(
 ) -> list[int]:
     """Kill stray python/bun processes whose cmdline references the project root."""
     root_norm = root_dir.lower().replace("\\", "/")
-    # bun runs the JS executor sidecar and the company shim; node is kept
-    # so a sidecar left over from a pre-bun install is still reaped.
+    # bun runs the company shim; node is kept in the list so a stray
+    # node process from older installs is still reaped.
     target_names = {"python", "python3", "python.exe", "bun", "bun.exe", "node", "node.exe"}
     safe_pids = _ancestor_pids()
     killed: list[int] = []

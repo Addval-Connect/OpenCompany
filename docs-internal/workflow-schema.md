@@ -221,13 +221,6 @@ Unified multi-platform messaging (WhatsApp, Telegram, Discord, Slack, SMS, Email
 - `proxyConfig` - Dual-purpose: configure providers, credentials, routing rules
 - `proxyStatus` - View proxy provider health, scores, and usage statistics
 
-### Code Nodes (4 nodes)
-All dual-purpose (workflow node + AI tool):
-- `pythonExecutor` - Python code execution (in-process)
-- `javascriptExecutor` - JavaScript execution via the persistent JS executor sidecar (Express on bun; `server/nodejs/`)
-- `typescriptExecutor` - TypeScript execution via the same sidecar (bun transpiles TypeScript natively; no tsx)
-- `montyExecutor` - Sandboxed Python via the Monty interpreter
-
 ### Chat Nodes (2 nodes)
 - `chatSend` - Send via JSON-RPC 2.0 WebSocket
 - `chatHistory` - Retrieve chat message history

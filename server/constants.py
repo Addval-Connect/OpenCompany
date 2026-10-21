@@ -317,13 +317,6 @@ CHAT_TYPES: FrozenSet[str] = frozenset(
 # UTILITY NODE TYPES
 # =============================================================================
 
-CODE_EXECUTOR_TYPES: FrozenSet[str] = frozenset(
-    [
-        "pythonExecutor",
-        "javascriptExecutor",
-    ]
-)
-
 HTTP_TYPES: FrozenSet[str] = frozenset(
     [
         "httpRequest",

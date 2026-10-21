@@ -37,8 +37,6 @@ describe.skipIf(!staged)("staged app-root", () => {
       "server/core/desktop.py",
       "server/pyproject.toml",
       "server/uv.lock",
-      "server/nodejs/dist/index.js",
-      "server/nodejs/package.json",
       "client/dist/index.html",
       ".env.template",
       "package.json",
@@ -66,13 +64,6 @@ describe.skipIf(!staged)("staged app-root", () => {
         f.endsWith(".db"),
     );
     expect(leaked).toEqual([]);
-  });
-
-  it("bundled the JS executor sidecar with express inlined", () => {
-    const js = readFileSync(join(APP_ROOT, "server", "nodejs", "dist", "index.js"), "utf-8");
-    expect(js.length).toBeGreaterThan(50_000);
-    expect(/from\s+["']express["']/.test(js)).toBe(false);
-    expect(/require\(["']express["']\)/.test(js)).toBe(false);
   });
 
   it("carries the version the root package.json declares", () => {
@@ -108,46 +99,5 @@ describe.skipIf(!staged || !runtimesStaged)("staged runtimes", () => {
     const uv = spawnSync(layout.uvBin, ["--version"], { encoding: "utf-8" });
     expect(uv.status).toBe(0);
     expect(uv.stdout).toMatch(/^uv \d+\.\d+\.\d+/);
-  });
-
-  it("the bundled sidecar boots on the bundled bun with no node on PATH", async () => {
-    const { spawn } = await import("node:child_process");
-    const port = 5600 + Math.floor(Math.random() * 300);
-    const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
-    const strippedPath = (process.env[pathKey] ?? "")
-      .split(process.platform === "win32" ? ";" : ":")
-      .filter((p) => !/nodejs|[\\/]npm|pnpm|\.nvm|fnm|volta/i.test(p))
-      .join(process.platform === "win32" ? ";" : ":");
-    const child = spawn(layout.bunBin, [join(APP_ROOT, "server", "nodejs", "dist", "index.js")], {
-      cwd: join(APP_ROOT, "server", "nodejs"),
-      env: { ...process.env, [pathKey]: strippedPath, NODEJS_EXECUTOR_PORT: String(port), NODEJS_EXECUTOR_HOST: "127.0.0.1" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    child.stdout.on("data", (d) => (output += d));
-    child.stderr.on("data", (d) => (output += d));
-    try {
-      let ok = false;
-      const deadline = Date.now() + 15_000;
-      while (Date.now() < deadline && !ok) {
-        try {
-          const res = await fetch(`http://127.0.0.1:${port}/health`);
-          ok = res.ok;
-        } catch {
-          await new Promise((r) => setTimeout(r, 200));
-        }
-      }
-      expect(ok, output).toBe(true);
-      // TypeScript is type-stripped by Bun.Transpiler inside the sidecar; a
-      // Node-hosted sidecar would fail this with a SyntaxError.
-      const res = await fetch(`http://127.0.0.1:${port}/execute`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: "const n: number = 21; output = n * 2;", language: "typescript" }),
-      });
-      expect(((await res.json()) as { output: unknown }).output).toBe(42);
-    } finally {
-      child.kill();
-    }
   });
 });

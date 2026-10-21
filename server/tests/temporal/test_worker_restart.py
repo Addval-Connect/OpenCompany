@@ -144,7 +144,7 @@ async def test_pool_queue_worker_restarts_with_fresh_instance():
     """Pool workers previously ran as bare worker.run() tasks with no
     restart machinery — a crash silently killed the only worker for the
     queue and its activities pended forever."""
-    pool = TemporalWorkerPool(client=MagicMock(), queues=["code-exec"])
+    pool = TemporalWorkerPool(client=MagicMock(), queues=["rest-api"])
     state = {"builds": 0}
 
     async def crash():
@@ -161,8 +161,8 @@ async def test_pool_queue_worker_restarts_with_fresh_instance():
     pool._build_queue_worker = fake_build  # type: ignore[method-assign]
 
     with _patch_backoff():
-        first = pool._build_queue_worker("code-exec")
-        task = asyncio.create_task(pool._run_queue_worker("code-exec", first))
+        first = pool._build_queue_worker("rest-api")
+        task = asyncio.create_task(pool._run_queue_worker("rest-api", first))
         await asyncio.sleep(0.05)
         assert state["builds"] == 2  # crash triggered one rebuild
         task.cancel()
@@ -171,7 +171,7 @@ async def test_pool_queue_worker_restarts_with_fresh_instance():
 
 
 async def test_pool_queue_worker_stops_when_queue_has_no_activities():
-    pool = TemporalWorkerPool(client=MagicMock(), queues=["code-exec"])
+    pool = TemporalWorkerPool(client=MagicMock(), queues=["rest-api"])
 
     async def crash():
         raise RuntimeError("poll failure")
@@ -180,7 +180,7 @@ async def test_pool_queue_worker_stops_when_queue_has_no_activities():
 
     with _patch_backoff():
         task = asyncio.create_task(
-            pool._run_queue_worker("code-exec", _SingleUseWorker(crash))
+            pool._run_queue_worker("rest-api", _SingleUseWorker(crash))
         )
         # Crash, then rebuild returns None -> the supervisor task ends.
         await asyncio.wait_for(task, timeout=1.0)

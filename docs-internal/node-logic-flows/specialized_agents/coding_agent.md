@@ -11,15 +11,14 @@
 ## Purpose
 
 AI agent pre-configured for code execution workflows. Typical tool
-connections: `pythonExecutor`, `javascriptExecutor`, `typescriptExecutor`,
-`shell`, `fileRead`, `fileModify`, `fsSearch`, `processManager`.
+connections: `shell`, `fileRead`, `fileModify`, `fsSearch`,
+`processManager`.
 
 ## What is unique to this node
 
-- **Intended tool set**: code executors, filesystem tools, shell, process
-  manager.
-- **Intended skills**: `server/skills/coding_agent/` (python-skill,
-  javascript-skill, file-read-skill, file-modify-skill, fs-search-skill).
+- **Intended tool set**: filesystem tools, shell, process manager.
+- **Intended skills**: `server/skills/coding_agent/` (file-read-skill,
+  file-modify-skill, fs-search-skill).
 - **Frontend theming**: cyan dracula accent.
 
 ## Behaviour

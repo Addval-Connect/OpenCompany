@@ -135,7 +135,7 @@ For providers that don't encode params in credentials:
 
 ## If Provider Uses Unfamiliar Format
 
-Use `python_code` to reverse-engineer the template from the provider's example URL:
+Use `process_manager` to reverse-engineer the template from the provider's example URL:
 
 ```python
 import json

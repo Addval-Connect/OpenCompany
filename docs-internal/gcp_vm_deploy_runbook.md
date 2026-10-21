@@ -65,7 +65,7 @@ print('ENC='+secrets.token_hex(24))"
    **Releases after 0.0.95**: `company start` became single-port itself (uvicorn
    serves the SPA; no :3000 static server) AND the default ports moved to the
    ports named in `.env.template`: `PYTHON_BACKEND_PORT` (backend), `TEMPORAL_UI_PORT`,
-   `TEMPORAL_FRONTEND_GRPC_PORT`, `NODEJS_EXECUTOR_PORT`, `WHATSAPP_RPC_PORT`.
+   `TEMPORAL_FRONTEND_GRPC_PORT`, `WHATSAPP_RPC_PORT`.
    When upgrading a VM past 0.0.95, point EVERY nginx `proxy_pass` in step 2
    (`/api/`, `/ws/`, `/webhook/`, `/health`, and `location /`) at
    `http://127.0.0.1:$PYTHON_BACKEND_PORT;` and reload nginx.

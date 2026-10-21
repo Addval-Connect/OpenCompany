@@ -21,9 +21,8 @@ server/skills/
 │     code-mode-skill, agentic-loop-skill, progressive-discovery-skill,
 │     error-recovery-skill, multi-tool-orchestration-skill
 ├── cloudflare/               # cloudflare-skill (cf CLI)
-├── coding_agent/             # Code execution skills
-│     python-skill, javascript-skill, monty-skill, file-read-skill,
-│     file-modify-skill, fs-search-skill
+├── coding_agent/             # Code/file skills
+│     file-read-skill, file-modify-skill, fs-search-skill
 ├── decision/                 # Decision-model skills
 │     jev-decisions (TypeSafe JEV question composition)
 ├── gcloud/                   # gcloud-skill (Google Cloud CLI)
@@ -126,7 +125,7 @@ Provide usage guidelines, examples, and constraints.
 - Lowercase letters and numbers only
 - Words separated by single hyphens
 - No consecutive hyphens
-- Examples: `my-skill`, `brave-search-skill`, `python-skill`
+- Examples: `my-skill`, `brave-search-skill`, `process-manager-skill`
 - Invalid: `My_Skill`, `my--skill`, `MySkill`
 
 ### Tool naming — snake_case ↔ camelCase contract

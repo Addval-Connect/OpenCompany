@@ -11,8 +11,8 @@ Three sanctioned exemptions, each documented in its own module:
 
 1. ``main._startup_log`` — pre-logger boot-progress markers.
 2. ``core.container._clog`` — same role for DI-container bootstrap.
-3. ``nodes.code.python_executor.captured_print`` — the sandboxed
-   ``print`` builtin we hand to user code (the user's print, not ours).
+3. ``services.temporal._install._main`` — build-time installer that runs
+   before the structlog pipeline exists.
 
 Anything else must go through ``logger = get_logger(__name__)``. This
 test parses every ``.py`` file under ``server/`` (excluding ``.venv``,
@@ -44,7 +44,6 @@ _EXCLUDED_DIRS = {
 _SANCTIONED: List[Tuple[str, str]] = [
     ("main.py", "_startup_log"),
     ("core/container.py", "_clog"),
-    ("nodes/code/python_executor/__init__.py", "captured_print"),
     # Build-time Temporal installer — runs in its own one-shot subprocess
     # BEFORE the structlog pipeline is configured (same role as
     # ``_startup_log`` / ``_clog`` for the main process).

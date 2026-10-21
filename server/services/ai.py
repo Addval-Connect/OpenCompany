@@ -1322,7 +1322,7 @@ class AIService:
                     # dual-purpose ActionNode (usable_as_tool=True),
                     # excluding chat models. Without this the rebind
                     # silently drops twitterSearch / googleGmail /
-                    # pythonExecutor etc. and the LLM tries to call
+                    # httpRequest etc. and the LLM tries to call
                     # tools it never got bound to.
                     _kind = getattr(cls, "component_kind", "")
                     if not (_kind == "tool" or (bool(getattr(cls, "usable_as_tool", False)) and _kind != "model")):
@@ -2042,7 +2042,7 @@ class AIService:
                         # dual-purpose ActionNode (usable_as_tool=True),
                         # excluding chat models. Without this the rebind
                         # silently drops twitterSearch / googleGmail /
-                        # pythonExecutor etc.
+                        # httpRequest etc.
                         _kind = getattr(cls, "component_kind", "")
                         if not (_kind == "tool" or (bool(getattr(cls, "usable_as_tool", False)) and _kind != "model")):
                             continue
@@ -2362,7 +2362,7 @@ class AIService:
             ``tool_description`` falls back to ``cls.description`` when the
             plugin doesn't override it — only ~15-20 of the 68 plugins need
             an LLM-tuned description distinct from the human-facing one
-            (writeTodos, pythonExecutor, the 16 specialized agents,
+            (writeTodos, processManager, the 16 specialized agents,
             stripeAction, ...). The rest share their existing
             ``description``.
 

@@ -42,7 +42,7 @@ cd server && uv run python -m services.temporal.worker
 ## Adding a New CLI Service
 
 Follow the plugin-runtime pattern (references: `nodes/whatsapp/_runtime.py`,
-`nodes/code/_runtime.py`, `services/temporal/_runtime.py`):
+`services/temporal/_runtime.py`):
 
 1. **Install** — plugin-owned `_install.py` that materialises the binary
    under `<DATA_DIR>/packages/<name>/` (pooch for release archives; the

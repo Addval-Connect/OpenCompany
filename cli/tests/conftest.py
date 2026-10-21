@@ -1,8 +1,8 @@
 """Shared fixtures for ``company`` tests.
 
 The release-pipeline config tests need to read files that live in
-bun workspace members (``client/``, ``server/nodejs/``) without
-hardcoding those filesystem paths in every test. The canonical
+bun workspace members (``client/``) without hardcoding those
+filesystem paths in every test. The canonical
 source for "where does workspace X live" is the root ``package.json``
 ``workspaces`` array (bun's SSOT — ``pnpm-workspace.yaml`` is gone and
 bun has no machine-readable workspace-listing command), so the fixture
@@ -11,7 +11,7 @@ member's ``package.json``, and map package name → absolute path.
 
 Tests then reference workspaces by their npm package name (a stable
 identifier defined in each ``package.json``) rather than by path. If
-``server/nodejs/`` is later renamed or moved, the test suite keeps
+``client/`` is later renamed or moved, the test suite keeps
 working — the ``workspaces`` array resolves the new location. Parsing
 in-process (no subprocess) also removes the old skip-when-PM-missing
 hazard: a broken ``workspaces`` array now fails loudly instead of

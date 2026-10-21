@@ -638,8 +638,8 @@ const MiddleSection: React.FC<MiddleSectionProps> = ({
               'box-border rounded-md border border-border-default bg-bg-elevated p-4 shadow-sm',
               // ``min-h-full`` (not ``h-full``): the card fills the region when
               // content is short (so the code editor's flex-1 stretches) but
-              // GROWS when a node has extra params (e.g. montyExecutor's
-              // timeout / max_memory / capabilities) so the last field can't
+              // GROWS when a node has extra params (e.g. processManager's
+              // ports / env / tail) so the last field can't
               // bleed past the card border. The container scrolls instead of
               // clipping (``overflow-y-auto`` above).
               needsCodeEditorLayout ? 'flex min-h-full flex-col' : 'block h-auto',

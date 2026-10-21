@@ -1,7 +1,7 @@
 ---
 name: agentic-loop-skill
 description: Autonomous decision loop with reflection and iteration
-allowed-tools: "delegate_to_ai_agent python_executor check_delegated_tasks"
+allowed-tools: "delegate_to_ai_agent process_manager check_delegated_tasks"
 metadata:
   author: opencompany
   version: "1.0"

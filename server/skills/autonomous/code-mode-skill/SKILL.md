@@ -1,7 +1,7 @@
 ---
 name: code-mode-skill
 description: Generate Python code instead of sequential tool calls (81-98% token savings)
-allowed-tools: "python_executor javascript_executor"
+allowed-tools: "process_manager"
 metadata:
   author: opencompany
   version: "1.0"
@@ -36,9 +36,9 @@ from collections import Counter, defaultdict  # Data structures
 ## Core Pattern
 
 1. **Analyze** - Understand the complete task requirements
-2. **Generate** - Write complete Python code that solves the entire task
-3. **Execute** - Use the `python_code` tool to run the code
-4. **Return** - The code output becomes your response
+2. **Generate** - Write complete Python code that solves the entire task, saving it to a `.py` file in the workspace
+3. **Execute** - Use the `process_manager` tool to run the script (`python3 <script>.py`) and collect its stdout
+4. **Return** - The script output becomes your response
 
 ## Simple Example
 
@@ -204,7 +204,7 @@ Example flow:
 User: "Search for Python release dates and calculate days since each release"
 
 1. Use web_search tool: "Python version release dates"
-2. Use python_code to process:
+2. Write a processing script to the workspace, then run it with process_manager (`python3 script.py`) to:
    - Parse the dates from search results
    - Calculate days since each release
    - Format output nicely
