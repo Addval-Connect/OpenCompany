@@ -50,7 +50,11 @@ async def refresh_telegram_status(broadcaster: "StatusBroadcaster") -> None:
             namespaces = {"default"}
             try:
                 for row in await container.database().list_namespaces(ready_only=True):
-                    name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
+                    # list_namespaces rows key the id as "namespace" (the
+                    # registry column name) — "name" never exists, and a
+                    # filter keyed on it silently reduced the enumeration to
+                    # "default" only (the VTask bot then never reconnected).
+                    name = row.get("namespace") if isinstance(row, dict) else None
                     if name:
                         namespaces.add(str(name))
             except Exception as exc:  # noqa: BLE001 — registry hiccup must not kill the refresh
