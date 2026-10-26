@@ -383,15 +383,38 @@ def test_poll_and_location_details_are_captured():
 
 
 def test_text_still_falls_back_to_caption():
-    """Back-compat lock: workflows read `text` on photo messages."""
+    """Workflows read `text` on photo messages — the caption is preserved
+    AND the media descriptor (with the file_id agents need to download)
+    rides appended, so templating `{{...text}}` never delivers a blind
+    message to downstream agents."""
     photo = SimpleNamespace(
         file_id="P", file_unique_id="up", width=1, height=1, file_size=5
     )
     data = TelegramService()._format_message(_message(photo=[photo], caption="a caption"))
 
-    assert data["text"] == "a caption"  # unchanged historical behaviour
+    assert data["text"].startswith("a caption")  # historical behaviour kept
+    assert "file_id=P" in data["text"]  # media descriptor appended
     assert data["caption"] == "a caption"  # new, additive
     assert data["media"]["caption"] == "a caption"
+
+
+def test_document_without_text_carries_media_descriptor():
+    """A text-less document (the "agent can't see the file" case) gets a
+    `text` descriptor with kind + file_name + file_id — so workflows
+    templating the trigger's text hand the LLM everything it needs to
+    call telegramTool download."""
+    doc = SimpleNamespace(
+        file_id="DOC-42",
+        file_unique_id="d1",
+        file_name="invoice_42.pdf",
+        mime_type="application/pdf",
+        file_size=1024,
+    )
+    data = TelegramService()._format_message(_message(document=doc))
+
+    assert data["content_type"] == "document"
+    assert "[telegram document | invoice_42.pdf | application/pdf | file_id=DOC-42]" in data["text"]
+    assert data["media"]["file_id"] == "DOC-42"
 
 
 def test_reply_to_carries_quoted_media():
