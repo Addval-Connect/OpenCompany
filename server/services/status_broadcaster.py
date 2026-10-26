@@ -225,7 +225,13 @@ class StatusBroadcaster:
             }
 
             initial_data = {
-                **self._status,
+                # Tenant-scoped base: the telegram slot swaps in THIS
+                # namespace's snapshot (get_status). Spreading the raw
+                # _status sent every late-connecting browser the LEGACY
+                # global slot — which only mirrors the default namespace —
+                # so a live tenant bot showed as "Not connected" until the
+                # next status change happened to re-broadcast.
+                **self.get_status(tenant_id=tenant_namespace),
                 "workflow_lock": {"locked": False, "workflow_id": None, "locked_at": None, "reason": None},
                 "nodes": nodes_for_ns,
             }
