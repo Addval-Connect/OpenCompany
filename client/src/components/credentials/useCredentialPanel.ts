@@ -191,8 +191,11 @@ export function useCredentialPanel(config: ProviderConfig, visible: boolean) {
     }),
     save: (key: string, value: string) => execute('save', async () => {
       const r = await saveApiKey(key, value);
-      if (r?.isValid) {
-        setStored(true);
+      // save_api_key's response carries no isValid — gating the refetch on
+      // it left the panel showing the PREVIOUS value after every save (the
+      // "won't save / won't clear" symptom). Invalidate on any success.
+      if (r) {
+        if (r.isValid) setStored(true);
         await invalidateValues();
       }
       return r;
