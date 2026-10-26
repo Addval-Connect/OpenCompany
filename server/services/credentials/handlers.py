@@ -155,9 +155,28 @@ async def handle_save_api_key(data: Dict[str, Any], websocket: WebSocket) -> Dic
     async def _do_save() -> Dict[str, Any]:
         auth_service = container.auth_service()
         broadcaster = get_status_broadcaster()
+        api_key = data["api_key"].strip()
+
+        # Saving an EMPTY value means CLEAR the credential (e.g. wiping the
+        # optional Telegram owner chat id): delete the row instead of
+        # persisting an empty ciphertext that reads back as "" forever. The
+        # idempotent clear is what the panel's empty-save expects — without
+        # it the field silently kept its old value.
+        if not api_key:
+            await auth_service.remove_api_key(
+                provider,
+                session_id=data.get("session_id", "default"),
+                credential_customer_id=credential_customer_id,
+            )
+            await broadcaster.broadcast_credential_event(
+                "credential.api_key.deleted",
+                provider=provider,
+            )
+            return {"provider": data["provider"], "cleared": True}
+
         await auth_service.store_api_key(
             provider=provider,
-            api_key=data["api_key"].strip(),
+            api_key=api_key,
             models=data.get("models", []),
             session_id=data.get("session_id", "default"),
             credential_customer_id=credential_customer_id,
