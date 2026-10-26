@@ -57,7 +57,10 @@ class TelegramToolParams(BaseModel):
     )
     chat_id: str = Field(
         default="",
-        description="Target chat id or @username (send_typing / send_message / get_chat)",
+        description=(
+            "Target chat id or @username (send_typing / send_message / "
+            "get_chat) — OPTIONAL: defaults to the bot owner's chat"
+        ),
     )
     text: str = Field(
         default="",
@@ -150,10 +153,12 @@ class TelegramToolNode(ActionNode):
     tool_description = (
         "Interact with the connected Telegram bot. Operations: "
         "download (fetch a file by file_id into the workspace attachments/ "
-        "folder and return its path), send_typing (show the typing… or "
-        "another chat action indicator in a chat), send_message (send a "
-        "text message to a chat), get_me (the bot's identity), get_chat "
-        "(a chat's metadata)."
+        "folder and return its path — file_id comes from the Telegram "
+        "Receive trigger's media.file_id), send_typing (show the typing… "
+        "or another chat action indicator), send_message (send a text "
+        "message), get_me (the bot's identity), get_chat (a chat's "
+        "metadata). chat_id is OPTIONAL — when omitted the bot owner's "
+        "chat is used."
     )
     handles = (
         {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
@@ -227,10 +232,29 @@ class TelegramToolNode(ActionNode):
             sha256=media.get("sha256"),
         )
 
+    def _resolve_chat(self, service, params: TelegramToolParams, op: str) -> str:
+        """chat_id explícito, o el chat del dueño del bot.
+
+        Los agentes rara vez conocen el chat_id (vive en el output del
+        trigger) — y para un bot asistente el destino natural es el chat
+        del dueño, que el sistema ya captura y persiste en la primera
+        interacción. Sin explícito y sin dueño → error accionable.
+        """
+        chat = params.chat_id.strip()
+        if chat:
+            return chat
+        owner = getattr(service, "owner_chat_id", None)
+        if owner:
+            return str(owner)
+        raise NodeUserError(
+            f"chat_id is required for the {op} operation — the bot has no "
+            "detected owner chat yet (send the bot a message first, or "
+            "pass chat_id explicitly)"
+        )
+
     async def _send_typing(self, service, params: TelegramToolParams) -> TelegramToolOutput:
-        if not params.chat_id.strip():
-            raise NodeUserError("chat_id is required for the send_typing operation")
-        result = await service.send_chat_action(params.chat_id, params.chat_action)
+        chat = self._resolve_chat(service, params, "send_typing")
+        result = await service.send_chat_action(chat, params.chat_action)
         return TelegramToolOutput(
             operation="send_typing",
             chat_id=result.get("chat_id"),
@@ -239,12 +263,11 @@ class TelegramToolNode(ActionNode):
         )
 
     async def _send_message(self, service, params: TelegramToolParams) -> TelegramToolOutput:
-        if not params.chat_id.strip():
-            raise NodeUserError("chat_id is required for the send_message operation")
+        chat = self._resolve_chat(service, params, "send_message")
         if not params.text.strip():
             raise NodeUserError("text is required for the send_message operation")
         result = await service.send_message(
-            params.chat_id,
+            chat,
             params.text,
             parse_mode=params.parse_mode or None,
         )
@@ -266,7 +289,6 @@ class TelegramToolNode(ActionNode):
         )
 
     async def _get_chat(self, service, params: TelegramToolParams) -> TelegramToolOutput:
-        if not params.chat_id.strip():
-            raise NodeUserError("chat_id is required for the get_chat operation")
-        info = await service.get_chat(params.chat_id)
+        chat = self._resolve_chat(service, params, "get_chat")
+        info = await service.get_chat(chat)
         return TelegramToolOutput(operation="get_chat", chat_info=info)
