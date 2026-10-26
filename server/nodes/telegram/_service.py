@@ -1191,6 +1191,14 @@ class TelegramService(ServiceSingleton):
             "can_join_groups": me.can_join_groups,
         }
 
+    async def send_chat_action(self, chat_id: str | int, action: str = "typing") -> Dict[str, Any]:
+        """Send a chat action (the " Bot is typing…" indicator). Bot API
+        ``sendChatAction`` — the indicator shows for ~5s or until the bot
+        sends a message."""
+        bot = self._require_bot()
+        await bot.send_chat_action(chat_id=chat_id, action=action)
+        return {"chat_id": chat_id, "action": action, "sent": True}
+
     async def get_chat(self, chat_id: str | int) -> Dict[str, Any]:
         bot = self._require_bot()
         chat = await bot.get_chat(chat_id)

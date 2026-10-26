@@ -62,6 +62,7 @@ from .telegram_get_attachment import (
 )
 from .telegram_receive import TelegramReceiveNode, TelegramReceiveOutput
 from .telegram_send import TelegramSendNode, TelegramSendOutput
+from .telegram_tool import TelegramToolNode, TelegramToolOutput
 
 # --- self-registration on import -------------------------------------------
 register_ws_handlers(WS_HANDLERS)
@@ -71,6 +72,7 @@ register_service_refresh(refresh_telegram_status)
 register_output_schema("telegramReceive", TelegramReceiveOutput)
 register_output_schema("telegramSend", TelegramSendOutput)
 register_output_schema("telegramGetAttachment", TelegramGetAttachmentOutput)
+register_output_schema("telegramTool", TelegramToolOutput)
 
 # Wave 12 C1 rollout #3: opt telegramReceive into the
 # TriggerListenerWorkflow consumer path. Producer side:
@@ -108,6 +110,8 @@ __all__ = [
     "TelegramGetAttachmentNode",
     "TelegramGetAttachmentOutput",
     "TelegramService",
+    "TelegramToolNode",
+    "TelegramToolOutput",
     "WS_HANDLERS",
     "build_telegram_filter",
     "get_telegram_service",
