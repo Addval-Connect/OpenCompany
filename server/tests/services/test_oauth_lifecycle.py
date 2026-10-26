@@ -99,7 +99,7 @@ async def test_login_stamps_active_namespace_into_state(monkeypatch):
     otherwise know which tenant's credentials DB to store into."""
     from core.namespace_context import set_active_namespace
 
-    set_active_namespace("addval-connect")
+    set_active_namespace("tenant-a")
     try:
         state_store = _FakeStateStore()
         oauth_holder: list[_FakeOAuth] = []
@@ -132,7 +132,7 @@ async def test_login_stamps_active_namespace_into_state(monkeypatch):
 
         assert result["success"] is True
         assert oauth_holder, "oauth factory must have been called"
-        assert oauth_holder[0].last_state_data == {"namespace": "addval-connect"}
+        assert oauth_holder[0].last_state_data == {"namespace": "tenant-a"}
     finally:
         set_active_namespace("default")
 
@@ -144,7 +144,7 @@ async def test_callback_honors_state_namespace():
     from core.namespace_context import get_active_namespace, set_active_namespace
 
     state_store = _FakeStateStore()
-    state_store.put("state-123", {"redirect_uri": "http://x/cb", "data": {"namespace": "addval-connect"}})
+    state_store.put("state-123", {"redirect_uri": "http://x/cb", "data": {"namespace": "tenant-a"}})
 
     app, _ = _make_app(state_store)
     set_active_namespace("middleware-tenant")
@@ -153,7 +153,7 @@ async def test_callback_honors_state_namespace():
         resp = await client.get("/api/testprov/callback", params={"code": "c", "state": "state-123"})
 
     assert resp.status_code == 400  # exchange_code returns failure — stopped after routing
-    assert get_active_namespace() == "addval-connect"
+    assert get_active_namespace() == "tenant-a"
     set_active_namespace("default")
 
 
