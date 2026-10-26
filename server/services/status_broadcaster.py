@@ -1375,9 +1375,29 @@ class StatusBroadcaster:
     # Getters
     # =========================================================================
 
-    def get_status(self) -> Dict[str, Any]:
-        """Get the full current status."""
-        return self._status.copy()
+    def get_status(self, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get the full current status.
+
+        ``tenant_id`` (a Temporal namespace) swaps the per-plugin
+        ``telegram`` slot for THAT tenant's snapshot from
+        ``telegram_by_ns`` — the full_status frame a browser receives on
+        connect must describe ITS tenant's bot, not whichever bot
+        connected last process-wide. Everything else is process-global by
+        design (node status, terminal logs, ...). ``tenant_id=None``
+        returns the legacy global view.
+        """
+        status = self._status.copy()
+        if tenant_id:
+            by_ns = status.get("telegram_by_ns") or {}
+            if isinstance(by_ns, dict):
+                status["telegram"] = by_ns.get(tenant_id) or {
+                    "connected": False,
+                    "bot_id": None,
+                    "bot_username": None,
+                    "bot_name": None,
+                    "owner_chat_id": None,
+                }
+        return status
 
     def get_android_status(self) -> Dict[str, Any]:
         """Get Android connection status."""

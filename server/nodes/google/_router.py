@@ -77,6 +77,20 @@ router: APIRouter = make_oauth_callback_router(
 )
 
 
+def _active_credential_ns() -> str:
+    """The namespace the credential store must write into.
+
+    The HTTP middleware resolves it from the session cookie's JWT — the
+    same resolution every other store path in this request inherits.
+    Explicit helper so the state stamp and the callback's restore stay in
+    sync with ``normalize_credential_ns``.
+    """
+    from constants import normalize_credential_ns
+    from core.namespace_context import get_active_namespace
+
+    return normalize_credential_ns(get_active_namespace())
+
+
 @router.post("/customer-auth-url")
 async def generate_customer_auth_url(
     request: Request,
@@ -98,6 +112,10 @@ async def generate_customer_auth_url(
             "customer_id": customer_id,
             "redirect_after": redirect_after,
             "mode": "customer",
+            # The callback is a separate HTTP request — without the
+            # namespace stamped here its fallback routed the token store
+            # to "default", the same defect the Microsoft sign-in had.
+            "namespace": _active_credential_ns(),
         },
     )
     return {"success": True, "url": result["url"], "state": result["state"]}

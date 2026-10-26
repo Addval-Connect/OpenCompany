@@ -117,9 +117,17 @@ async def handle_ping(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, A
 
 
 async def handle_get_status(data: Dict[str, Any], websocket: WebSocket) -> Dict[str, Any]:
-    """Get current full status."""
+    """Get current full status — tenant-scoped.
+
+    The ``telegram`` slot is swapped for THIS connection's namespace
+    snapshot: a browser must see its own tenant's bot, never whichever
+    bot connected last process-wide.
+    """
+    from services.status_broadcaster import _resolve_connection_namespace
+
     broadcaster = get_status_broadcaster()
-    return {"type": "full_status", "data": broadcaster.get_status()}
+    tenant = await _resolve_connection_namespace(websocket)
+    return {"type": "full_status", "data": broadcaster.get_status(tenant_id=tenant)}
 
 
 # handle_get_android_status moved to nodes/android/_handlers.py (Wave 13.9).
@@ -1644,6 +1652,51 @@ async def _execute_handler(handler: MessageHandler, data: Dict[str, Any], websoc
             await _safe_send(websocket, {"type": f"{msg_type}_result", "request_id": request_id, "success": False, "error": str(e)})
 
 
+async def _reseal_message_namespace(websocket: WebSocket, data: Dict[str, Any]) -> None:
+    """Re-seal the namespace ContextVar from ONE browser message.
+
+    The browser WS seals its namespace once at connect (JWT claim). A
+    future soft namespace switch — no page reload — would otherwise keep
+    routing every credential-modal operation to the connect-time
+    namespace. When the message explicitly carries
+    ``credential_customer_id`` / ``active_namespace``, honor it AFTER
+    validating the connection's user is actually a member of that
+    namespace: the field must never become a tenant-escape hatch.
+
+    Fail-closed: unknown user, multi-tenant off, or non-member → keep the
+    connect-time seal. No-op when the field is absent (today's FE never
+    sends it).
+    """
+    requested_raw = data.get("credential_customer_id") or data.get("active_namespace")
+    if not requested_raw:
+        return
+    from constants import normalize_credential_ns
+    from core.container import container
+    from core.namespace_context import set_active_namespace
+
+    requested = normalize_credential_ns(str(requested_raw))
+    current = getattr(websocket.state, "active_namespace", None)
+    if not requested or requested == current:
+        return
+
+    settings = container.settings()
+    if not getattr(settings, "multi_tenant_namespaces", False):
+        return
+
+    user_id = getattr(websocket.state, "user_id", None)
+    if not user_id:
+        logger.warning("[WebSocket] namespace re-seal refused: unauthenticated connection")
+        return
+    if not await container.database().is_user_in_namespace(str(user_id), requested):
+        logger.warning(
+            f"[WebSocket] namespace re-seal refused: user {user_id} is not a member of '{requested}'"
+        )
+        return
+
+    websocket.state.active_namespace = requested
+    set_active_namespace(requested)
+
+
 @router.websocket("/ws/status")
 async def websocket_status_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time bidirectional communication.
@@ -1736,6 +1789,13 @@ async def websocket_status_endpoint(websocket: WebSocket):
 
             msg_type = data.get("type", "")
             request_id = data.get("request_id")
+
+            # Re-seal the namespace from the message when the client
+            # explicitly carries one (future soft namespace switching
+            # without a full page reload). Membership-validated and
+            # fail-closed — see _reseal_message_namespace. No-op today:
+            # the browser never sends the field.
+            await _reseal_message_namespace(websocket, data)
 
             logger.debug("WebSocket message received", msg_type=msg_type, has_request_id=bool(request_id))
 

@@ -53,6 +53,8 @@ from telegram.helpers import escape_markdown
 
 from services.plugin.singleton import ServiceSingleton
 
+from core.namespace_context import get_active_namespace, set_active_namespace
+
 from ._credentials import TelegramCredential
 
 logger = logging.getLogger(__name__)
@@ -378,15 +380,36 @@ class TelegramService(ServiceSingleton):
         self._polling_task: Optional[asyncio.Task] = None
         self._bot_info: Dict[str, Any] = {}
         self._owner_chat_id: Optional[int] = None
+        # Namespace this instance's credentials/bot belong to. Resolved at
+        # connect() (never lazily) so every downstream decision — message
+        # dispatch, status broadcast, owner capture — is deterministic even
+        # when PTB's own tasks run without a sealed namespace context.
+        self._namespace: Optional[str] = None
         # Throttle state for recurring polling conditions (see _log_throttled).
         self._polling_error_counts: Dict[str, int] = {}
         self._polling_error_last_log: Dict[str, float] = {}
 
+    @property
+    def namespace(self) -> Optional[str]:
+        """Namespace whose credentials this instance connected with."""
+        return self._namespace
+
     @classmethod
-    async def reset_instance(cls):  # type: ignore[override]
-        existing = cls.__dict__.get("_instance")
-        if existing is not None:
+    async def reset_instance(cls, namespace: Optional[str] = None):  # type: ignore[override]
+        instances = cls.__dict__.get("_instances") or {}
+        targets = list(instances.values()) if namespace is None else [
+            inst for ns, inst in instances.items() if ns == namespace
+        ]
+        for existing in targets:
             await existing.disconnect()
+        # Only clear the slots whose instances were drained — other
+        # namespaces' live bots must survive a per-namespace reset.
+        if namespace is None:
+            instances.clear()
+        else:
+            for ns in [ns for ns, inst in instances.items() if inst in targets]:
+                instances.pop(ns, None)
+        if cls.__dict__.get("_instance") is not None:
             cls._instance = None
 
     @property
@@ -434,16 +457,23 @@ class TelegramService(ServiceSingleton):
         except PermissionError:
             return False
 
-    async def connect(self, token: Optional[str] = None) -> Dict[str, Any]:
+    async def connect(
+        self,
+        token: Optional[str] = None,
+        *,
+        namespace_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Connect to Telegram with bot token and start polling.
 
         When ``token`` is omitted, falls back to the stored ``telegram``
         bot-token credential — matches the Twitter/Google OAuth pattern
         where the frontend saves credentials first and then calls connect.
 
-        Idempotent: if already connected, returns success without tearing
-        down the working bot.  See the in-line comment block for the race
-        this guards against.
+        The instance is namespace-scoped (see :class:`ServiceSingleton`):
+        credentials resolve from, and the bot is pinned to, the active
+        namespace (or ``namespace_override``). Idempotent: if already
+        connected, returns success without tearing down the working bot.
+        See the in-line comment block for the race this guards against.
         """
         # Resolve credentials via the declarative class instead of raw
         # ``auth.get_api_key("telegram")`` / ``..._owner_chat_id``
@@ -457,6 +487,12 @@ class TelegramService(ServiceSingleton):
                 pass
         if not token:
             return {"success": False, "error": "Bot token required"}
+
+        # Pin the namespace BEFORE any await: the polling task and every
+        # PTB callback it spawns must dispatch/broadcast under THIS
+        # instance's tenant, not under whatever context happens to be
+        # active when an event arrives.
+        self._namespace = namespace_override or get_active_namespace() or "default"
 
         async with self._lock:
             # Idempotent: avoid the disconnect-then-rebuild race that
@@ -474,7 +510,7 @@ class TelegramService(ServiceSingleton):
                 }
 
             try:
-                logger.info("[Telegram] Connecting with bot token...")
+                logger.info(f"[Telegram] Connecting with bot token (namespace={self._namespace})...")
 
                 # Build application. Bot info is populated by
                 # ``application.initialize()`` below (it calls getMe once
@@ -552,7 +588,7 @@ class TelegramService(ServiceSingleton):
 
                 await self._broadcast_status()
 
-                logger.info(f"[Telegram] Connected and polling started for @{me.username}")
+                logger.info(f"[Telegram] Connected and polling started for @{me.username} (namespace={self._namespace})")
                 return {
                     "success": True,
                     "bot": self._bot_info,
@@ -732,6 +768,14 @@ class TelegramService(ServiceSingleton):
 
     async def _on_message_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
+            # Deterministic tenancy: PTB may run this callback in a task
+            # that never had a namespace sealed (task inheritance is not
+            # guaranteed across the updater's internal scheduling). Re-seal
+            # from the instance's pinned namespace so the owner-capture
+            # persist below AND the event dispatch land in THIS bot's
+            # tenant, never in whoever connected last.
+            if self._namespace:
+                set_active_namespace(self._namespace)
             if not update.message:
                 return
             msg = update.message
@@ -788,10 +832,12 @@ class TelegramService(ServiceSingleton):
             )
 
             # Route via plugin _events.py wrapper — canary CloudEvents
-            # path (Visibility-query Signal + WS broadcast).
+            # path (Visibility-query Signal + WS broadcast). Explicit
+            # namespace: the Visibility query MUST target this bot's
+            # tenant regardless of the calling task's inherited context.
             from . import dispatch_telegram_message_received
 
-            await dispatch_telegram_message_received(event_data)
+            await dispatch_telegram_message_received(event_data, namespace=self._namespace)
         except Exception as e:
             logger.error(f"[Telegram] Message handler error: {e}")
 
@@ -843,7 +889,8 @@ class TelegramService(ServiceSingleton):
 
     async def _broadcast_status(self):
         try:
-            # Wave 12 B3: route via plugin _events.py wrapper.
+            # Wave 12 B3: route via plugin _events.py wrapper. The frame is
+            # tenant-scoped: only this namespace's browsers see this bot.
             from . import broadcast_telegram_status
 
             await broadcast_telegram_status(
@@ -852,6 +899,7 @@ class TelegramService(ServiceSingleton):
                 bot_username=self._bot_info.get("username"),
                 bot_name=self._bot_info.get("first_name"),
                 owner_chat_id=self._owner_chat_id,
+                namespace=self._namespace,
             )
         except Exception as e:
             logger.warning(f"[Telegram] Status broadcast failed: {e}")

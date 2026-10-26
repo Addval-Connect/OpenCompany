@@ -338,7 +338,7 @@ class TestEnsureFreshToken:
         from nodes.microsoft import _auth_helper
 
         # Force a refresh: clear any cached expiry so _needs_refresh() is True.
-        _auth_helper._TOKEN_EXPIRY.pop("owner", None)
+        _auth_helper._TOKEN_EXPIRY.pop(_auth_helper._ns_key("owner"), None)
 
         auth = AsyncMock()
         auth.get_oauth_tokens = AsyncMock(return_value={"access_token": "old", "email": "me@contoso.com", "name": "Me", "scopes": "User.Read"})
@@ -382,8 +382,8 @@ class TestRefreshBlockers:
     def _fresh_call(auth, refresh_result=None):
         from nodes.microsoft import _auth_helper
 
-        _auth_helper._TOKEN_EXPIRY.pop("owner", None)
-        _auth_helper._LAST_REFRESH_BLOCKER.pop("owner", None)
+        _auth_helper._TOKEN_EXPIRY.pop(_auth_helper._ns_key("owner"), None)
+        _auth_helper._LAST_REFRESH_BLOCKER.pop(_auth_helper._ns_key("owner"), None)
         patches = [
             patch("services.plugin.deps.get_auth_service", return_value=auth),
         ]
@@ -407,7 +407,7 @@ class TestRefreshBlockers:
             token = await _auth_helper.ensure_fresh_microsoft_token("owner")
 
         assert token == "tok"
-        assert "offline_access" in _auth_helper._LAST_REFRESH_BLOCKER["owner"]
+        assert "offline_access" in _auth_helper._LAST_REFRESH_BLOCKER[_auth_helper._ns_key("owner")]
 
     async def test_no_client_id_records_blocker(self):
         from nodes.microsoft import _auth_helper
@@ -421,7 +421,7 @@ class TestRefreshBlockers:
         with patches[0]:
             await _auth_helper.ensure_fresh_microsoft_token("owner")
 
-        assert "microsoft_client_id" in _auth_helper._LAST_REFRESH_BLOCKER["owner"]
+        assert "microsoft_client_id" in _auth_helper._LAST_REFRESH_BLOCKER[_auth_helper._ns_key("owner")]
 
     async def test_entra_rejection_records_the_real_error(self):
         from nodes.microsoft import _auth_helper
@@ -438,7 +438,7 @@ class TestRefreshBlockers:
         with patches[0], patches[1]:
             await _auth_helper.ensure_fresh_microsoft_token("owner")
 
-        assert "invalid_grant" in _auth_helper._LAST_REFRESH_BLOCKER["owner"]
+        assert "invalid_grant" in _auth_helper._LAST_REFRESH_BLOCKER[_auth_helper._ns_key("owner")]
 
     async def test_force_refresh_raises_actionable_error_with_reason(self):
         from services.plugin import NodeUserError

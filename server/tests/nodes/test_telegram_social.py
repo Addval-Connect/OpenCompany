@@ -587,6 +587,98 @@ class TestTelegramGetAttachment:
 
 
 # ============================================================================
+# telegram namespace isolation (tenant-scoped bot + status + dispatch)
+# ============================================================================
+
+
+class TestTelegramNamespaceIsolation:
+    async def test_message_handler_seals_pinned_namespace_and_dispatches_with_it(self):
+        """PTB callbacks may run in tasks with NO sealed context — the
+        handler must re-seal from the instance's pinned namespace and
+        dispatch the event EXPLICITLY to it (never whoever connected
+        last). The seal is asserted via a pass-through spy: the ambient
+        ContextVar after the call is other tests' business."""
+        from core.namespace_context import set_active_namespace as real_seal
+        from nodes.telegram._service import TelegramService
+
+        svc = TelegramService.instance(namespace="tenant-a")
+        svc._namespace = "tenant-a"
+        svc._connected = True
+
+        # The service does `from . import dispatch_telegram_message_received`
+        # — that resolves the PACKAGE-level re-export, so patch there.
+        with patch(
+            "nodes.telegram._service.set_active_namespace", side_effect=real_seal
+        ) as seal_spy, patch(
+            "nodes.telegram.dispatch_telegram_message_received", new=AsyncMock()
+        ) as dispatch:
+            await svc._on_message_received(update=MagicMock(), context=MagicMock())
+
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs.get("namespace") == "tenant-a"
+        # The handler re-sealed the ContextVar to the bot's pinned tenant.
+        seal_spy.assert_called_once_with("tenant-a")
+
+    async def test_broadcast_telegram_status_is_tenant_scoped(self):
+        """The status frame goes ONLY to the bot's namespace and lands in
+        the per-namespace cache slot — never in the global slot."""
+        from types import SimpleNamespace
+
+        from nodes.telegram._events import broadcast_telegram_status
+
+        fake = SimpleNamespace(_status={}, broadcast=AsyncMock())
+        with patch("services.status_broadcaster.get_status_broadcaster", return_value=fake):
+            await broadcast_telegram_status(
+                connected=True,
+                bot_id=1,
+                bot_username="test_bot",
+                bot_name="Veronica",
+                owner_chat_id=42,
+                namespace="tenant-a",
+            )
+
+        assert fake._status["telegram_by_ns"]["tenant-a"]["bot_username"] == "test_bot"
+        assert "telegram" not in fake._status, "global slot must not receive a tenant's bot state"
+        assert fake.broadcast.await_args.kwargs.get("tenant_id") == "tenant-a"
+
+    async def test_broadcast_default_namespace_mirrors_legacy_slot(self):
+        from types import SimpleNamespace
+
+        from nodes.telegram._events import broadcast_telegram_status
+
+        fake = SimpleNamespace(_status={}, broadcast=AsyncMock())
+        with patch("services.status_broadcaster.get_status_broadcaster", return_value=fake):
+            await broadcast_telegram_status(connected=True, namespace="default")
+
+        assert fake._status["telegram"]["connected"] is True
+        assert fake._status["telegram_by_ns"]["default"]["connected"] is True
+
+    async def test_get_status_swaps_telegram_slot_per_tenant(self):
+        """full_status must describe the REQUESTING tenant's bot — the
+        pre-fix global slot made every tenant display the last-connected
+        bot."""
+        from services.status_broadcaster import StatusBroadcaster
+
+        b = StatusBroadcaster()
+        b._status["telegram_by_ns"] = {
+            "tenant-a": {"connected": True, "bot_username": "test_bot"},
+        }
+        b._status["telegram"] = {"connected": True, "bot_username": "someone_elses_bot"}
+
+        view = b.get_status(tenant_id="tenant-a")
+        assert view["telegram"]["bot_username"] == "test_bot"
+
+        # A tenant with no bot gets a clean disconnected snapshot — not
+        # another tenant's bot.
+        other = b.get_status(tenant_id="bluedoc")
+        assert other["telegram"]["connected"] is False
+        assert other["telegram"]["bot_username"] is None
+
+        # Legacy global view unchanged.
+        assert b.get_status()["telegram"]["bot_username"] == "someone_elses_bot"
+
+
+# ============================================================================
 # socialSend
 # ============================================================================
 

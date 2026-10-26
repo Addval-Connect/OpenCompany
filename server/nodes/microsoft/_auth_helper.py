@@ -24,7 +24,22 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# user_id -> epoch seconds at which the currently-stored access token expires.
+
+def _ns_key(user_id: str) -> str:
+    """Cache key carrying the ACTIVE namespace.
+
+    ``user_id`` is the same principal ("owner") in every tenant, so keys
+    keyed by user_id alone leaked one tenant's expiry/blocker state into
+    every other tenant's refresh decisions — tenant A's fresh refresh
+    suppressed tenant B's needed one for the token's lifetime.
+    """
+    from core.namespace_context import get_active_namespace
+
+    return f"{get_active_namespace() or 'default'}:{user_id}"
+
+
+# (namespace:user_id) -> epoch seconds at which the currently-stored access
+# token expires.
 _TOKEN_EXPIRY: Dict[str, float] = {}
 
 # Refresh this many seconds before actual expiry to avoid edge-of-expiry races.
@@ -32,7 +47,7 @@ _EXPIRY_MARGIN_SECONDS = 120
 
 
 def _needs_refresh(user_id: str) -> bool:
-    expiry = _TOKEN_EXPIRY.get(user_id)
+    expiry = _TOKEN_EXPIRY.get(_ns_key(user_id))
     if expiry is None:
         return True  # unknown (fresh process / never refreshed here)
     return time.time() >= (expiry - _EXPIRY_MARGIN_SECONDS)
@@ -50,14 +65,16 @@ def _note_blocker(user_id: str, reason: str) -> None:
     production — so a dead refresh token surfaced only as a downstream
     Graph 401 with no explanation ("no pudo conectarse con Microsoft").
     WARNING is the level that makes the root cause diagnosable from the
-    deploy log alone.
+    deploy log alone. The namespace is part of the line: 18k identical
+    unattributed warnings on a multi-tenant box are undiagnosable.
     """
-    _LAST_REFRESH_BLOCKER[user_id] = reason
-    logger.warning("[microsoft] token refresh unavailable: %s", reason)
+    key = _ns_key(user_id)
+    _LAST_REFRESH_BLOCKER[key] = reason
+    logger.warning("[microsoft] token refresh unavailable (namespace=%s): %s", key, reason)
 
 
 def _last_blocker(user_id: str) -> str:
-    return _LAST_REFRESH_BLOCKER.get(user_id, "the stored refresh token was rejected")
+    return _LAST_REFRESH_BLOCKER.get(_ns_key(user_id), "the stored refresh token was rejected")
 
 
 async def force_refresh_microsoft_token(user_id: str = "owner") -> str:
@@ -169,11 +186,11 @@ async def _refresh_and_persist(user_id: str, current_tokens: Optional[Dict]) -> 
 
     expires_in = result.get("expires_in")
     if isinstance(expires_in, (int, float)) and expires_in > 0:
-        _TOKEN_EXPIRY[user_id] = time.time() + float(expires_in)
+        _TOKEN_EXPIRY[_ns_key(user_id)] = time.time() + float(expires_in)
     else:
         # Microsoft access tokens default to ~3600s; assume that.
-        _TOKEN_EXPIRY[user_id] = time.time() + 3600.0
-    _LAST_REFRESH_BLOCKER.pop(user_id, None)
+        _TOKEN_EXPIRY[_ns_key(user_id)] = time.time() + 3600.0
+    _LAST_REFRESH_BLOCKER.pop(_ns_key(user_id), None)
 
     logger.debug("[microsoft] refreshed and persisted access token")
     return new_access

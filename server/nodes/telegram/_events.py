@@ -102,13 +102,19 @@ async def broadcast_telegram_status(
     bot_name: Optional[str] = None,
     owner_chat_id: Optional[int] = None,
     has_stored_token: Optional[bool] = None,
+    namespace: Optional[str] = None,
 ) -> None:
     """Update the telegram status cache + emit the typed
     ``plugin_connection_status`` CloudEvents envelope.
 
-    Replaces ``StatusBroadcaster.update_telegram_status``. Legacy raw
-    ``telegram_status`` frame retired in Wave 12 D4 — FE consumes via
-    the envelope-aware ``plugin_connection_status`` case.
+    TENANT-SCOPED: ``namespace`` (the bot's own namespace, pinned at
+    connect) keys the per-namespace cache slot AND scopes the WS
+    broadcast — tenant B's browser never sees tenant A's bot state. The
+    pre-fix single ``_status["telegram"]`` slot made every tenant display
+    whichever bot connected last.
+
+    ``namespace=None`` keeps the legacy global slot (single-tenant
+    installs / unscoped callers).
     """
     from services.status_broadcaster import get_status_broadcaster
 
@@ -124,7 +130,16 @@ async def broadcast_telegram_status(
     }
     if has_stored_token is not None:
         payload["has_stored_token"] = has_stored_token
-    broadcaster._status["telegram"] = payload
+    if namespace:
+        by_ns = broadcaster._status.setdefault("telegram_by_ns", {})
+        by_ns[namespace] = payload
+        # Back-compat mirror: the default namespace's snapshot keeps the
+        # legacy slot so non-namespace-aware consumers still read a sane
+        # value (the default tenant's own bot).
+        if namespace == "default":
+            broadcaster._status["telegram"] = payload
+    else:
+        broadcaster._status["telegram"] = payload
 
     event = telegram_connection_status(
         connected=connected,
@@ -138,7 +153,8 @@ async def broadcast_telegram_status(
         {
             "type": _STATUS_TYPED_WIRE_KEY,
             "data": event.model_dump(mode="json"),
-        }
+        },
+        tenant_id=namespace,
     )
 
 
