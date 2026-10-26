@@ -9,7 +9,6 @@ until the next status change happened to re-broadcast.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
