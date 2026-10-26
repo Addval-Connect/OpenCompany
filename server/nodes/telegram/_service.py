@@ -882,6 +882,21 @@ class TelegramService(ServiceSingleton):
         data["media"] = media
         data["has_media"] = media is not None
 
+        # Media descriptor rides ``text``: a document/voice/photo has no
+        # ``text`` of its own, so workflows templating
+        # ``{{Telegram Receive.text}}`` delivered an EMPTY message to the
+        # agent — the LLM never saw the file and could not download it
+        # ("no veo ningún archivo"). The descriptor carries the file_id
+        # downstream agents need to call telegramTool download.
+        if media and media.get("file_id"):
+            descriptor_bits = [media.get("kind") or "file"]
+            if media.get("file_name"):
+                descriptor_bits.append(str(media["file_name"]))
+            if media.get("mime_type"):
+                descriptor_bits.append(str(media["mime_type"]))
+            descriptor = f"[telegram {' | '.join(descriptor_bits)} | file_id={media['file_id']}]"
+            data["text"] = f"{data['text']}\n{descriptor}".strip()
+
         reply_to = _summarize_reply_to(getattr(msg, "reply_to_message", None))
         if reply_to is not None:
             data["reply_to"] = reply_to
