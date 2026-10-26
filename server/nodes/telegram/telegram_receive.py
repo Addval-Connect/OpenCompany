@@ -56,7 +56,10 @@ async def _download_media_to_workspace(
         svc = get_telegram_service()
         bot = svc._require_bot()
         tg_file = await bot.get_file(file_id)
-        payload = await bot.download_file(tg_file.file_path)
+        # PTB >= v20: the download lives on the File object
+        # (download_as_bytearray) — the old v13 bot-level download method
+        # no longer exists on ExtBot.
+        payload = bytes(await tg_file.download_as_bytearray())
     except Exception as exc:  # noqa: BLE001 — never break the trigger on a bad download
         logger.warning(f"[telegram] media download failed ({media.get('kind')}): {exc}")
         media["downloaded"] = False

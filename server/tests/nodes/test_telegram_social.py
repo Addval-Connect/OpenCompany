@@ -443,13 +443,17 @@ class TestTelegramGetAttachment:
 
     @staticmethod
     def _connected_bot(payload=b"%PDF-1.4 telegram attachment test bytes"):
-        """Stub service whose bot resolves and downloads a real Telegram file."""
+        """Stub service whose bot resolves and downloads a real Telegram file.
+
+        PTB >= v20: the download lives on the File object
+        (download_as_bytearray), NOT on the bot.
+        """
         svc = _make_telegram_service(connected=True)
         bot = MagicMock(name="Bot")
         tg_file = MagicMock(name="TelegramFile")
         tg_file.file_path = "documents/invoice_42.pdf"
+        tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(payload))
         bot.get_file = AsyncMock(return_value=tg_file)
-        bot.download_file = AsyncMock(return_value=payload)
         svc._require_bot = MagicMock(return_value=bot)
         return svc
 
@@ -702,8 +706,10 @@ class TestTelegramTool:
         bot = MagicMock(name="Bot")
         tg_file = MagicMock(name="TelegramFile")
         tg_file.file_path = "documents/invoice_42.pdf"
+        tg_file.download_as_bytearray = AsyncMock(
+            return_value=bytearray(b"%PDF-1.4 telegram tool test bytes")
+        )
         bot.get_file = AsyncMock(return_value=tg_file)
-        bot.download_file = AsyncMock(return_value=b"%PDF-1.4 telegram tool test bytes")
         svc._require_bot = MagicMock(return_value=bot)
         return svc
 

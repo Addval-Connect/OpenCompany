@@ -417,6 +417,26 @@ def test_document_without_text_carries_media_descriptor():
     assert data["media"]["file_id"] == "DOC-42"
 
 
+def test_media_download_uses_the_ptb20_file_api():
+    """Contract (regression lock): the media download must go through the
+    File object's `download_as_bytearray` — `bot.download_file` was the
+    PTB v13 API and does not exist on ExtBot (PTB 22.8) — the call blew up
+    at runtime with "'ExtBot' object has no attribute 'download_file'"
+    while the mocked tests happily passed."""
+    import inspect
+
+    from nodes.telegram import telegram_receive
+
+    src = inspect.getsource(telegram_receive._download_media_to_workspace)
+    assert "download_as_bytearray" in src, (
+        "the media download must use File.download_as_bytearray (PTB >= v20)"
+    )
+    assert "bot.download_file" not in src, (
+        "bot.download_file was removed in PTB v20 — ExtBot has no such "
+        "attribute and the call fails at runtime"
+    )
+
+
 def test_reply_to_carries_quoted_media():
     quoted = _message(
         message_id=42,
