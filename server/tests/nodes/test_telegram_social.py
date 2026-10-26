@@ -679,6 +679,115 @@ class TestTelegramNamespaceIsolation:
 
 
 # ============================================================================
+# telegramTool (ActionNode + AI tool — matriz multi-operación, patrón msCalendar)
+# ============================================================================
+
+
+class TestTelegramTool:
+    PAYLOAD = b"%PDF-1.4 telegram tool test bytes"
+
+    @staticmethod
+    def _connected_service():
+        svc = _make_telegram_service(connected=True, owner_chat_id=42)
+        svc.send_chat_action = AsyncMock(return_value={"chat_id": 555, "action": "typing", "sent": True})
+        svc.send_message = AsyncMock(
+            return_value={"message_id": 10, "chat_id": 555, "text": "hola", "parts": 1, "message_ids": [10]}
+        )
+        svc.get_me = AsyncMock(
+            return_value={"id": 8712094692, "username": "test_bot", "first_name": "Test"}
+        )
+        svc.get_chat = AsyncMock(
+            return_value={"id": 555, "type": "private", "username": "alice"}
+        )
+        bot = MagicMock(name="Bot")
+        tg_file = MagicMock(name="TelegramFile")
+        tg_file.file_path = "documents/invoice_42.pdf"
+        bot.get_file = AsyncMock(return_value=tg_file)
+        bot.download_file = AsyncMock(return_value=b"%PDF-1.4 telegram tool test bytes")
+        svc._require_bot = MagicMock(return_value=bot)
+        return svc
+
+    async def test_send_typing(self, harness):
+        svc = self._connected_service()
+        with _patch_telegram_service(svc):
+            result = await harness.execute("telegramTool", {"operation": "send_typing", "chat_id": "555"})
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["operation"] == "send_typing"
+        assert payload["sent"] is True
+        assert payload["chat_action"] == "typing"
+        svc.send_chat_action.assert_awaited_once_with("555", "typing")
+
+    async def test_send_message_passes_parse_mode(self, harness):
+        svc = self._connected_service()
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramTool",
+                {"operation": "send_message", "chat_id": "@canal", "text": "hola *negrita*"},
+            )
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["operation"] == "send_message"
+        assert payload["message_id"] == 10
+        assert payload["parts"] == 1
+        # Auto parse mode (default) travels to the shared send path.
+        assert svc.send_message.await_args.kwargs["parse_mode"] == "Auto"
+
+    async def test_download_saves_into_workspace_attachments(self, harness, tmp_path):
+        svc = self._connected_service()
+        ctx = harness.build_context(workspace_dir=str(tmp_path))
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramTool",
+                {"operation": "download", "file_id": "DOC-1", "file_name": "invoice_42.pdf"},
+                context=ctx,
+            )
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["downloaded"] is True
+        assert payload["filename"].startswith("invoice-42-")
+        assert payload["file_path"].startswith(str(tmp_path))
+        assert payload["size_bytes"] == len(self.PAYLOAD)
+
+    async def test_get_me_and_get_chat(self, harness):
+        svc = self._connected_service()
+        with _patch_telegram_service(svc):
+            me = await harness.execute("telegramTool", {"operation": "get_me"})
+            chat = await harness.execute("telegramTool", {"operation": "get_chat", "chat_id": "555"})
+        assert me["result"]["bot_username"] == "test_bot"
+        assert chat["result"]["chat_info"]["username"] == "alice"
+
+    async def test_missing_chat_id_is_user_error(self, harness):
+        svc = self._connected_service()
+        with _patch_telegram_service(svc):
+            result = await harness.execute("telegramTool", {"operation": "send_typing", "chat_id": ""})
+        harness.assert_envelope(result, success=False)
+        assert "chat_id is required" in result["error"]
+
+    async def test_unknown_operation_is_user_error(self, harness):
+        svc = self._connected_service()
+        with _patch_telegram_service(svc), patch(
+            "nodes.telegram.telegram_tool.TelegramToolParams",
+            create=True,
+        ):
+            # Force an unknown op past the Literal by building params directly.
+            from nodes.telegram.telegram_tool import TelegramToolNode, TelegramToolParams
+
+            node = TelegramToolNode()
+            params = TelegramToolParams.model_construct(operation="nuke")
+            with pytest.raises(Exception) as exc:
+                await node.dispatch(harness.build_context(), params)
+            assert "Unknown Telegram Tool operation" in str(exc.value)
+
+    async def test_not_connected_is_user_error(self, harness):
+        svc = _make_telegram_service(connected=False)
+        with _patch_telegram_service(svc):
+            result = await harness.execute("telegramTool", {"operation": "send_typing", "chat_id": "1"})
+        harness.assert_envelope(result, success=False)
+        assert "not connected" in result["error"].lower()
+
+
+# ============================================================================
 # socialSend
 # ============================================================================
 

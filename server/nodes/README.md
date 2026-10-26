@@ -281,9 +281,10 @@ server/nodes/telegram/
 ├── _filters.py          # build_telegram_filter (event_waiter filter)
 ├── _refresh.py          # WS-connect refresh + trigger precheck
 ├── _events.py           # typed CloudEvents factory + broadcast_telegram_status
-├── telegram_send.py     # ActionNode + AI tool
-├── telegram_receive.py  # TriggerNode
-└── telegram_get_attachment.py  # ActionNode + AI tool (downloads file_id into workspace attachments/)
+│   ├── telegram_send.py     # ActionNode + AI tool
+│   ├── telegram_receive.py  # TriggerNode
+│   ├── telegram_get_attachment.py  # ActionNode + AI tool (downloads file_id into workspace attachments/)
+│   └── telegram_tool.py     # ActionNode + AI tool (multi-operation Bot API matrix for agents)
 ```
 
 ### Variant: one node, many vendors
