@@ -147,7 +147,22 @@ def make_oauth_lifecycle_handlers(
             }
         redirect_uri = get_redirect_uri(websocket, provider)
         oauth = await oauth_factory(redirect_uri=redirect_uri)
-        auth_data = oauth.generate_authorization_url(state_data={})
+        # Stamp the namespace the user initiated the sign-in from into the
+        # OAuth state. The callback is a SEPARATE HTTP request — its
+        # middleware resolves whatever tenant the session cookie carries,
+        # which is not guaranteed to match this WS session (and the
+        # callback's fallback used to force "default" outright, so every
+        # sign-in landed in the default namespace's credentials DB while
+        # the workflows ran in their own tenant namespaces — the refresh
+        # then found no row and the provider looked "expired"). The
+        # callback restores this value before storing (see
+        # make_oauth_callback_router).
+        from constants import normalize_credential_ns
+        from core.namespace_context import get_active_namespace
+
+        auth_data = oauth.generate_authorization_url(
+            state_data={"namespace": normalize_credential_ns(get_active_namespace())}
+        )
 
         return {
             "success": True,
@@ -345,11 +360,23 @@ def make_oauth_callback_router(
         redirect_uri = state_record.get("redirect_uri") if state_record else None
         state_data = state_record.get("data") if state_record else {}
 
-        # Set ContextVar from state_data so credential lookups in the callback
-        # (factory, store_oauth_tokens) hit the correct namespace DB.
-        from core.namespace_context import set_active_namespace as _set_cb_ns
-        from constants import normalize_credential_ns
-        _set_cb_ns(normalize_credential_ns((state_data or {}).get("namespace")))
+        # Namespace routing for credential lookups in the callback
+        # (oauth_factory, store_oauth_tokens). Priority:
+        #   1. state_data["namespace"] — stamped by the WS login handler
+        #      (the namespace the user initiated the sign-in from).
+        #   2. The HTTP middleware's ContextVar — the session cookie's
+        #      active_namespace (correct after a namespace switch, which
+        #      reloads the page and reconnects with a fresh JWT).
+        # When state_data carries NO namespace (in-flight popup from a
+        # pre-fix server), LEAVE the middleware value untouched — forcing
+        # "default" here is what routed every sign-in into the default
+        # namespace's credentials DB.
+        _state_ns = (state_data or {}).get("namespace")
+        if _state_ns:
+            from core.namespace_context import set_active_namespace as _set_cb_ns
+            from constants import normalize_credential_ns
+
+            _set_cb_ns(normalize_credential_ns(_state_ns))
 
         oauth = await oauth_factory(redirect_uri=redirect_uri or "")
 

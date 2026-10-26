@@ -190,3 +190,69 @@ class TestOAuthOps:
 
     async def test_get_oauth_tokens_missing_provider_returns_none(self, auth_service):
         assert await auth_service.get_oauth_tokens("never-stored") is None
+
+
+class TestNamespaceIsolatedCaches:
+    """Cache keys carry the ACTIVE namespace.
+
+    AuthService is a process-wide singleton but every credential table is
+    per-namespace — keys cached only by session+provider leaked one
+    tenant's decrypted secrets into every other tenant's reads (Microsoft
+    client_id/secret, OAuth tokens, Telegram bot tokens and the multi-bot
+    ``telegram_{username}`` refs).
+    """
+
+    async def test_api_key_cache_does_not_leak_across_namespaces(self, auth_service, monkeypatch):
+        from core.namespace_context import get_active_namespace, set_active_namespace
+
+        db_values = {"tenant-a": "key-a", "tenant-b": "key-b"}
+        calls = {"n": 0}
+
+        async def per_ns_get(provider, session_id="default"):
+            calls["n"] += 1
+            return db_values.get(get_active_namespace())
+
+        monkeypatch.setattr(auth_service.credentials_db, "get_api_key", per_ns_get)
+
+        try:
+            set_active_namespace("tenant-a")
+            assert await auth_service.get_api_key("openai") == "key-a"
+
+            # Namespace switch must invalidate the cached value — the key
+            # carries the namespace, so tenant-b reads tenant-b's DB.
+            set_active_namespace("tenant-b")
+            assert await auth_service.get_api_key("openai") == "key-b"
+
+            # Switching back serves the tenant-a entry from cache — no
+            # extra DB read.
+            reads_before = calls["n"]
+            set_active_namespace("tenant-a")
+            assert await auth_service.get_api_key("openai") == "key-a"
+            assert calls["n"] == reads_before
+        finally:
+            set_active_namespace("default")
+
+    async def test_oauth_cache_does_not_leak_across_namespaces(self, auth_service, monkeypatch):
+        from core.namespace_context import get_active_namespace, set_active_namespace
+
+        async def per_ns_get(provider, session_id="default"):
+            ns = get_active_namespace()
+            return {
+                "access_token": f"at-{ns}",
+                "refresh_token": f"rt-{ns}",
+                "email": "u@x.com",
+            }
+
+        monkeypatch.setattr(auth_service.credentials_db, "get_oauth_tokens", per_ns_get)
+
+        try:
+            set_active_namespace("tenant-a")
+            tokens_a = await auth_service.get_oauth_tokens("microsoft")
+            assert tokens_a["access_token"] == "at-tenant-a"
+
+            # The cached tenant-a access token must NOT surface in tenant-b.
+            set_active_namespace("tenant-b")
+            tokens_b = await auth_service.get_oauth_tokens("microsoft")
+            assert tokens_b["access_token"] == "at-tenant-b"
+        finally:
+            set_active_namespace("default")

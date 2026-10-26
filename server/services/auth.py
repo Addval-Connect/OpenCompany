@@ -38,6 +38,24 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _namespaced_cache_key(prefix: str, session_id: str, provider: str) -> str:
+    """Cache key that carries the ACTIVE namespace.
+
+    AuthService is a process-wide singleton, but every credential table is
+    per-namespace (NamespacedCredentialsDatabase routes via the active-
+    namespace ContextVar). A cache keyed only by ``session_id`` + provider
+    leaks one tenant's decrypted secrets into every other tenant's reads
+    the moment two namespaces touch the same provider — Microsoft
+    client_id/secret, OAuth tokens, Telegram bot tokens and the multi-bot
+    ``telegram_{username}`` refs are all exposed to that. The namespace is
+    read at call time (never memoised) so a switch mid-process routes
+    correctly.
+    """
+    from core.namespace_context import get_active_namespace
+
+    return f"{prefix}:{get_active_namespace()}:{session_id}_{provider}"
+
+
 @dataclass
 class ApiKeyCacheEntry:
     """One in-memory cache entry per ``{session}_{provider}``.
@@ -116,7 +134,7 @@ class AuthService:
     ) -> bool:
         """Store API key in the active-namespace credentials DB."""
         try:
-            cache_key = f"{session_id}_{provider}"
+            cache_key = _namespaced_cache_key("key", session_id, provider)
             logger.info(f"Storing API key for provider: {provider}, session: {session_id}")
             await self.credentials_db.save_api_key(
                 provider=provider,
@@ -158,7 +176,7 @@ class AuthService:
     ) -> Optional[str]:
         """Get decrypted API key from the active-namespace credentials DB."""
         try:
-            cache_key = f"{session_id}_{provider}"
+            cache_key = _namespaced_cache_key("key", session_id, provider)
             entry = self._api_key_cache.get(cache_key)
             if entry is not None:
                 return entry.key
@@ -206,7 +224,7 @@ class AuthService:
     ) -> List[str]:
         """Get stored models for provider (active namespace)."""
         try:
-            cache_key = f"{session_id}_{provider}"
+            cache_key = _namespaced_cache_key("key", session_id, provider)
             entry = self._api_key_cache.get(cache_key)
             if entry is not None:
                 return entry.models
@@ -226,7 +244,7 @@ class AuthService:
     ) -> bool:
         """Remove API key from the active-namespace credentials DB."""
         try:
-            cache_key = f"{session_id}_{provider}"
+            cache_key = _namespaced_cache_key("key", session_id, provider)
             await self.credentials_db.delete_api_key(provider, session_id)
             self._api_key_cache.pop(cache_key, None)
             self._bump_catalogue_version()
@@ -275,7 +293,7 @@ class AuthService:
     ) -> bool:
         """Store OAuth tokens in the active-namespace credentials DB."""
         try:
-            cache_key = f"oauth_{provider}"
+            cache_key = _namespaced_cache_key("oauth", "default", provider)
             await self.credentials_db.save_oauth_tokens(
                 provider=provider,
                 access_token=access_token,
@@ -301,7 +319,7 @@ class AuthService:
     async def get_oauth_tokens(self, provider: str, customer_id: str = "default") -> Optional[Dict[str, Any]]:
         """Get OAuth display tokens from the active-namespace credentials DB."""
         try:
-            cache_key = f"oauth_{provider}"
+            cache_key = _namespaced_cache_key("oauth", "default", provider)
             if cache_key in self._oauth_cache:
                 return self._oauth_cache[cache_key]
             tokens = await self.credentials_db.get_oauth_tokens(provider, "default")
@@ -429,7 +447,7 @@ class AuthService:
             True if removed successfully
         """
         try:
-            cache_key = f"oauth_{provider}"
+            cache_key = _namespaced_cache_key("oauth", "default", provider)
             await self.credentials_db.delete_oauth_tokens(provider, "default")
             self._oauth_cache.pop(cache_key, None)
             self._bump_catalogue_version()
