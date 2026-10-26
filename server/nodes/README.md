@@ -117,7 +117,7 @@ model/       — LLM chat models (openai, anthropic, gemini, …, and openai_com
 android/     — Android device services
 google/      — Google Workspace (gmail / calendar / drive / sheets / …)
 twitter/     — Twitter/X (send / search / user / receive)
-telegram/    — Telegram bot (send / receive)
+telegram/    — Telegram bot (send / receive / get_attachment)
 discord/     — Discord bot (send / action / receive / interaction).
                Multi-account: _accounts.py maps an account id onto the
                session_id credential scope; nothing else knows about it.
@@ -282,7 +282,8 @@ server/nodes/telegram/
 ├── _refresh.py          # WS-connect refresh + trigger precheck
 ├── _events.py           # typed CloudEvents factory + broadcast_telegram_status
 ├── telegram_send.py     # ActionNode + AI tool
-└── telegram_receive.py  # TriggerNode
+├── telegram_receive.py  # TriggerNode
+└── telegram_get_attachment.py  # ActionNode + AI tool (downloads file_id into workspace attachments/)
 ```
 
 ### Variant: one node, many vendors

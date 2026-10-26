@@ -26,6 +26,11 @@ On import, this package self-registers six callbacks:
 Adding a new plugin folder follows the same shape -- consumers do not
 need to learn its name.
 
+Also owns the attachment surface:
+    telegram_get_attachment.py
+                        ActionNode + AI tool (download file_id into
+                        workspace attachments/)
+
 External callers should depend on the public re-exports below; the
 underscore-prefixed modules are implementation detail.
 """
@@ -51,6 +56,10 @@ from ._service import TelegramService, get_telegram_service
 
 # Telegram plugin classes -- importing them runs __init_subclass__ which
 # slots them into the plugin/node registries (handled by services.plugin).
+from .telegram_get_attachment import (
+    TelegramGetAttachmentNode,
+    TelegramGetAttachmentOutput,
+)
 from .telegram_receive import TelegramReceiveNode, TelegramReceiveOutput
 from .telegram_send import TelegramSendNode, TelegramSendOutput
 
@@ -61,6 +70,7 @@ register_trigger_precheck("telegramReceive", precheck_telegram_trigger)
 register_service_refresh(refresh_telegram_status)
 register_output_schema("telegramReceive", TelegramReceiveOutput)
 register_output_schema("telegramSend", TelegramSendOutput)
+register_output_schema("telegramGetAttachment", TelegramGetAttachmentOutput)
 
 # Wave 12 C1 rollout #3: opt telegramReceive into the
 # TriggerListenerWorkflow consumer path. Producer side:
@@ -95,6 +105,8 @@ register_shutdown_hook("telegram", _shutdown_telegram)
 
 __all__ = [
     "TelegramCredential",
+    "TelegramGetAttachmentNode",
+    "TelegramGetAttachmentOutput",
     "TelegramService",
     "WS_HANDLERS",
     "build_telegram_filter",

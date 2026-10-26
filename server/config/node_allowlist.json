@@ -42,6 +42,7 @@
 
     "telegramSend",
     "telegramReceive",
+    "telegramGetAttachment",
 
     "discordSend",
     "discordAction",
