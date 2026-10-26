@@ -757,12 +757,34 @@ class TestTelegramTool:
         assert me["result"]["bot_username"] == "test_bot"
         assert chat["result"]["chat_info"]["username"] == "alice"
 
-    async def test_missing_chat_id_is_user_error(self, harness):
+    async def test_missing_chat_id_falls_back_to_owner_chat(self, harness):
+        """El agente rara vez conoce el chat_id — sin él, el destino
+        natural es el chat del dueño (capturado y persistido por el
+        servicio)."""
         svc = self._connected_service()
+        svc.owner_chat_id = 8386124997
         with _patch_telegram_service(svc):
-            result = await harness.execute("telegramTool", {"operation": "send_typing", "chat_id": ""})
+            result = await harness.execute("telegramTool", {"operation": "send_typing"})
+        harness.assert_envelope(result, success=True)
+        svc.send_chat_action.assert_awaited_once_with("8386124997", "typing")
+
+    async def test_missing_chat_id_without_owner_is_actionable_error(self, harness):
+        svc = self._connected_service()
+        svc.owner_chat_id = None
+        with _patch_telegram_service(svc):
+            result = await harness.execute("telegramTool", {"operation": "send_typing"})
         harness.assert_envelope(result, success=False)
-        assert "chat_id is required" in result["error"]
+        assert "no detected owner chat" in result["error"]
+
+    async def test_explicit_chat_id_wins_over_owner(self, harness):
+        svc = self._connected_service()
+        svc.owner_chat_id = 8386124997
+        with _patch_telegram_service(svc):
+            result = await harness.execute(
+                "telegramTool", {"operation": "send_typing", "chat_id": "@canal"}
+            )
+        harness.assert_envelope(result, success=True)
+        svc.send_chat_action.assert_awaited_once_with("@canal", "typing")
 
     async def test_unknown_operation_is_user_error(self, harness):
         svc = self._connected_service()
