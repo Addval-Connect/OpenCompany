@@ -15,7 +15,8 @@ Reglas de credenciales, entornos y producción. Las aplica CARGA al escribir; lo
 
 ## Credenciales
 
-- La API key vive en el parámetro `api_key` del nodo (marcado secreto) o en la variable de entorno `ODOO_API_KEY`. **Nunca** en el repositorio, en `proyecto.yaml`, en un blueprint, en un artefacto del proyecto, ni en una bitácora o informe. Si ves una clave en un archivo, es un hallazgo de seguridad: repórtala como alerta, no la copies.
+- La API key permanente vive en el parámetro `api_key` del nodo (marcado secreto) o en la variable de entorno `ODOO_API_KEY`. **Nunca** en el repositorio, en `proyecto.yaml`, en un blueprint, en un artefacto del proyecto, ni en una bitácora o informe. Si ves una clave en un archivo, es un hallazgo de seguridad: repórtala como alerta, no la copies.
+- **Credenciales de sesión (override) son legítimas.** Cuando el nodo está sin configurar y el consultor te entregó la conexión de la instancia en la sesión —o ya la tienes en tu memoria— pásala como override en la llamada: `host`, `db`, `username`, `api_key`, **los cuatro juntos** (ver `odoo-rpc-transporte`). Es uso puntual, no configuración: no la persistas en archivos, artefactos ni bitácoras. Cuando deba quedar permanente, se guarda en el nodo — nunca en ti.
 - **Usuario dedicado de integración**, nunca la cuenta personal de un consultor: la trazabilidad de la carga y la rotación de la clave dependen de eso.
 - **Dos credenciales, dos nodos.** Los agentes de flujo necesitan un usuario de **solo lectura**; CARGA, uno con escritura. Que la regla "solo CARGA escribe" sea una garantía técnica y no solo una instrucción depende de esta separación.
 - El acceso a la API externa solo está disponible en planes Custom de Odoo. Si `common.login` responde negativo con credenciales correctas, esa es la causa probable.

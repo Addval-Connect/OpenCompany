@@ -53,6 +53,9 @@ Los errores llegan todos con la misma forma (ver `odoo-rpc-transporte`), así qu
 | `Access Denied` / `not allowed to` | `E500` | Permisos del usuario de integración: detén |
 | Timeout, 502/503, conexión cerrada | `E500` | Verifica antes de reintentar |
 | `uid is false` / login | `E500` | Credenciales del nodo. **No pruebes otro host** |
+| `Odoo node is not configured` | Pre-vuelo del nodo, no de Odoo | Sin código. Si el consultor te entregó la conexión en la sesión —o ya la tienes en tu memoria— pásala como override: `host`, `db`, `username`, `api_key`, **los cuatro juntos**. Si no la tienes, detén y pídelas. |
+
+`Odoo node is not configured` es el único mensaje de esta tabla que tú mismo resuelves sin el consultor: la conexión ya está en tu contexto, solo tiene que viajar en la llamada. No lo reclasifiques como `E500` ni detengas la carga por él.
 
 Si no encaja en ninguna, es `E400` con criterio funcional desconocido: definición con el mensaje literal. **Nunca resumas ni parafrasees un mensaje de error de Odoo al escalarlo**: el texto exacto es lo que un consultor funcional reconoce.
 
