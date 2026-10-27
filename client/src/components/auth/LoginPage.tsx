@@ -76,7 +76,7 @@ const LoginPage: React.FC = () => {
         <CardHeader className="text-center">
           {/* A real <h1>: the page previously had no heading landmark at all. */}
           <CardTitle className="text-3xl font-bold text-node-agent">
-            <h1>OpenCompany</h1>
+            <h1>Bluedoc Workers</h1>
           </CardTitle>
           <CardDescription>
             {isRegistering ? 'Create your account' : 'Sign in to continue'}

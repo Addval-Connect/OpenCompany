@@ -47,7 +47,7 @@ const fillCredentials = async (user: ReturnType<typeof userEvent.setup>) => {
 describe('LoginPage', () => {
   it('renders a heading and the sign-in form', () => {
     render(<LoginPage />);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('OpenCompany');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Bluedoc Workers');
     expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
   });
 
