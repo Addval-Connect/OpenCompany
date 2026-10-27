@@ -33,6 +33,7 @@
     "msMailReceive",
     "documentParser",
     "processManager",
+    "workflowIntrospect",
 
     "httpRequest",
     "timer",
