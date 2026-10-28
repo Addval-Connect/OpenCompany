@@ -216,6 +216,9 @@
   "msCalendar": {
     "skill": "ms-calendar-skill"
   },
+  "msTodo": {
+    "skill": "ms-todo-skill"
+  },
   "groqChatModel": {
     "icon": "lobehub:groq"
   },

@@ -46,9 +46,9 @@ server/skills/
 │     en docs-internal/ARCHIVE/odoo_impl-v1-2026-10-20/)
 ├── payments_agent/           # stripe-skill
 ├── productivity_agent/       # Google Workspace + Microsoft 365 skills
-│     google-gmail-skill, google-calendar-skill, google-drive-skill,
-│     google-sheets-skill, google-tasks-skill, google-contacts-skill,
-│     ms-mail-skill, ms-calendar-skill
+│     google-gmail-skill, google-calendar-skill, google-drive-skill, google-sheets-skill,
+│     google-tasks-skill, google-contacts-skill, ms-mail-skill, ms-calendar-skill,
+│     ms-todo-skill
 ├── rlm_agent/                # rlm-reasoning-skill
 ├── social_agent/             # Social messaging skills
 │     whatsapp-send-skill, whatsapp-db-skill, twitter-send-skill,

@@ -255,6 +255,10 @@
       "event_update": 0.0,
       "event_delete": 0.0,
       "event_list": 0.0,
+      "todo_create": 0.0,
+      "todo_update": 0.0,
+      "todo_delete": 0.0,
+      "todo_list": 0.0,
       "_default": 0.0
     },
     "twitter": {
@@ -461,7 +465,11 @@
       "create": "event_create",
       "update": "event_update",
       "delete": "event_delete",
-      "list": "event_list"
+      "list": "event_list",
+      "todo_create": "todo_create",
+      "todo_update": "todo_update",
+      "todo_delete": "todo_delete",
+      "todo_list": "todo_list"
     },
     "brave_search": {
       "web_search": "web_search"
