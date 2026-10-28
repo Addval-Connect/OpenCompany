@@ -36,7 +36,7 @@ the same task while one is in flight.
   all inside the cloud sandbox, not on this machine.
 - Long-running work you want isolated from the local workflow.
 
-Prefer LOCAL tools (python_executor, shell, file tools) when the work
+Prefer LOCAL tools (process_manager, shell, file tools) when the work
 needs files in this workflow's workspace — the cloud sandbox cannot see
 local files unless their content is passed in `context`.
 

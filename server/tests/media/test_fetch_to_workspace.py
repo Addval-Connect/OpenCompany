@@ -172,7 +172,7 @@ class TestFetchToWorkspace:
 
 
 class TestSsrfGuard:
-    """The guard is shared with monty_executor rather than duplicated."""
+    """The guard was shared with the retired monty_executor rather than duplicated."""
 
     @pytest.mark.parametrize(
         "url",
