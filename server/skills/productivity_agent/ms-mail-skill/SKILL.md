@@ -1,17 +1,17 @@
 ---
 name: ms-mail-skill
-description: Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph — for your own mailbox or a shared mailbox. Compose messages (optionally with file attachments from the workspace), list recent mail, search by text, reply/reply-all, and list or download file attachments (e.g. PDFs) for parsing.
+description: Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph — for your own mailbox or a shared mailbox. Compose messages (optionally with file attachments from the workspace), list recent mail, search by text, reply/reply-all (plain-text comment or an HTML body with attachments), move messages to folders, and list or download file attachments (e.g. PDFs) for parsing.
 allowed-tools: "ms_mail"
 metadata:
   author: opencompany
-  version: "1.3"
+  version: "1.4"
   category: productivity
 
 ---
 
 # Outlook Mail Skill
 
-Send, read, search, reply to, and handle attachments of email using the Microsoft Graph API (Outlook / Microsoft 365).
+Send, read, search, reply to, move, and handle attachments of email using the Microsoft Graph API (Outlook / Microsoft 365).
 
 ## Tool: ms_mail
 
@@ -24,9 +24,10 @@ Consolidated Outlook Mail tool with an `operation` parameter.
 | `send` | Send an email | to, subject, body |
 | `read` | Read a message by ID, or list recent mail when no ID is given | (message_id optional) |
 | `search` | Search messages by text | query |
-| `reply` | Reply to a message | reply_message_id, comment |
+| `reply` | Reply to a message (plain-text comment, or an HTML body with attachments) | reply_message_id, comment (or body) |
 | `list_attachments` | List a message's attachments (metadata only, no download) | message_id |
 | `download_attachments` | Download file attachments into the workspace | message_id |
+| `move` | Move a message to a folder (by id or well-known name) | message_id, move_destination |
 
 Every `read`/`search` result includes a `has_attachments` boolean per message —
 check it before calling `list_attachments` / `download_attachments`.
@@ -145,18 +146,54 @@ use Gmail-style operators.
 |-------|------|----------|-------------|
 | operation | string | Yes | Must be `"reply"` |
 | reply_message_id | string | Yes | ID of the message to reply to (from search/read) |
-| comment | string | Yes | The reply text |
-| reply_all | boolean | No | Reply to all recipients (default: false) |
+| comment | string | XOR | Plain-text reply. Pass **either** `comment` **or** `body` — Graph rejects both together. |
+| body | string | XOR | Reply body (plain text or HTML per `body_type`). Use with `body_type: "html"` for a formatted reply. |
+| body_type | string | No | `"text"` or `"html"` (default: text). Only used when `body` is set. |
+| reply_all | boolean | No | Reply to all recipients (default: false). Without overrides: `reply` goes to the original sender only; `reply_all` also includes the original to + cc — including the mailbox itself if it was on the original thread. |
+| to | string | No | Override the reply's **to** recipients (comma-separated). When set, you own the recipient lists: an empty `cc` clears the default cc. |
+| cc | string | No | Override the reply's **cc** recipients (comma-separated). |
+| attachments | array of strings | No | Workspace file paths to attach (same rules as `send`). Works with `comment` or `body`. |
 
-**Example:**
+A reply keeps the conversation thread — Graph sends it with the original
+subject (`RE:`/`FW:`) and threading headers, so it lands in the same
+conversation for the recipient. A reply does NOT return a new message id;
+thread by the `message_id`/`conversation_id` of the inbound message.
+
+**Example - plain-text reply to the sender, excluding the mailbox:**
 ```json
 {
   "operation": "reply",
   "reply_message_id": "AAMkAGI2...",
   "comment": "Thanks - looks good to me.",
-  "reply_all": true
+  "reply_all": true,
+  "to": "alice@contoso.com"
 }
 ```
+
+**Example - HTML reply with attachments:**
+```json
+{
+  "operation": "reply",
+  "reply_message_id": "AAMkAGI2...",
+  "body_type": "html",
+  "body": "<p style=\"font-family:Segoe UI,Arial,sans-serif;\">Adjunto el reporte.</p>",
+  "attachments": ["workspace/reporte.pdf"],
+  "reply_all": true,
+  "to": "alice@contoso.com",
+  "cc": "lead@contoso.com"
+}
+```
+
+### move - Move a message to a folder
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| operation | string | Yes | Must be `"move"` |
+| message_id | string | Yes | ID of the message to move |
+| move_destination | string | Yes | Destination folder ID or well-known name (`inbox`, `archive`, `deleteditems`, ...). **Does not resolve human folder names** — for a custom folder (e.g. `Migración`) pass its Graph folder id. |
+
+The message's id **changes** when it is moved — use the id returned in the
+response (`message_id`) for subsequent operations on that message.
 
 ### list_attachments - List a message's attachments (metadata only)
 
@@ -231,7 +268,9 @@ pair it with the **Document Parser** node on the canvas:
 ## Common Workflows
 
 1. **Triage recent mail**: `read` with no ID to list recent messages, then `read` a specific `message_id` for full content.
-2. **Find a thread**: `search` by keyword, take the `message_id`, then `reply`.
+2. **Find a thread**: `search` by keyword, take the `message_id`, then `reply`
+   (pass `to` to control the recipients — `reply_all` re-includes the original
+   to + cc, including the mailbox itself if it was on the thread).
 3. **Send a plain email**: `send` to one or more recipients, optionally as HTML.
 4. **Send with attachments**: `send` with an `attachments` array of workspace file paths.
    Files from a previous `download_attachments` call, the gallery node, or any other

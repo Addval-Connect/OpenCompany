@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import json
 import pytest
 import respx
 
@@ -137,14 +138,158 @@ class TestMsMailReply:
 
     @respx.mock
     async def test_reply_all_uses_replyall_endpoint(self, harness):
-        route = respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
+        respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
         with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
             result = await harness.execute(
                 "msMail",
                 {"operation": "reply", "reply_message_id": "AAA", "comment": "Thanks all!", "reply_all": True},
             )
         harness.assert_envelope(result, success=True)
-        assert route.called
+        assert respx.calls.last.request.content is not None
+
+    @respx.mock
+    async def test_reply_html_body_posts_message_object(self, harness):
+        respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "reply",
+                    "reply_message_id": "AAA",
+                    "body": "<p style=\"font-family:Segoe UI;\">Respuesta con formato.</p>",
+                    "body_type": "html",
+                    "reply_all": True,
+                },
+            )
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["replied"] is True
+        payload = respx.calls.last.request.content and json.loads(respx.calls.last.request.content)
+        assert "comment" not in payload
+        assert payload["message"]["body"]["contentType"] == "HTML"
+        assert payload["message"]["body"]["content"].startswith("<p")
+
+    @respx.mock
+    async def test_reply_plain_body_uses_text_content(self, harness):
+        respx.post(f"{GRAPH}/me/messages/AAA/reply").mock(return_value=httpx.Response(202))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {"operation": "reply", "reply_message_id": "AAA", "body": "respuesta simple"},
+            )
+        harness.assert_envelope(result, success=True)
+        payload = json.loads(respx.calls.last.request.content)
+        assert payload["message"]["body"]["contentType"] == "Text"
+
+    @respx.mock
+    async def test_reply_body_and_comment_rejected(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "reply",
+                    "reply_message_id": "AAA",
+                    "comment": "texto",
+                    "body": "<p>html</p>",
+                    "body_type": "html",
+                },
+            )
+        harness.assert_envelope(result, success=False)
+        assert "not both" in result["error"].lower()
+
+    async def test_reply_without_comment_or_body_rejected(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msMail", {"operation": "reply", "reply_message_id": "AAA"})
+        harness.assert_envelope(result, success=False)
+        assert "comment" in result["error"].lower()
+
+    @respx.mock
+    async def test_reply_attachments_with_comment_posts_attachment_objects(self, harness, tmp_path):
+        pdf = tmp_path / "reporte.pdf"
+        pdf.write_bytes(b"%PDF-1.4 test")
+        respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "reply",
+                    "reply_message_id": "AAA",
+                    "comment": "Adjunto el reporte.",
+                    "attachments": [str(pdf)],
+                    "reply_all": True,
+                },
+            )
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["attachments_sent"] == 1
+        payload = json.loads(respx.calls.last.request.content)
+        assert payload["comment"] == "Adjunto el reporte."
+        att = payload["message"]["attachments"]
+        assert att[0]["@odata.type"] == "#microsoft.graph.fileAttachment"
+        assert att[0]["name"] == "reporte.pdf"
+
+    @respx.mock
+    async def test_reply_with_attachments_posts_file_attachment(self, harness, tmp_path):
+        pdf = tmp_path / "reporte.pdf"
+        pdf.write_bytes(b"%PDF-1.4 test")
+        respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "reply",
+                    "reply_message_id": "AAA",
+                    "body_type": "html",
+                    "body": "<p>Adjunto el reporte.</p>",
+                    "attachments": [str(pdf)],
+                    "reply_all": True,
+                },
+            )
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["attachments_sent"] == 1
+        payload = json.loads(respx.calls.last.request.content)
+        att = payload["message"]["attachments"]
+        assert att[0]["@odata.type"] == "#microsoft.graph.fileAttachment"
+        assert att[0]["name"] == "reporte.pdf"
+
+    @respx.mock
+    async def test_reply_to_override_sets_recipients_and_clears_cc(self, harness):
+        respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "reply",
+                    "reply_message_id": "AAA",
+                    "comment": "solo al consultor",
+                    "reply_all": True,
+                    "to": "consultor@contoso.com",
+                },
+            )
+        harness.assert_envelope(result, success=True)
+        payload = json.loads(respx.calls.last.request.content)
+        msg = payload["message"]
+        assert [r["emailAddress"]["address"] for r in msg["toRecipients"]] == ["consultor@contoso.com"]
+        assert msg["ccRecipients"] == []
+
+    @respx.mock
+    async def test_reply_to_and_cc_override(self, harness):
+        respx.post(f"{GRAPH}/me/messages/AAA/replyAll").mock(return_value=httpx.Response(202))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msMail",
+                {
+                    "operation": "reply",
+                    "reply_message_id": "AAA",
+                    "comment": "con copia",
+                    "reply_all": True,
+                    "to": "consultor@contoso.com",
+                    "cc": "lead@contoso.com",
+                },
+            )
+        harness.assert_envelope(result, success=True)
+        payload = json.loads(respx.calls.last.request.content)
+        msg = payload["message"]
+        assert [r["emailAddress"]["address"] for r in msg["toRecipients"]] == ["consultor@contoso.com"]
+        assert [r["emailAddress"]["address"] for r in msg["ccRecipients"]] == ["lead@contoso.com"]
 
 
 class TestMsMailGraphError:
