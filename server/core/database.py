@@ -3926,12 +3926,57 @@ class Database:
                 )
                 permit = existing.scalar_one_or_none()
                 if permit:
-                    return {
-                        "acquired": (
-                            permit.root_execution_id == root_execution_id
-                            and permit.status == "active"
+                    if (
+                        permit.root_execution_id == root_execution_id
+                        and permit.status == "active"
+                    ):
+                        # Already held by this root — idempotent re-acquire.
+                        return {"acquired": True}
+                    if (
+                        permit.root_execution_id == root_execution_id
+                        and permit.status == "released"
+                    ):
+                        # A finished attempt of THIS root released this
+                        # lease. The lease id is deterministic (task id +
+                        # activity id + activity attempt), so a RETRIED
+                        # task derives the very same id — and used to
+                        # spin forever: the row existed, so the insert
+                        # path below never ran, and the released status
+                        # never satisfied the active-only check. Observed
+                        # live (2026-10-20, IAuditor): every retry_task
+                        # deadlocked its whole audit. Re-activate the row
+                        # and claim a fresh counter slot.
+                        await session.execute(
+                            text(
+                                "INSERT OR IGNORE INTO subagent_concurrency_counters "
+                                "(root_execution_id, active_count, updated_at) "
+                                "VALUES (:root, 0, CURRENT_TIMESTAMP)"
+                            ),
+                            {"root": root_execution_id},
                         )
-                    }
+                        claimed = await session.execute(
+                            update(SubagentConcurrencyCounter)
+                            .where(
+                                SubagentConcurrencyCounter.root_execution_id
+                                == root_execution_id,
+                                SubagentConcurrencyCounter.active_count < limit,
+                            )
+                            .values(
+                                active_count=SubagentConcurrencyCounter.active_count + 1,
+                                updated_at=now,
+                            )
+                        )
+                        if claimed.rowcount != 1:
+                            return {"acquired": False}
+                        await session.execute(
+                            update(SubagentConcurrencyPermit)
+                            .where(SubagentConcurrencyPermit.permit_id == permit_id)
+                            .values(status="active", acquired_at=now, released_at=None)
+                        )
+                        return {"acquired": True}
+                    # Held active or released under a DIFFERENT root:
+                    # never touchable from here.
+                    return {"acquired": False}
 
                 await session.execute(
                     text(
