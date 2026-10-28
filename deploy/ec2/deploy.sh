@@ -66,6 +66,26 @@ done
 
 say() { printf '\n==> %s\n' "$*"; }
 
+# Deploy-from-git policy: the tarball ships the working tree, so an unclean
+# tree would silently deploy unreviewed changes. Refuse to run unless HEAD is
+# clean and the checked-out ref is pushed. A deploy must be a REVIEWED ref,
+# not whatever an agent session left on disk.
+# Excluded from the check: server/config/model_registry.json — the app
+# regenerates that catalog on boot, so it is dirty by design and carries no
+# reviewable delta. Everything else must be committed.
+if ! git diff-index --quiet HEAD -- . ':(exclude)server/config/model_registry.json' 2>/dev/null; then
+    echo "Refusing to deploy: working tree has uncommitted changes." >&2
+    echo "Commit or stash them, then deploy the reviewed ref:" >&2
+    echo "  git switch <ref> && git pull --ff-only && ./deploy/ec2/deploy.sh" >&2
+    exit 1
+fi
+BRANCH=$(git branch --show-current)
+if [[ -n "$BRANCH" ]] && ! git rev-parse "origin/${BRANCH}" >/dev/null 2>&1; then
+    echo "Refusing to deploy: branch '${BRANCH}' is not pushed to origin." >&2
+    echo "A deploy must ship a ref that exists in git (reviewable/recoverable)." >&2
+    exit 1
+fi
+
 AWS=$(command -v aws || echo "$HOME/.local/bin/aws")
 
 # ---------------------------------------------------------------------------
