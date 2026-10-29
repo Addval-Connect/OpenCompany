@@ -25,7 +25,7 @@ from services.plugin import NodeContext, Operation, PollingTriggerNode, TaskQueu
 
 from core.namespace_context import get_active_namespace
 
-from .._base import graph_get_raw, mailbox_base, mark_message_read_raw, track_microsoft_usage
+from .._base import graph_get_raw, mailbox_base, mark_message_read_raw, resolve_mail_folder, track_microsoft_usage
 from .._credentials import MicrosoftCredential
 
 logger = get_logger(__name__)
@@ -146,7 +146,31 @@ class MailReceiveNode(PollingTriggerNode):
     async def setup_service(self, params: Dict[str, Any]) -> Any:
         # No long-lived handle: Graph is stateless bearer REST and each
         # helper re-resolves a fresh token. Pass params through so the
-        # other hooks can read filters without extra plumbing.
+        # other hooks can read filters without extra plumbing. Resolve the
+        # folder display name to its ID once here so the poll activity
+        # doesn't pay the listing round-trip on every cycle.
+        await self._ensure_resolved_folder(params)
+        return params
+
+    async def _ensure_resolved_folder(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve a human folder display name to its Graph folder id.
+
+        ``folder`` accepts well-known names (inbox, ...) verbatim; anything
+        else that isn't already a raw folder id is resolved against the
+        mailbox's mail folders once per loop start so the poll activity
+        doesn't pay the listing round-trip on every cycle.
+        """
+        folder = (params.get("folder") or "inbox").strip()
+        try:
+            resolved = await resolve_mail_folder(
+                params.get("mailbox"),
+                folder,
+                user_id=get_active_namespace(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[msMailReceive] Failed to resolve folder {folder!r}: {exc}")
+            raise
+        params["folder"] = resolved
         return params
 
     async def fetch_ids(self, service: Any, params: Dict[str, Any]) -> Set[str]:
@@ -196,6 +220,9 @@ class MailReceiveNode(PollingTriggerNode):
 
             seen_ids: Set[str] = set()
             try:
+                # Resolve folder display name (e.g. "Migración") to its ID
+                # before the baseline fetch; the loop reuses the resolved ID.
+                parameters = await self._ensure_resolved_folder(parameters)
                 seen_ids = await self.fetch_ids(parameters, parameters)
                 logger.info(f"[msMailReceive] Baseline: {len(seen_ids)} existing messages")
             except Exception as e:  # noqa: BLE001

@@ -44,7 +44,7 @@ _FILE_ATTACHMENT = "#microsoft.graph.fileAttachment"
 
 
 class MailParams(BaseModel):
-    operation: Literal["send", "read", "search", "reply", "list_attachments", "download_attachments"] = "send"
+    operation: Literal["send", "read", "search", "reply", "list_attachments", "download_attachments", "move"] = "send"
 
     # Target mailbox. Empty = the signed-in user's own mailbox. Set to a
     # shared/other mailbox address (e.g. support@contoso.com) to operate on
@@ -106,9 +106,16 @@ class MailParams(BaseModel):
     # also the parent-message field for the attachment ops, so it shows there too.
     message_id: str = Field(
         default="",
-        json_schema_extra={"displayOptions": {"show": {"operation": ["read", "list_attachments", "download_attachments"]}}},
+        json_schema_extra={"displayOptions": {"show": {"operation": ["read", "list_attachments", "download_attachments", "move"]}}},
     )
     max_results: int = Field(default=10, ge=1, le=100, json_schema_extra=_READ)
+
+    # Move
+    move_destination: str = Field(
+        default="",
+        description="Destination folder ID or well-known name (e.g. inbox, archive, deleteditems).",
+        json_schema_extra={"displayOptions": {"show": {"operation": ["move"]}}},
+    )
 
     # Search
     query: str = Field(
@@ -158,6 +165,9 @@ class MailOutput(BaseModel):
     attachments: Optional[List[dict]] = None
     download_dir: Optional[str] = None
     skipped: Optional[List[dict]] = None
+    # Move op
+    moved: Optional[bool] = None
+    destination: Optional[str] = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -279,6 +289,8 @@ class MailNode(ActionNode):
             return await self._list_attachments(ctx, params)
         if op == "download_attachments":
             return await self._download_attachments(ctx, params)
+        if op == "move":
+            return await self._move(ctx, params)
         raise NodeUserError(f"Unknown Mail operation: {op}")
 
     async def _send(self, ctx: NodeContext, params: MailParams) -> MailOutput:
@@ -511,4 +523,30 @@ class MailNode(ActionNode):
             download_dir=download_dir,
             count=len(downloaded),
             skipped=skipped or None,
+        )
+
+    async def _move(self, ctx: NodeContext, params: MailParams) -> MailOutput:
+        """Move a message to a destination folder.
+
+        Uses Graph POST /{base}/messages/{id}/move with destinationId.
+        Accepts a well-known folder name (inbox, archive, etc.) or a folder ID.
+        """
+        if not params.message_id:
+            raise NodeUserError("message_id is required to move a message")
+        if not params.move_destination:
+            raise NodeUserError("move_destination (folder id or well-known name) is required")
+
+        result = await graph_request(
+            ctx,
+            "POST",
+            f"{mailbox_base(params.mailbox)}/messages/{params.message_id}/move",
+            json={"destinationId": params.move_destination},
+        )
+        await track_microsoft_usage(ctx.node_id, "move", 1, ctx.raw)
+        new_id = (result or {}).get("id")
+        return MailOutput(
+            operation="move",
+            moved=True,
+            message_id=new_id or params.message_id,
+            destination=params.move_destination,
         )
