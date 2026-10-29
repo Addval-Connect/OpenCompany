@@ -37,6 +37,9 @@
     "calendar": [
       "Calendars.ReadWrite",
       "Calendars.ReadWrite.Shared"
+    ],
+    "todo": [
+      "Tasks.ReadWrite"
     ]
   },
 

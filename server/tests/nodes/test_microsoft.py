@@ -1,4 +1,4 @@
-"""Contract tests for the Microsoft Graph nodes: msMail, msCalendar.
+"""Contract tests for the Microsoft Graph nodes: msMail, msCalendar, msTodo.
 
 Each node is driven through the full NodeExecutor dispatch via the shared
 `harness` fixture. Microsoft Graph HTTP is mocked with respx so no network
@@ -949,3 +949,255 @@ class TestMsCalendarSharedMailbox:
             )
         harness.assert_envelope(result, success=True)
         assert route.called
+
+
+# ============================================================================
+# msTodo
+# ============================================================================
+
+_LIST_ID = "L1"
+_TASK_ID = "T1"
+
+_TODO_LIST = {"id": _LIST_ID, "displayName": "Trabajo", "isOwner": True}
+
+_TODO_TASK = {
+    "id": _TASK_ID,
+    "title": "Revisar propuesta",
+    "status": "notStarted",
+    "importance": "high",
+    "dueDateTime": {"dateTime": "2026-11-05T17:00:00.0000000", "timeZone": "UTC"},
+    "createdDateTime": "2026-11-01T10:00:00Z",
+    "body": {"contentType": "text", "content": "Comentarios del cliente"},
+}
+
+
+class TestMsTodoLists:
+    @respx.mock
+    async def test_list_lists(self, harness):
+        respx.get(f"{GRAPH}/me/todo/lists").mock(
+            return_value=httpx.Response(200, json={"value": [_TODO_LIST]})
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "list_lists"})
+
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["count"] == 1
+        assert payload["lists"][0]["list_id"] == _LIST_ID
+        assert payload["lists"][0]["list_name"] == "Trabajo"
+
+    @respx.mock
+    async def test_create_list_posts_displayname(self, harness):
+        route = respx.post(f"{GRAPH}/me/todo/lists").mock(
+            return_value=httpx.Response(201, json=_TODO_LIST)
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "create_list", "list_name": "Trabajo"})
+
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["list_id"] == _LIST_ID
+        assert result["result"]["list_name"] == "Trabajo"
+        import json as _json
+
+        assert _json.loads(route.calls.last.request.content) == {"displayName": "Trabajo"}
+
+    async def test_create_list_missing_name_is_user_error(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "create_list"})
+        harness.assert_envelope(result, success=False)
+        assert "name" in result["error"].lower()
+
+    @respx.mock
+    async def test_delete_list(self, harness):
+        route = respx.delete(f"{GRAPH}/me/todo/lists/{_LIST_ID}").mock(return_value=httpx.Response(204))
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "delete_list", "list_id": _LIST_ID})
+
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["deleted"] is True
+        assert route.called
+
+
+class TestMsTodoTasks:
+    @respx.mock
+    async def test_create_task_posts_to_list(self, harness):
+        route = respx.post(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks").mock(
+            return_value=httpx.Response(201, json=_TODO_TASK)
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo",
+                {
+                    "operation": "create_task",
+                    "list_id": _LIST_ID,
+                    "title": "Revisar propuesta",
+                    "body": "Comentarios del cliente",
+                    "due_date": "2026-11-05T17:00:00",
+                    "importance": "high",
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["task_id"] == _TASK_ID
+        assert payload["title"] == "Revisar propuesta"
+        assert payload["status"] == "notStarted"
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["title"] == "Revisar propuesta"
+        assert body["body"] == {"contentType": "Text", "content": "Comentarios del cliente"}
+        assert body["dueDateTime"] == {"dateTime": "2026-11-05T17:00:00", "timeZone": "UTC"}
+        assert body["importance"] == "high"
+
+    @respx.mock
+    async def test_create_task_default_importance_omitted(self, harness):
+        route = respx.post(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks").mock(
+            return_value=httpx.Response(201, json=_TODO_TASK)
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo", {"operation": "create_task", "list_id": _LIST_ID, "title": "x"}
+            )
+        harness.assert_envelope(result, success=True)
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert "importance" not in body  # "normal" is the Graph default; don't send it
+
+    async def test_create_task_requires_list_id(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "create_task", "title": "x"})
+        harness.assert_envelope(result, success=False)
+        assert "list id" in result["error"].lower()
+
+    async def test_create_task_requires_title(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "create_task", "list_id": _LIST_ID})
+        harness.assert_envelope(result, success=False)
+        assert "title" in result["error"].lower()
+
+    @respx.mock
+    async def test_list_tasks_filters_completed_by_default(self, harness):
+        respx.get(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks").mock(
+            return_value=httpx.Response(200, json={"value": [_TODO_TASK]})
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "list_tasks", "list_id": _LIST_ID})
+
+        harness.assert_envelope(result, success=True)
+        payload = result["result"]
+        assert payload["count"] == 1
+        assert payload["tasks"][0]["task_id"] == _TASK_ID
+        assert payload["tasks"][0]["due"] == "2026-11-05T17:00:00.0000000"
+        sent = respx.calls.last.request
+        assert sent.url.params["$filter"] == "status ne 'completed'"
+        assert sent.url.params["$top"] == "25"
+
+    @respx.mock
+    async def test_list_tasks_show_completed_drops_filter(self, harness):
+        respx.get(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks").mock(
+            return_value=httpx.Response(200, json={"value": []})
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo", {"operation": "list_tasks", "list_id": _LIST_ID, "show_completed": True}
+            )
+        harness.assert_envelope(result, success=True)
+        assert "$filter" not in respx.calls.last.request.url.params
+
+    async def test_list_tasks_requires_list_id(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "list_tasks"})
+        harness.assert_envelope(result, success=False)
+        assert "list id" in result["error"].lower()
+
+
+class TestMsTodoUpdateCompleteDelete:
+    @respx.mock
+    async def test_update_task_patches_fields(self, harness):
+        route = respx.patch(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks/{_TASK_ID}").mock(
+            return_value=httpx.Response(200, json=_TODO_TASK)
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo",
+                {
+                    "operation": "update_task",
+                    "list_id": _LIST_ID,
+                    "task_id": _TASK_ID,
+                    "update_title": "Revisar propuesta v2",
+                    "update_due_date": "2026-11-10T09:00:00",
+                    "update_status": "inProgress",
+                },
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["task_id"] == _TASK_ID
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["title"] == "Revisar propuesta v2"
+        assert body["dueDateTime"] == {"dateTime": "2026-11-10T09:00:00", "timeZone": "UTC"}
+        assert body["status"] == "inProgress"
+
+    async def test_update_task_requires_task_id(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo", {"operation": "update_task", "list_id": _LIST_ID, "update_title": "x"}
+            )
+        harness.assert_envelope(result, success=False)
+        assert "task id" in result["error"].lower()
+
+    async def test_update_task_requires_a_field(self, harness):
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo", {"operation": "update_task", "list_id": _LIST_ID, "task_id": _TASK_ID}
+            )
+        harness.assert_envelope(result, success=False)
+        assert "update fields" in result["error"].lower()
+
+    @respx.mock
+    async def test_complete_task_sets_status_completed(self, harness):
+        route = respx.patch(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks/{_TASK_ID}").mock(
+            return_value=httpx.Response(200, json={**_TODO_TASK, "status": "completed"})
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo", {"operation": "complete_task", "list_id": _LIST_ID, "task_id": _TASK_ID}
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["completed"] is True
+        assert result["result"]["status"] == "completed"
+        import json as _json
+
+        assert _json.loads(route.calls.last.request.content) == {"status": "completed"}
+
+    @respx.mock
+    async def test_delete_task(self, harness):
+        route = respx.delete(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks/{_TASK_ID}").mock(
+            return_value=httpx.Response(204)
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute(
+                "msTodo", {"operation": "delete_task", "list_id": _LIST_ID, "task_id": _TASK_ID}
+            )
+
+        harness.assert_envelope(result, success=True)
+        assert result["result"]["deleted"] is True
+        assert result["result"]["task_id"] == _TASK_ID
+        assert route.called
+
+    @respx.mock
+    async def test_graph_error_becomes_user_error(self, harness):
+        respx.get(f"{GRAPH}/me/todo/lists/{_LIST_ID}/tasks").mock(
+            return_value=httpx.Response(
+                403,
+                json={"error": {"code": "ErrorAccessDenied", "message": "Access is denied."}},
+            )
+        )
+        with _no_refresh(), patched_container(auth_oauth_tokens=_OWNER_TOKENS), patched_pricing():
+            result = await harness.execute("msTodo", {"operation": "list_tasks", "list_id": _LIST_ID})
+        harness.assert_envelope(result, success=False)
+        assert "ErrorAccessDenied" in result["error"]

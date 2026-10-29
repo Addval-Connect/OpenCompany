@@ -116,6 +116,8 @@ model/       — LLM chat models (openai, anthropic, gemini, …, and openai_com
                a user-named endpoint); also owns the LLM provider dropdown loaders
 android/     — Android device services
 google/      — Google Workspace (gmail / calendar / drive / sheets / …)
+microsoft/   — Microsoft Graph (msMail / msCalendar / msTodo / mail_receive;
+               multi-op ActionNodes + _base.graph_request + _oauth PKCE)
 twitter/     — Twitter/X (send / search / user / receive)
 telegram/    — Telegram bot (send / receive / get_attachment)
 discord/     — Discord bot (send / action / receive / interaction).
@@ -211,6 +213,7 @@ from ._credentials import TwitterCredential              # shared with 3 sibling
 | Folder | `_credentials.py` contents | Plugins |
 |---|---|---|
 | `nodes/google/` | `GoogleCredential` (OAuth2, 7 Workspace scopes union) | gmail, calendar, drive, sheets, tasks, contacts, gmailReceive |
+| `nodes/microsoft/` | `MicrosoftCredential` (OAuth2 + PKCE, scope union from `microsoft_apis.json`) | msMail, msCalendar, msTodo, mail_receive |
 | `nodes/location/` | `GoogleMapsCredential` (API key via `?key=`) | gmaps_create / gmaps_locations / gmaps_nearby_places |
 | `nodes/twitter/` | `TwitterCredential` (OAuth2 + PKCE) | twitter_send / _search / _user / _receive |
 | `nodes/telegram/` | `TelegramCredential` (bot token + owner chat id) | telegram_send / _receive |

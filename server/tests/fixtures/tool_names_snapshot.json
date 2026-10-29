@@ -84,6 +84,7 @@
   "httpRequest": "http_request",
   "msMail": "ms_mail",
   "msCalendar": "ms_calendar",
+  "msTodo": "ms_todo",
   "anthropicChatModel": "anthropic_chat_model",
   "openaiChatModel": "openai_chat_model",
   "geminiChatModel": "gemini_chat_model"
