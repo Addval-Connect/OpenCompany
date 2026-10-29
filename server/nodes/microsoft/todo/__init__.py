@@ -124,11 +124,11 @@ def _summarize_task(t: dict) -> dict:
     }
 
 
-def _summarize_list(l: dict) -> dict:
+def _summarize_list(task_list: dict) -> dict:
     return {
-        "list_id": l.get("id"),
-        "list_name": l.get("displayName", ""),
-        "is_owner": l.get("isOwner"),
+        "list_id": task_list.get("id"),
+        "list_name": task_list.get("displayName", ""),
+        "is_owner": task_list.get("isOwner"),
     }
 
 
@@ -182,7 +182,7 @@ class TodoNode(ActionNode):
     async def _list_lists(self, ctx: NodeContext, params: TodoParams) -> TodoOutput:
         data = await graph_request(ctx, "GET", "/me/todo/lists", params={"$top": 100})
         items = (data or {}).get("value", [])
-        formatted = [_summarize_list(l) for l in items]
+        formatted = [_summarize_list(item) for item in items]
         await track_microsoft_usage(ctx.node_id, "todo_list", len(formatted), ctx.raw)
         return TodoOutput(operation="list_lists", lists=formatted, count=len(formatted))
 
