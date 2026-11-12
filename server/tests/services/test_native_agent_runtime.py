@@ -165,6 +165,37 @@ async def test_native_step_never_surfaces_raw_provider_error_text():
 
 
 @pytest.mark.asyncio
+async def test_native_step_rejects_truncated_tool_call_from_any_provider():
+    partial = ToolCall(
+        id="call-1",
+        name="one",
+        args={},
+        raw_arguments='{"value": ',
+        parse_error="Invalid JSON tool arguments: Expecting value",
+    )
+    unifier = _FakeUnifier(
+        [LLMResponse(tool_calls=[partial], finish_reason="max_tokens")]
+    )
+
+    with pytest.raises(LLMError) as caught:
+        await run_native_llm_step(
+            unifier,
+            provider="anthropic",
+            api_key="test",
+            messages=[Message(role="user", content="go")],
+            model="claude-test",
+            temperature=0,
+            max_tokens=100,
+            tools=[_tool("one")],
+            explicit_max_retries=0,
+            translate_errors=False,
+        )
+
+    assert caught.value.category is LLMErrorCategory.OUTPUT_TRUNCATED
+    assert caught.value.retryable is False
+
+
+@pytest.mark.asyncio
 async def test_native_loop_replays_assistant_and_accumulates_usage():
     first_message = Message(
         role="assistant",
@@ -214,6 +245,45 @@ async def test_native_loop_replays_assistant_and_accumulates_usage():
         total_tokens=36,
     )
     assert result["thinking_content"] == "plan\n\n--- Iteration 2 ---\nanswer"
+
+
+@pytest.mark.asyncio
+async def test_native_loop_stops_on_repeated_truncated_tool_call():
+    partial = ToolCall(
+        id="call-1",
+        name="one",
+        args={},
+        raw_arguments='{"value": ',
+        parse_error="Invalid JSON tool arguments: Expecting value",
+    )
+    unifier = _FakeUnifier(
+        [
+            LLMResponse(tool_calls=[partial], finish_reason="tool_calls"),
+            LLMResponse(tool_calls=[partial], finish_reason="tool_calls"),
+        ]
+    )
+    executed = []
+
+    async def execute(name, args):
+        executed.append((name, args))
+        return {"ok": True}
+
+    result = await run_native_agent_loop(
+        unifier,
+        provider="openrouter",
+        api_key="test",
+        model="glm-test",
+        temperature=0.2,
+        max_tokens=100,
+        initial_messages=[Message(role="user", content="go")],
+        tools=[_tool("one")],
+        tool_executor=execute,
+    )
+
+    assert executed == []
+    assert result["truncated"] is True
+    assert result["error_type"] == "AgentNoProgress"
+    assert "Agent stopped" in result["messages"][-1].content
 
 
 @pytest.mark.asyncio

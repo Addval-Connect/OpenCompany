@@ -4,11 +4,19 @@ These tests verify the internal conversion logic without hitting real APIs.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.llm.protocol import Message, ThinkingConfig, ToolCall, ToolDef
+from services.llm.protocol import (
+    LLMError,
+    LLMErrorCategory,
+    Message,
+    ThinkingConfig,
+    ToolCall,
+    ToolDef,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +319,132 @@ class TestOpenAIProvider:
         result = provider._normalize(resp, "o3-mini")
         assert result.thinking == "Thinking..."
         assert result.usage.reasoning_tokens == 20
+
+    @staticmethod
+    def _chat_response(
+        *,
+        content: str = "",
+        tool_calls=None,
+        finish_reason: str = "stop",
+        native_finish_reason=None,
+        error=None,
+        response_id: str = "gen-test",
+    ):
+        choice = SimpleNamespace(
+            message=SimpleNamespace(
+                content=content,
+                reasoning_content=None,
+                reasoning=None,
+                refusal=None,
+                tool_calls=tool_calls,
+                reasoning_details=None,
+            ),
+            finish_reason=finish_reason,
+            native_finish_reason=native_finish_reason,
+            error=error,
+        )
+        return SimpleNamespace(
+            choices=[choice],
+            usage=SimpleNamespace(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                completion_tokens_details=None,
+            ),
+            id=response_id,
+        )
+
+    @staticmethod
+    def _partial_tool_call():
+        return SimpleNamespace(
+            id="tc_1",
+            function=SimpleNamespace(name="data", arguments='{"content": '),
+        )
+
+    @staticmethod
+    def _openrouter_timeout_error():
+        return {
+            "code": 504,
+            "message": "The provider did not respond within the allowed time.",
+            "metadata": {"error_type": "timeout"},
+        }
+
+    def test_normalize_aborted_partial_generation_fails_fast(self, provider):
+        resp = self._chat_response(
+            tool_calls=[self._partial_tool_call()],
+            finish_reason="error",
+            native_finish_reason="timeout",
+            error=self._openrouter_timeout_error(),
+        )
+
+        with pytest.raises(LLMError) as caught:
+            provider._normalize(resp, "z-ai/glm-5.3-flash")
+
+        assert caught.value.category is LLMErrorCategory.OUTPUT_TRUNCATED
+        assert caught.value.retryable is False
+        assert caught.value.provider_code == "timeout"
+        assert caught.value.request_id == "gen-test"
+
+    def test_normalize_aborted_empty_generation_stays_retryable_timeout(
+        self, provider
+    ):
+        resp = self._chat_response(
+            finish_reason="error",
+            native_finish_reason="timeout",
+            error=self._openrouter_timeout_error(),
+        )
+
+        with pytest.raises(LLMError) as caught:
+            provider._normalize(resp, "z-ai/glm-5.3-flash")
+
+        assert caught.value.category is LLMErrorCategory.TIMEOUT
+        assert caught.value.retryable is True
+
+    def test_normalize_length_truncated_tool_call_fails_fast(self, provider):
+        resp = self._chat_response(
+            tool_calls=[self._partial_tool_call()],
+            finish_reason="length",
+        )
+
+        with pytest.raises(LLMError) as caught:
+            provider._normalize(resp, "z-ai/glm-5.3-flash")
+
+        assert caught.value.category is LLMErrorCategory.OUTPUT_TRUNCATED
+        assert caught.value.retryable is False
+
+    def test_normalize_records_native_finish_reason(self, provider):
+        resp = self._chat_response(
+            finish_reason="tool_calls",
+            native_finish_reason="tool_calls",
+            tool_calls=[
+                SimpleNamespace(
+                    id="tc_1",
+                    function=SimpleNamespace(name="data", arguments='{"x": 1}'),
+                )
+            ],
+        )
+
+        result = provider._normalize(resp, "z-ai/glm-5.3-flash")
+
+        assert result.finish_reason == "tool_calls"
+        assert result.native_finish_reason == "tool_calls"
+
+    def test_error_mapping_is_safe_against_mock_objects(self):
+        """Regression: `_mapping` must not recurse on duck-typed objects.
+
+        ``MagicMock`` auto-vivifies every attribute, so the unguarded
+        ``_mapping(metadata)`` recursion ran away and consumed gigabytes of
+        RAM until the kernel OOM-killer killed the test run (2026-11-12).
+        """
+
+        from services.llm.providers.openai import OpenAIProvider
+
+        assert OpenAIProvider._mapping(MagicMock()) == {}
+        assert OpenAIProvider._mapping(MagicMock(metadata=MagicMock())) == {}
+        assert OpenAIProvider._mapping(None) == {}
+        assert OpenAIProvider._mapping(
+            {"code": 504, "metadata": {"error_type": "timeout"}}
+        ) == {"code": 504, "metadata": {"error_type": "timeout"}}
 
     @pytest.mark.asyncio
     async def test_chat_reasoning_model_uses_max_completion_tokens(self, provider):

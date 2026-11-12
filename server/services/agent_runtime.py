@@ -23,6 +23,7 @@ from typing import (
 from pydantic import BaseModel, ValidationError
 
 from core.logging import get_logger
+from services.agent_progress import NoProgressGuard
 from services.llm.media import (
     hydrate_image_blocks,
     image_blocks_from_tool_result,
@@ -30,6 +31,7 @@ from services.llm.media import (
 from services.llm.messages import filter_empty_messages
 from services.llm.protocol import (
     LLMError,
+    LLMErrorCategory,
     LLMResponse,
     Message,
     ThinkingConfig,
@@ -95,6 +97,80 @@ def add_usage(total: Usage, current: Optional[Usage]) -> Usage:
     )
 
 
+_TRUNCATED_FINISH_REASONS = frozenset(
+    {"error", "length", "max_tokens", "max_output_tokens"}
+)
+
+
+def _truncation_error(
+    response: LLMResponse,
+    provider: str,
+) -> Optional[LLMError]:
+    """Return a typed error when the provider cut the turn short.
+
+    The OpenAI/OpenRouter adapter already raises with the provider's error
+    metadata.  This shared guard covers the other native providers and any
+    adapter that reports the cut only through ``finish_reason``:
+
+    * ``error`` with partial content/tool calls — the generation was aborted
+      mid-turn; never treat it as a model answer.
+    * ``length``/``max_tokens`` with a malformed tool call — the arguments
+      were cut mid-JSON; executing or retrying them is a loop.
+    """
+
+    finish = str(response.finish_reason or "").strip().lower()
+    if finish not in _TRUNCATED_FINISH_REASONS:
+        return None
+
+    calls = list(response.tool_calls or ())
+    has_content = bool((response.content or "").strip())
+    if finish == "error":
+        has_partial = bool(calls or has_content)
+        return LLMError(
+            message=(
+                "Provider aborted the generation "
+                f"(finish_reason=error, provider={provider}, "
+                f"partial_output={has_partial})"
+            ),
+            provider=provider,
+            category=(
+                LLMErrorCategory.OUTPUT_TRUNCATED
+                if has_partial
+                else LLMErrorCategory.PROTOCOL
+            ),
+            retryable=False,
+            public_message=(
+                (
+                    "The model provider stopped generating before the response "
+                    "was complete. Nothing from the partial response was applied. "
+                    "Retry the turn, or use a model that can finish this request "
+                    "within the provider's time limit."
+                )
+                if has_partial
+                else None
+            ),
+        )
+
+    truncated = next((call for call in calls if call.parse_error), None)
+    if truncated is None:
+        return None
+    return LLMError(
+        message=(
+            "Provider returned a truncated tool call "
+            f"(finish_reason={finish}, provider={provider}, "
+            f"tool={truncated.name})"
+        ),
+        provider=provider,
+        category=LLMErrorCategory.OUTPUT_TRUNCATED,
+        retryable=False,
+        public_message=(
+            "The model's tool call was cut off before it was complete. "
+            "Nothing was executed. Retry the turn, or use a model that can "
+            "complete the request within the provider's limit."
+        ),
+    )
+
+
 async def run_native_llm_step(
     chat_unifier,
     *,
@@ -130,7 +206,7 @@ async def run_native_llm_step(
     attempts = max(0, int(explicit_max_retries)) + 1
     for attempt in range(attempts):
         try:
-            return await chat_unifier.chat(
+            response = await chat_unifier.chat(
                 provider=provider,
                 api_key=api_key,
                 messages=prepared,
@@ -144,6 +220,10 @@ async def run_native_llm_step(
                 # Preserve structured metadata until this agent-step boundary.
                 translate_errors=False,
             )
+            truncation = _truncation_error(response, provider)
+            if truncation is not None:
+                raise truncation
+            return response
         except LLMError as error:
             if not error.retryable or attempt + 1 >= attempts:
                 if not translate_errors:
@@ -232,6 +312,7 @@ async def run_native_agent_loop(
     thinking_parts: List[str] = []
     last_response: Optional[LLMResponse] = None
     iteration = 0
+    no_progress = NoProgressGuard()
     async def save_now() -> None:
         """Persist the full current transcript; never fails the loop."""
         if conversation_saver is None:
@@ -339,8 +420,11 @@ async def run_native_agent_loop(
 
         specs = _tool_specs_by_name(current_tools)
         iteration_new_tools: List[AgentToolSpec] = []
+        iteration_failures: List[tuple[str, str]] = []
+        iteration_executable = False
         for call_index, call in enumerate(calls, start=1):
             if call.name not in specs:
+                iteration_failures.append((str(call.name or ""), ""))
                 result: Any = {
                     "error": "Unknown tool",
                     "details": (
@@ -350,6 +434,9 @@ async def run_native_agent_loop(
             else:
                 args, validation_error = _validated_tool_args(call, specs)
                 if validation_error:
+                    iteration_failures.append(
+                        (str(call.name or ""), call.raw_arguments or "")
+                    )
                     result = {
                         "error": "Invalid tool arguments",
                         "details": validation_error,
@@ -357,6 +444,7 @@ async def run_native_agent_loop(
                     if call.raw_arguments is not None:
                         result["raw_arguments"] = call.raw_arguments
                 else:
+                    iteration_executable = True
                     try:
                         # AgentToolSpec.execution is the trusted server-side
                         # config consumed by execute_tool. Attach the provider
@@ -426,6 +514,32 @@ async def run_native_agent_loop(
                 len(iteration_new_tools),
                 len(current_tools),
             )
+
+        stop_reason = no_progress.observe(
+            failures=iteration_failures,
+            executable=iteration_executable,
+        )
+        if stop_reason is not None:
+            terminal_message = no_progress.message(stop_reason)
+            logger.warning(
+                "[Agent loop] stopping after no progress: %s (iteration %d)",
+                stop_reason,
+                iteration,
+            )
+            messages.append(
+                Message(role="assistant", content=terminal_message)
+            )
+            await save_now()
+            return {
+                "messages": messages,
+                "iteration": iteration,
+                "thinking_content": "\n\n".join(thinking_parts) or None,
+                "truncated": True,
+                "error_type": "AgentNoProgress",
+                "error": terminal_message,
+                "usage": usage,
+                "response": last_response,
+            }
 
     terminal = Message(
         role="assistant",

@@ -323,7 +323,34 @@ async def _execute_native_llm_step(payload: Dict[str, Any]) -> Dict[str, Any]:
             detail=f"LLM step waiting: {payload.get('model')}",
         )
     except LLMError as error:
+        activity.logger.warning(
+            "[llm-step] provider failure: category=%s provider_code=%s "
+            "request_id=%s detail=%s",
+            getattr(getattr(error, "category", None), "value", "unknown"),
+            getattr(error, "provider_code", None) or "-",
+            getattr(error, "request_id", None) or "-",
+            getattr(error, "message", ""),
+        )
         raise _as_temporal_llm_error(error) from error
+
+    provider_error = response.provider_error or {}
+    error_metadata = provider_error.get("metadata")
+    if not isinstance(error_metadata, dict):
+        error_metadata = {}
+    activity.logger.info(
+        "[llm-step] finish_reason=%s native_finish_reason=%s "
+        "provider_error_type=%s tool_calls=%d parse_errors=%d",
+        response.finish_reason,
+        response.native_finish_reason or "-",
+        (
+            error_metadata.get("error_type")
+            or provider_error.get("error_type")
+            or provider_error.get("type")
+            or "-"
+        ),
+        len(response.tool_calls or []),
+        sum(1 for call in (response.tool_calls or []) if call.parse_error),
+    )
 
     assistant = response.assistant_message or Message(
         role="assistant",

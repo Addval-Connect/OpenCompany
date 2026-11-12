@@ -462,6 +462,24 @@ class TestConversationIdentity:
         result_payload = source.index('"root_execution_id": root_execution_id')
         assert initialization < tool_loop < result_payload
 
+    def test_no_progress_guard_stops_unusable_tool_loops(self):
+        import inspect
+
+        from services.temporal.agent_workflow import AgentWorkflow
+
+        source = inspect.getsource(AgentWorkflow.run)
+        assert "NoProgressGuard" in source
+        assert "iteration_failures" in source
+        assert "no_progress.observe" in source
+        assert '"AgentNoProgress"' in source
+        # The executable flag must be set for BOTH the delegation branch and
+        # the regular-tool branch.  A previous placement inside the
+        # delegation-only block made every regular tool call look barren.
+        assert (
+            "                iteration_executable = True\n"
+            "                call_metadata = _tool_call_metadata("
+        ) in source
+
     def test_same_turn_delegations_start_before_ordered_await(self):
         import inspect
 

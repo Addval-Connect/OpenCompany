@@ -7,11 +7,13 @@ Also used as base for OpenRouter (same API shape, different base_url).
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from core.logging import get_logger
 from services.llm.protocol import (
     ContentBlock,
+    LLMError,
+    LLMErrorCategory,
     LLMResponse,
     Message,
     ThinkingConfig,
@@ -21,6 +23,47 @@ from services.llm.protocol import (
 )
 
 logger = get_logger(__name__)
+
+
+# OpenRouter normalizes provider failures into a stable ``error_type``
+# vocabulary.  Map the ones that can arrive on an HTTP 200 (mid-generation)
+# to our retry categories.  Unknown values fail fast: a generation that
+# already started and was aborted is not safe to treat as a model turn.
+_PROVIDER_ERROR_CATEGORIES: Dict[str, LLMErrorCategory] = {
+    "timeout": LLMErrorCategory.TIMEOUT,
+    "rate_limit_exceeded": LLMErrorCategory.RATE_LIMIT,
+    "provider_overloaded": LLMErrorCategory.SERVER,
+    "provider_unavailable": LLMErrorCategory.SERVER,
+    "server": LLMErrorCategory.SERVER,
+    "server_error": LLMErrorCategory.SERVER,
+    "unmapped": LLMErrorCategory.SERVER,
+    "context_length_exceeded": LLMErrorCategory.CONTEXT_LENGTH,
+    "max_tokens_exceeded": LLMErrorCategory.CONTEXT_LENGTH,
+    "token_limit_exceeded": LLMErrorCategory.CONTEXT_LENGTH,
+    "content_policy_violation": LLMErrorCategory.PERMISSION,
+    "refusal": LLMErrorCategory.PERMISSION,
+    "authentication": LLMErrorCategory.AUTHENTICATION,
+    "permission_denied": LLMErrorCategory.PERMISSION,
+    "invalid_request": LLMErrorCategory.INVALID_REQUEST,
+    "invalid_prompt": LLMErrorCategory.INVALID_REQUEST,
+    "not_found": LLMErrorCategory.NOT_FOUND,
+    "payload_too_large": LLMErrorCategory.INVALID_REQUEST,
+    "unprocessable": LLMErrorCategory.INVALID_REQUEST,
+}
+_RETRYABLE_LLM_CATEGORIES = frozenset(
+    {
+        LLMErrorCategory.TIMEOUT,
+        LLMErrorCategory.RATE_LIMIT,
+        LLMErrorCategory.CONNECTION,
+        LLMErrorCategory.SERVER,
+    }
+)
+_TRUNCATED_PUBLIC_MESSAGE = (
+    "The model provider stopped generating before the response was "
+    "complete. Nothing from the partial response was applied. Retry the "
+    "turn, or use a model that can finish this request within the "
+    "provider's time limit."
+)
 
 
 class OpenAIProvider:
@@ -86,6 +129,188 @@ class OpenAIProvider:
                 f"The server at {url} answered without a completion. "
                 "Check the base URL configured for this provider."
             ),
+        )
+
+    # ------------------------------------------------------------------
+    # generation-abort detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mapping(value: Any) -> Dict[str, Any]:
+        """Coerce an SDK object / dict into a plain error mapping.
+
+        Defensive against duck-typed stand-ins (e.g. ``MagicMock`` in tests):
+        ``getattr`` on those auto-vivifies every attribute, so an unguarded
+        ``metadata`` recursion here ran away and consumed gigabytes of RAM
+        until the OOM killer fired (2026-11-12).  Only real mappings and
+        scalars are captured; anything else is treated as absent.
+        """
+
+        if isinstance(value, Mapping):
+            return dict(value)
+        if value is None or isinstance(value, (bool, int, float, str, bytes)):
+            return {}
+        dump = getattr(value, "model_dump", None)
+        if dump is not None:
+            try:
+                data = dump(mode="json", exclude_none=True)
+            except TypeError:
+                data = dump()
+            if isinstance(data, Mapping):
+                return dict(data)
+        result: Dict[str, Any] = {}
+        for key in ("code", "message", "type", "error_type", "request_id"):
+            item = getattr(value, key, None)
+            if isinstance(item, (bool, int, float, str)):
+                result[key] = item
+        metadata = getattr(value, "metadata", None)
+        if isinstance(metadata, Mapping):
+            result["metadata"] = OpenAIProvider._mapping(metadata)
+        return result
+
+    def _choice_error_payload(self, choice: Any, resp: Any) -> Dict[str, Any]:
+        """Read the error OpenRouter embeds beside a partial choice."""
+
+        error = getattr(choice, "error", None)
+        if error is None:
+            extra = getattr(choice, "model_extra", None)
+            if isinstance(extra, Mapping):
+                error = extra.get("error")
+        if error is None:
+            extra = getattr(resp, "model_extra", None)
+            if isinstance(extra, Mapping):
+                error = extra.get("error")
+        if error is None:
+            error = getattr(resp, "error", None)
+        return self._mapping(error)
+
+    @staticmethod
+    def _native_finish_reason(choice: Any) -> Optional[str]:
+        native = getattr(choice, "native_finish_reason", None)
+        if native is None:
+            extra = getattr(choice, "model_extra", None)
+            if isinstance(extra, Mapping):
+                native = extra.get("native_finish_reason")
+        return str(native) if native else None
+
+    def _generation_error(
+        self,
+        choice: Any,
+        resp: Any,
+        *,
+        model: str,
+        has_partial: bool,
+    ) -> LLMError:
+        """Build a typed failure for a 2xx generation that was aborted.
+
+        OpenRouter returns HTTP 200 with ``finish_reason="error"`` and a
+        partially emitted message/tool call.  A partial generation is never a
+        model turn: with partial output we fail fast and non-retryably, so a
+        long request that deterministically hits a provider deadline cannot
+        become an invalid-JSON retry loop.  A no-output failure keeps the
+        normal retry classification (timeout / rate limit / server).
+        """
+
+        error = self._choice_error_payload(choice, resp)
+        metadata = self._mapping(error.get("metadata"))
+        error_type = str(
+            metadata.get("error_type")
+            or error.get("error_type")
+            or error.get("type")
+            or ""
+        ).strip().lower()
+        native = self._native_finish_reason(choice)
+
+        if has_partial:
+            category = LLMErrorCategory.OUTPUT_TRUNCATED
+            retryable = False
+        else:
+            category = _PROVIDER_ERROR_CATEGORIES.get(
+                error_type, LLMErrorCategory.UNKNOWN
+            )
+            retryable = category in _RETRYABLE_LLM_CATEGORIES
+
+        raw_code = error.get("code")
+        request_id = (
+            str(getattr(resp, "id", "") or error.get("request_id") or "")
+            or None
+        )
+        return LLMError(
+            message=(
+                f"{self.provider_name} generation aborted "
+                f"(finish_reason=error, error_type={error_type or 'unknown'}, "
+                f"native_finish_reason={native or '-'}, model={model}, "
+                f"partial_output={has_partial})"
+            ),
+            provider=self.provider_name,
+            category=category,
+            retryable=retryable,
+            status_code=raw_code if isinstance(raw_code, int) else None,
+            provider_code=error_type or None,
+            request_id=request_id,
+            public_message=_TRUNCATED_PUBLIC_MESSAGE if has_partial else None,
+        )
+
+    def _truncated_tool_call_error(
+        self,
+        *,
+        model: str,
+        finish_reason: str,
+        call: ToolCall,
+    ) -> LLMError:
+        raw = call.raw_arguments or ""
+        return LLMError(
+            message=(
+                f"{self.provider_name} truncated a tool call "
+                f"(finish_reason={finish_reason}, model={model}, "
+                f"tool={call.name}, raw_arguments_length={len(raw)})"
+            ),
+            provider=self.provider_name,
+            category=LLMErrorCategory.OUTPUT_TRUNCATED,
+            retryable=False,
+            public_message=_TRUNCATED_PUBLIC_MESSAGE,
+        )
+
+    def _responses_generation_error(
+        self,
+        resp: Any,
+        *,
+        model: str,
+        has_partial: bool,
+    ) -> LLMError:
+        """Typed failure for a failed/incomplete Responses API turn."""
+
+        error = self._mapping(getattr(resp, "error", None))
+        error_type = str(
+            getattr(resp, "error_type", None)
+            or error.get("code")
+            or error.get("type")
+            or ""
+        ).strip().lower()
+        status = str(getattr(resp, "status", "") or "").strip().lower()
+
+        if has_partial:
+            category = LLMErrorCategory.OUTPUT_TRUNCATED
+            retryable = False
+        else:
+            category = _PROVIDER_ERROR_CATEGORIES.get(
+                error_type, LLMErrorCategory.UNKNOWN
+            )
+            retryable = category in _RETRYABLE_LLM_CATEGORIES
+
+        return LLMError(
+            message=(
+                f"{self.provider_name} Responses generation failed "
+                f"(status={status or 'unknown'}, "
+                f"error_type={error_type or 'unknown'}, model={model}, "
+                f"partial_output={has_partial})"
+            ),
+            provider=self.provider_name,
+            category=category,
+            retryable=retryable,
+            provider_code=error_type or None,
+            request_id=str(getattr(resp, "id", "") or "") or None,
+            public_message=_TRUNCATED_PUBLIC_MESSAGE if has_partial else None,
         )
 
     # ------------------------------------------------------------------
@@ -444,6 +669,36 @@ class OpenAIProvider:
                 tool_calls.append(call)
                 blocks.append(ContentBlock(type="tool_call", tool_call=call))
 
+        # A 2xx is not automatically a model turn.  OpenRouter reports a
+        # mid-generation provider failure as finish_reason="error" with the
+        # partial message/tool call still attached.  Treating that as a valid
+        # turn is what turned a ~90 s provider deadline into an invalid-JSON
+        # retry loop (H1).  ``length`` with a malformed tool call is the same
+        # class: the model was cut mid-arguments.
+        finish_reason = str(
+            getattr(choice, "finish_reason", "") or "stop"
+        ).strip()
+        finish_reason_lower = finish_reason.lower()
+        native_finish_reason = self._native_finish_reason(choice)
+        if finish_reason_lower == "error":
+            raise self._generation_error(
+                choice,
+                resp,
+                model=model,
+                has_partial=bool(content or tool_calls),
+            )
+        if finish_reason_lower in {"length", "max_tokens"}:
+            truncated = next(
+                (call for call in tool_calls if call.parse_error),
+                None,
+            )
+            if truncated is not None:
+                raise self._truncated_tool_call_error(
+                    model=model,
+                    finish_reason=finish_reason_lower,
+                    call=truncated,
+                )
+
         u = resp.usage
         usage = Usage(
             input_tokens=getattr(u, "prompt_tokens", 0) if u else 0,
@@ -486,7 +741,11 @@ class OpenAIProvider:
             tool_calls=tool_calls,
             usage=usage,
             model=model,
-            finish_reason=choice.finish_reason or "stop",
+            finish_reason=finish_reason,
+            native_finish_reason=native_finish_reason,
+            provider_error=(
+                self._choice_error_payload(choice, resp) or None
+            ),
             raw=resp,
             assistant_message=assistant_message,
         )
@@ -542,6 +801,33 @@ class OpenAIProvider:
                 tool_calls.append(call)
                 blocks.append(ContentBlock(type="tool_call", tool_call=call))
 
+        # The Responses API reports a terminal failure as ``status="failed"``
+        # and a length cut as ``status="incomplete"`` +
+        # ``incomplete_details.reason="max_output_tokens"``.  A failed turn
+        # must not be returned as a model answer; a truncated tool turn is
+        # the same invalid-JSON loop risk as in Chat Completions.
+        status = str(getattr(resp, "status", "") or "").strip().lower()
+        incomplete_reason = str(
+            getattr(getattr(resp, "incomplete_details", None), "reason", "")
+            or ""
+        ).strip().lower()
+        if status == "failed":
+            raise self._responses_generation_error(
+                resp,
+                model=model,
+                has_partial=bool(text_parts or tool_calls),
+            )
+        if (
+            status == "incomplete"
+            and incomplete_reason in {"max_output_tokens", "max_tokens"}
+            and tool_calls
+        ):
+            raise self._responses_generation_error(
+                resp,
+                model=model,
+                has_partial=True,
+            )
+
         usage_obj = getattr(resp, "usage", None)
         input_details = getattr(usage_obj, "input_tokens_details", None)
         output_details = getattr(usage_obj, "output_tokens_details", None)
@@ -590,9 +876,11 @@ class OpenAIProvider:
             tool_calls=tool_calls,
             usage=usage,
             model=str(getattr(resp, "model", "") or model),
-            finish_reason=str(
-                getattr(resp, "status", "") or "stop"
-            ).lower(),
+            finish_reason=status or "stop",
+            native_finish_reason=status or None,
+            provider_error=(
+                self._mapping(getattr(resp, "error", None)) or None
+            ),
             raw=resp,
             assistant_message=assistant_message,
         )

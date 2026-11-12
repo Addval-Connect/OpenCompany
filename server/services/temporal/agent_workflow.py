@@ -55,6 +55,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy  # kept for type hints
 from temporalio.workflow import ActivityCancellationType, ParentClosePolicy
 
+from services.agent_progress import NoProgressGuard
 from services.node_registry import get_node_class
 from services.tool_output import bound_tool_output, tool_output_is_capped
 
@@ -828,6 +829,7 @@ class AgentWorkflow:
 
         # ---- Main loop --------------------------------------------------
         iteration_offset = int(resume.get("iteration") or 0)
+        no_progress = NoProgressGuard()
         for iteration in range(iteration_offset, max_iterations):
             await self._wait_until_resumed()
             workflow.logger.info(f"AgentWorkflow iteration {iteration} " f"(messages={len(messages)} tools={len(tools)})")
@@ -1037,6 +1039,8 @@ class AgentWorkflow:
             # Admit the resulting tool/delegation command batch afresh.
             await self._wait_until_resumed()
             calls = step_result.get("calls") or []
+            iteration_failures: List[tuple[str, str]] = []
+            iteration_executable = False
             workflow.logger.info(f"AgentWorkflow scheduling {len(calls)} tool call(s)")
 
             # Start delegation children before awaiting their results.  The
@@ -1604,6 +1608,12 @@ class AgentWorkflow:
                     # throwing during normalization. Return a deterministic
                     # tool result and let the model repair its invocation on
                     # the next turn; never execute partially parsed args.
+                    iteration_failures.append(
+                        (
+                            str(call.get("name", "") or ""),
+                            str(call.get("raw_arguments") or ""),
+                        )
+                    )
                     _append_tool_result_message(
                         messages,
                         content=_serialise_tool_result(
@@ -1613,6 +1623,18 @@ class AgentWorkflow:
                                 "raw_arguments": str(
                                     call.get("raw_arguments") or ""
                                 ),
+                                # A truncated provider response is the common
+                                # cause of this error.  Telling the model to
+                                # repeat a shorter operation is what breaks
+                                # the deterministic retry loop; the
+                                # NoProgressGuard below is the hard stop if
+                                # the model ignores it.
+                                "hint": (
+                                    "The provider may have truncated a long "
+                                    "response. Do not repeat the same call; "
+                                    "split large content into smaller writes "
+                                    "or use append."
+                                ),
                             }
                         ),
                         tool_call_id=call.get("id", ""),
@@ -1621,6 +1643,9 @@ class AgentWorkflow:
                     continue
                 tool_info = tool_index.get(call.get("name", ""))
                 if tool_info is None:
+                    iteration_failures.append(
+                        (str(call.get("name", "") or ""), "")
+                    )
                     workflow.logger.warning(f"AgentWorkflow: LLM called unknown tool {call.get('name')!r}; " "returning error to model")
                     _append_tool_result_message(
                         messages,
@@ -1668,6 +1693,7 @@ class AgentWorkflow:
                     if not task_description and not task_context:
                         # Invalid invocation — reject at the call boundary
                         # instead of spawning a child that cannot run.
+                        iteration_failures.append((str(tool_name or ""), ""))
                         _append_tool_result_message(
                             messages,
                             content=(
@@ -1680,6 +1706,7 @@ class AgentWorkflow:
                         )
                         continue
                     if delegation_depth >= max_delegation_depth:
+                        iteration_failures.append((str(tool_name or ""), ""))
                         _append_tool_result_message(
                             messages,
                             content=(
@@ -1718,6 +1745,7 @@ class AgentWorkflow:
                         child_nodes = []
                         child_edges = []
 
+                iteration_executable = True
                 call_metadata = _tool_call_metadata(
                     agent_node_id=agent_node_id,
                     iteration=iteration,
@@ -2389,6 +2417,33 @@ class AgentWorkflow:
                         )
                         + ")"
                     )
+
+            stop_reason = no_progress.observe(
+                failures=iteration_failures,
+                executable=iteration_executable,
+            )
+            if stop_reason is not None:
+                workflow.logger.warning(
+                    "AgentWorkflow: stopping after no progress "
+                    f"({stop_reason}) at iteration {iteration + 1}"
+                )
+                await self._emit_phase(
+                    agent_node_id,
+                    agent_workflow_id,
+                    iteration,
+                    max_iterations,
+                    phase="failed",
+                    status="error",
+                )
+                return {
+                    "success": False,
+                    "error": no_progress.message(stop_reason),
+                    "error_type": "AgentNoProgress",
+                    "result": {
+                        "iterations": iteration + 1,
+                        "usage": usage_total,
+                    },
+                }
 
             # ---- Continue-as-new -------------------------------------
             # Only at a clean turn boundary, and never while a delegation

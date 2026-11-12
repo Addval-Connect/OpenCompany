@@ -262,6 +262,14 @@ class LLMResponse:
     billing_usage: Optional[Usage] = None
     model: str = ""
     finish_reason: str = "stop"
+    # Provider-native terminal reason when it differs from the normalized
+    # ``finish_reason`` (OpenRouter exposes e.g. ``native_finish_reason``).
+    # Diagnostics only: never drives control flow.
+    native_finish_reason: Optional[str] = None
+    # Structured provider error object for a 2xx response that still carried
+    # an error (OpenRouter embeds one alongside partial output). Diagnostics
+    # and error classification only; never replayed to the provider.
+    provider_error: Optional[Dict[str, Any]] = None
     raw: Any = None
     assistant_message: Optional[Message] = None
 
@@ -315,6 +323,12 @@ class LLMErrorCategory(str, Enum):
     TIMEOUT = "timeout"
     CONNECTION = "connection"
     SERVER = "server"
+    # The provider started generating and then stopped before the turn was
+    # complete (mid-stream provider timeout, or a tool call cut by the output
+    # limit). The partial response is not a model turn: it must never be
+    # appended to the transcript or executed. Distinct from TIMEOUT because
+    # retrying the same long request is unlikely to help and can re-bill it.
+    OUTPUT_TRUNCATED = "output_truncated"
     # A 2xx whose body is not a completion: the request reached something
     # that does not speak this wire format at that path (RFC-0003 D9).
     PROTOCOL = "protocol"
@@ -420,6 +434,12 @@ class LLMError(Exception):
             ),
             LLMErrorCategory.SERVER.value: (
                 f"{provider} is temporarily unavailable."
+            ),
+            LLMErrorCategory.OUTPUT_TRUNCATED.value: (
+                f"{provider} stopped generating before the response was "
+                "complete. Nothing from the partial response was applied. "
+                "Retry the turn, or use a model that can finish this "
+                "request within the provider's time limit."
             ),
             LLMErrorCategory.PROTOCOL.value: (
                 f"{provider} answered without a completion. "
