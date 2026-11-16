@@ -207,3 +207,99 @@ async def test_unconfigured_node_error_names_the_override_path(rpc_log):
             _ctx(cfg=OdooJsonRpcParams()),
             OdooJsonRpcToolInput(model="res.partner", method="search_count"),
         )
+
+
+# --------------------------------------------------------------------------- #
+# Output language knob (2026-11-11) — optional operator-side context.lang.
+# Raw RPC reads answer in the source language (en_US) even when the target
+# instance has es_CL installed; injecting context.lang makes translated
+# fields (account names, taxes, products) come back localized.
+# --------------------------------------------------------------------------- #
+
+
+SPANISH = OdooJsonRpcParams(
+    host="configured.odoo.com",
+    db="cfg-db",
+    username="cfg@addval.cl",
+    api_key="cfg-key",
+    timeout=30,
+    lang="es_CL",
+)
+
+
+@pytest.mark.asyncio
+async def test_node_lang_is_injected_as_context_lang(rpc_log):
+    node = OdooJsonRpcNode()
+    out = await node.query(
+        _ctx(cfg=SPANISH),
+        OdooJsonRpcToolInput(model="account.account", method="search_read"),
+    )
+    assert out.ok is True
+    _url, _service, exec_args = rpc_log[1]
+    kwargs = exec_args[-1]
+    assert kwargs["context"]["lang"] == "es_CL"
+
+
+@pytest.mark.asyncio
+async def test_empty_lang_keeps_kwargs_untouched(rpc_log):
+    """Default behaviour: no context key at all — identical to pre-knob calls."""
+    node = OdooJsonRpcNode()
+    await node.query(
+        _ctx(),
+        OdooJsonRpcToolInput(model="res.partner", method="search_read"),
+    )
+    _url, _service, exec_args = rpc_log[1]
+    assert "context" not in exec_args[-1]
+
+
+@pytest.mark.asyncio
+async def test_node_lang_wins_over_model_lang_and_keeps_other_keys(rpc_log):
+    """Operator intent is deterministic: forced lang, preserved extra keys."""
+    node = OdooJsonRpcNode()
+    await node.query(
+        _ctx(cfg=SPANISH),
+        OdooJsonRpcToolInput(
+            model="res.partner",
+            method="search_read",
+            kwargs={"context": {"lang": "en_US", "tz": "America/Santiago"}},
+        ),
+    )
+    _url, _service, exec_args = rpc_log[1]
+    context = exec_args[-1]["context"]
+    assert context["lang"] == "es_CL"
+    assert context["tz"] == "America/Santiago"
+
+
+@pytest.mark.asyncio
+async def test_lang_applies_to_every_method_shape(rpc_log):
+    """The kwargs dict is always the last positional arg for every method."""
+    node = OdooJsonRpcNode()
+    methods = [
+        OdooJsonRpcToolInput(model="res.partner", method="search_count"),
+        OdooJsonRpcToolInput(model="res.partner", method="read", ids=[1]),
+        OdooJsonRpcToolInput(model="res.partner", method="create", values={"name": "x"}),
+        OdooJsonRpcToolInput(
+            model="res.partner", method="call", method_name="some_custom_method"
+        ),
+    ]
+    for tool_input in methods:
+        rpc_log.clear()
+        await node.query(_ctx(cfg=SPANISH), tool_input)
+        _url, _service, exec_args = rpc_log[1]
+        assert exec_args[-1]["context"]["lang"] == "es_CL", tool_input.method
+
+
+@pytest.mark.asyncio
+async def test_lang_survives_per_call_instance_override(rpc_log):
+    """lang/timeout are operational knobs, not instance identity."""
+    node = OdooJsonRpcNode()
+    await node.query(
+        _ctx(cfg=SPANISH),
+        OdooJsonRpcToolInput(
+            model="res.partner", method="search_count", **OVERRIDE_ARGS
+        ),
+    )
+    login_url, _service, _login_args = rpc_log[0]
+    assert login_url == "https://target.odoo.com/jsonrpc"
+    _url, _service, exec_args = rpc_log[1]
+    assert exec_args[-1]["context"]["lang"] == "es_CL"

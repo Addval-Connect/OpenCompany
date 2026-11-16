@@ -23,6 +23,14 @@ host while silently reusing the persisted credentials of another instance
 omitted the persisted node config is used unchanged. The host goes through
 the same sanitisation as the operator's (scheme / path stripped, single
 hostname), so ``https://{host}/jsonrpc`` stays well-formed either way.
+
+Output language knob (2026-11-11): raw RPC reads answer in the source
+language (en_US) even when the target instance has es_CL installed and
+active — Odoo localizes translated fields (account names, taxes, products)
+only when the request carries ``context.lang``. An optional operator-side
+``lang`` field injects it on every call (deterministic, model-independent);
+it survives per-call instance overrides and wins over any lang the model
+passes. Empty (default) keeps the historical behaviour.
 """
 
 from __future__ import annotations
@@ -58,7 +66,8 @@ class OdooJsonRpcParams(BaseModel):
         title="Odoo Host",
         description=(
             "Odoo instance hostname WITHOUT scheme or path, e.g. "
-            "my-db.dev.odoo.com. The node calls https://<host>/jsonrpc."
+            "my-db.dev.odoo.com. The node calls https://<host>/jsonrpc. "
+            "A leading http:// is accepted for local sandboxes."
         ),
     )
     db: str = Field(
@@ -79,6 +88,18 @@ class OdooJsonRpcParams(BaseModel):
     )
     timeout: int = Field(
         default=60, ge=1, le=600, description="Request timeout in seconds."
+    )
+    lang: str = Field(
+        default="",
+        title="Language (context.lang)",
+        description=(
+            "Optional IETF language code (e.g. es_CL) injected as "
+            "context.lang on every ORM call, so Odoo answers with "
+            "localized names/labels (translated fields like account names, "
+            "tax names, product names). Empty = default behaviour "
+            "(Odoo answers in the source language, en_US). The target "
+            "instance must have that language installed."
+        ),
     )
 
     model_config = ConfigDict(extra="ignore")
@@ -125,7 +146,8 @@ class OdooJsonRpcToolInput(BaseModel):
         default="",
         description=(
             "Override: Odoo instance hostname WITHOUT scheme or path "
-            "(e.g. my-db.odoo.com). Pass ONLY together with db, username "
+            "(e.g. my-db.odoo.com; a leading http:// is accepted for local "
+            "sandboxes). Pass ONLY together with db, username "
             "and api_key — omit all four (empty) to use the instance "
             "configured on the node."
         ),
@@ -372,7 +394,31 @@ class OdooJsonRpcNode(ToolNode):
     def _build_execute_args(
         self, cfg: OdooJsonRpcParams, uid: int, args: OdooJsonRpcToolInput
     ) -> list:
-        """Build the execute_kw positional args from the business input."""
+        """Build the execute_kw positional args from the business input.
+
+        When the operator configured a node language, it is injected as
+        ``context.lang`` — the operator's choice wins over any lang the
+        model may have supplied, while the rest of the model's context
+        keys (tz, uid, …) are preserved. Raw RPC reads serve the source
+        language (en_US) unless a lang is set, which is exactly why this
+        knob exists.
+        """
+        exec_args = self._build_business_args(cfg, uid, args)
+        lang = (cfg.lang or "").strip()
+        if lang:
+            # Every supported method ends its positional list with the
+            # kwargs dict (ORM helpers) or the kwargs of `call`.
+            kwargs = exec_args[-1]
+            if isinstance(kwargs, dict):
+                context = dict(kwargs.get("context") or {})
+                context["lang"] = lang
+                exec_args[-1] = {**kwargs, "context": context}
+        return exec_args
+
+    def _build_business_args(
+        self, cfg: OdooJsonRpcParams, uid: int, args: OdooJsonRpcToolInput
+    ) -> list:
+        """Build the raw positional args from the business input."""
         base = [cfg.db, uid, cfg.api_key, args.model]
         if args.method == "call":
             return base + [args.method_name, args.args or [], args.kwargs or {}]
@@ -468,9 +514,9 @@ class OdooJsonRpcNode(ToolNode):
 
         # Per-call instance override: when the model supplied a COMPLETE
         # connection (validated atomically in the ToolInput), it wins over
-        # the persisted config. `timeout` stays from the persisted config —
-        # an operational knob, not instance identity. When no override is
-        # present the persisted config is used unchanged (the default path).
+        # the persisted config. `timeout` and `lang` stay from the persisted
+        # config — operational knobs, not instance identity. When no override
+        # is present the persisted config is used unchanged (the default path).
         if isinstance(params, OdooJsonRpcToolInput) and params.host:
             cfg = OdooJsonRpcParams(
                 host=params.host,
@@ -478,6 +524,7 @@ class OdooJsonRpcNode(ToolNode):
                 username=params.username or "",
                 api_key=params.api_key or "",
                 timeout=cfg.timeout,
+                lang=cfg.lang,
             )
 
         missing = [
@@ -494,10 +541,14 @@ class OdooJsonRpcNode(ToolNode):
                 "tool call."
             )
 
-        host = cfg.host.strip().rstrip("/")
+        raw_host = cfg.host.strip().rstrip("/")
+        # Local sandboxes may serve plain HTTP (http://localhost:8069); an
+        # explicit ``http://`` prefix opts in. Everything else stays HTTPS,
+        # so production hosts are unaffected.
+        scheme = "http" if raw_host.startswith("http://") else "https"
         # Defend against an operator pasting a full URL into the host field.
-        host = host.replace("https://", "").replace("http://", "").split("/")[0]
-        url = f"https://{host}/jsonrpc"
+        host = raw_host.replace("https://", "").replace("http://", "").split("/")[0]
+        url = f"{scheme}://{host}/jsonrpc"
 
         async with httpx.AsyncClient(timeout=float(cfg.timeout)) as client:
             uid = await self._rpc(
