@@ -31,7 +31,7 @@ Una definición corregida en P2 cuesta una respuesta; la misma, corregida despu�
 
 ### P1 · Entrada
 
-El Coordinador pide, en un correo con plantilla fija (`correo-consultor-migracion`): los archivos del sistema de origen (plan de cuentas, balance de comprobación, libro diario o mayor, auxiliar de terceros, libros de compras y ventas, conciliaciones, maestro de terceros), el nombre del sistema y la **fecha de corte**. Se cierra cuando los archivos están en `00-entrada/fuente/` y la fecha de corte consta por escrito. El Coordinador los guarda y **nunca los abre**.
+El Coordinador pide, con la plantilla de `correo-consultor-migracion` (canal correo) o su variante por chat cuando el correo no esté operativo — en ambos casos el contenido es el mismo: los archivos del sistema de origen (plan de cuentas, balance de comprobación, libro diario o mayor, auxiliar de terceros, libros de compras y ventas, conciliaciones, maestro de terceros), el nombre del sistema y la **fecha de corte**. Se cierra cuando los archivos están en `00-entrada/fuente/` y la fecha de corte consta por escrito. El Coordinador los guarda y **nunca los abre**.
 
 ### P2 · Análisis
 
@@ -47,7 +47,7 @@ Al terminar `auditoria previa`, el Auditor escribe en `07-auditoria/definiciones
 
 ### P5 · Producción
 
-Solo si `entorno_objetivo` es `production`. La autorización exige base de datos y rama en el texto de la respuesta, desde un remitente autorizado, y la palabra "autorizo" (`correo-consultor-migracion`). Además, CARGA exige un **ensayo en staging con todos los controles en verde** y el respaldo previo de la base informado.
+Solo si `entorno_objetivo` es `production` (y el estado lo habilita: `estado.json → entorno.produccion_habilitada`, ver `entornos-y-seguridad`). La autorización exige base de datos y rama en el texto de la respuesta, desde un remitente autorizado, y la palabra "autorizo" en forma afirmativa — una negación ("no autorizo") no es autorización (`correo-consultor-migracion`). Además, CARGA exige un **ensayo en staging con todos los controles en verde** y el respaldo previo de la base informado.
 
 ## Reglas del archivo de definiciones
 

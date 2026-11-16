@@ -20,7 +20,7 @@ Fuente única de verdad sobre dónde vive cada dato, qué forma tiene y quién l
 | Coordinador de Migración | Programa tareas, habla con el consultor, verifica | no |
 | Analista de Migración | Entiende el formato de origen, mide su calidad, diseña el mapeo | no |
 | Transformador de Migración | Convierte el origen en lotes listos para cargar | no |
-| Auditor de Migración | Valida lotes antes de cargar y prueba la cuadratura antes y después. **Independiente**: nunca construye ni carga lo que audita | no (solo lectura) |
+| Auditor de Migración | Valida lotes antes de cargar y prueba la cuadratura antes y después. **Independiente**: nunca construye ni carga lo que audita | no (escritura prohibida por regla del flujo, sin candado de permisos — ver `entornos-y-seguridad`) |
 | CARGA Migración | Único que escribe en Odoo | **sí** |
 
 Un worker no decide el avance: devuelve su resultado y el Coordinador abre la tarea siguiente. Si detecta algo que no sabe resolver, escribe una definición abierta y devuelve el control; nunca salta ni delega.

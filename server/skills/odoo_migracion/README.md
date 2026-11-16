@@ -19,14 +19,14 @@ mismo cuerpo, con frontmatter. Si corriges un hecho aquí, actualiza también el
 | Analista | `migracion-analisis`, `migracion-diseno` | `dominio-migracion`, `contrato-migracion`, `jev-migracion`, `odoo-rpc-transporte`, `taxonomia-errores-odoo`, `localizacion-chile`, `convencion-ids-externos` |
 | Transformador | `migracion-transformacion` | `dominio-migracion`, `contrato-migracion`, `convencion-ids-externos`, `localizacion-chile` |
 | Auditor | `migracion-auditoria` | `dominio-migracion`, `contrato-migracion`, `taxonomia-errores-odoo`, `odoo-rpc-transporte`, `localizacion-chile` |
-| CARGA | `migracion-carga`, `bucle-de-correccion` | `odoo-rpc-transporte`, `taxonomia-errores-odoo`, `entornos-y-seguridad`, `contrato-migracion`, `dominio-migracion`, `localizacion-chile`, `odoo19-diferencias`, `scripts-verificados-de-carga-odoo` |
+| CARGA | `migracion-carga`, `bucle-de-correccion-migracion` | `odoo-rpc-transporte`, `taxonomia-errores-odoo`, `entornos-y-seguridad`, `contrato-migracion`, `dominio-migracion`, `localizacion-chile`, `odoo19-diferencias`, `scripts-verificados-de-carga-odoo` |
 
 Más los skills de plataforma que refleja cada nodo: `skill`, `task-manager`, `write-todos-skill`,
 `ms-mail-skill`, `jev-decisions`, `process-manager-skill`.
 
 ## Nota sobre duplicados con odoo_impl
 
-Seis skills técnicos (`odoo-rpc-transporte`, `taxonomia-errores-odoo`, `bucle-de-correccion`,
+Seis skills técnicos (`odoo-rpc-transporte`, `taxonomia-errores-odoo`, `bucle-de-correccion-migracion`,
 `entornos-y-seguridad`, `localizacion-chile`, `odoo19-diferencias`) y dos de biblioteca
 (`convencion-ids-externos`, `scripts-verificados-de-carga-odoo`) existen también en
 `server/skills/odoo_impl/`. **No son copias exactas**: están adaptados al dominio migración
