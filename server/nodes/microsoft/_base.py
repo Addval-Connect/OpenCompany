@@ -172,6 +172,60 @@ def _format_graph_error(response: httpx.Response) -> str:
     return f"Microsoft Graph request failed with HTTP {response.status_code}"
 
 
+# Well-known folder names Graph accepts directly in the mailFolders/{id} path
+# segment. Anything else must be resolved to a real folder id first.
+_WELL_KNOWN_FOLDERS = {
+    "inbox",
+    "archive",
+    "drafts",
+    "sentitems",
+    "deleteditems",
+    "junkemail",
+    "outbox",
+}
+
+
+async def resolve_mail_folder(
+    mailbox: Optional[str],
+    folder: str,
+    user_id: str = "owner",
+) -> str:
+    """Resolve a mail folder name to its Graph folder ID (ctx-free helper).
+
+    ``folder`` may be:
+    - a well-known name (inbox, archive, ...) -> returned verbatim;
+    - an explicit Graph folder id -> returned verbatim;
+    - a human folder display name (e.g. ``Migración``) -> resolved by
+      listing the mailbox's mail folders and matching ``displayName``
+      case-insensitively.
+
+    Raises NodeUserError when the folder cannot be found.
+    """
+    from services.plugin import NodeUserError
+
+    name = (folder or "").strip()
+    if not name:
+        return "inbox"
+    if name.lower() in _WELL_KNOWN_FOLDERS:
+        return name.lower()
+
+    # Graph folder ids are long base64-ish strings; a value that already
+    # contains a '/' is impossible (would break the URL) so reject it early.
+    if "/" in name:
+        raise NodeUserError(f"Invalid folder reference: {name!r}")
+
+    base = mailbox_base(mailbox)
+    data = await graph_get_raw(f"{base}/mailFolders?$top=100", user_id=user_id)
+    folders = data.get("value") if isinstance(data, dict) else None
+    for item in folders or []:
+        if not isinstance(item, dict):
+            continue
+        display = (item.get("displayName") or "").strip().lower()
+        if display == name.lower():
+            return item.get("id") or name
+    raise NodeUserError(f"Mail folder not found: {name!r}")
+
+
 def write_attachment_bytes(payload, *, ctx, filename, mime_type=None):
     """Write attachment bytes into the workspace; return ``(FileRef, abs_path)``.
 

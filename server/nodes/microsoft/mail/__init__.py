@@ -10,8 +10,6 @@ Operations (dispatched off ``params.operation``):
 - list_attachments     -> GET  /me/messages/{id}/attachments?$select=... (metadata only)
 - download_attachments -> GET  /me/messages/{id}/attachments (base64 contentBytes ->
                           workspace files); pairs with the documentParser node for text.
-- move                 -> POST /me/mailFolders/{folderId}/messages/{id}/move
-                          (destination folder id or well-known name)
 
 The optional ``mailbox`` param retargets every op to a shared/other mailbox
 (``/users/{address}`` instead of ``/me``); empty keeps the signed-in user's

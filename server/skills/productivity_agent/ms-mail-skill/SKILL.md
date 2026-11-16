@@ -1,6 +1,6 @@
 ---
 name: ms-mail-skill
-description: Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph — for your own mailbox or a shared mailbox. Compose messages (optionally with file attachments from the workspace), list recent mail, search by text, reply/reply-all (plain-text comment or an HTML body with attachments), move messages to folders, and list or download file attachments (e.g. PDFs) for parsing.
+description: Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph — for your own mailbox or a shared mailbox. Compose messages (optionally with file attachments from the workspace), list recent mail, search by text, reply/reply-all (plain-text comment or an HTML body with attachments), and list or download file attachments (e.g. PDFs) for parsing.
 allowed-tools: "ms_mail"
 metadata:
   author: opencompany
@@ -11,7 +11,7 @@ metadata:
 
 # Outlook Mail Skill
 
-Send, read, search, reply to, move, and handle attachments of email using the Microsoft Graph API (Outlook / Microsoft 365).
+Send, read, search, reply to, and handle attachments of email using the Microsoft Graph API (Outlook / Microsoft 365).
 
 ## Tool: ms_mail
 
@@ -27,7 +27,6 @@ Consolidated Outlook Mail tool with an `operation` parameter.
 | `reply` | Reply to a message (plain-text comment, or an HTML body with attachments) | reply_message_id, comment (or body) |
 | `list_attachments` | List a message's attachments (metadata only, no download) | message_id |
 | `download_attachments` | Download file attachments into the workspace | message_id |
-| `move` | Move a message to a folder (by id or well-known name) | message_id, move_destination |
 
 Every `read`/`search` result includes a `has_attachments` boolean per message —
 check it before calling `list_attachments` / `download_attachments`.
@@ -183,17 +182,6 @@ thread by the `message_id`/`conversation_id` of the inbound message.
   "cc": "lead@contoso.com"
 }
 ```
-
-### move - Move a message to a folder
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| operation | string | Yes | Must be `"move"` |
-| message_id | string | Yes | ID of the message to move |
-| move_destination | string | Yes | Destination folder ID or well-known name (`inbox`, `archive`, `deleteditems`, ...). **Does not resolve human folder names** — for a custom folder (e.g. `Migración`) pass its Graph folder id. |
-
-The message's id **changes** when it is moved — use the id returned in the
-response (`message_id`) for subsequent operations on that message.
 
 ### list_attachments - List a message's attachments (metadata only)
 
