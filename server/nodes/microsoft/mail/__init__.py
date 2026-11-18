@@ -4,7 +4,9 @@ Operations (dispatched off ``params.operation``):
 - send                 -> POST /me/sendMail
 - read                 -> GET  /me/messages/{id}  (or GET /me/messages?$top= when no id)
 - search               -> GET  /me/messages?$search="..."
-- reply                -> POST /me/messages/{id}/reply
+- reply                -> POST /me/messages/{id}/reply|replyAll
+                          (plain-text comment, or a message object with an
+                          HTML/RTF body, attachments, and recipient overrides)
 - list_attachments     -> GET  /me/messages/{id}/attachments?$select=... (metadata only)
 - download_attachments -> GET  /me/messages/{id}/attachments (base64 contentBytes ->
                           workspace files); pairs with the documentParser node for text.
@@ -37,6 +39,8 @@ _GRAPH_INLINE_ATTACHMENT_LIMIT = 4 * 1024 * 1024  # 4 MB
 _READ = {"displayOptions": {"show": {"operation": ["read"]}}}
 _SEARCH = {"displayOptions": {"show": {"operation": ["search"]}}}
 _REPLY = {"displayOptions": {"show": {"operation": ["reply"]}}}
+# Body/attachment/recipient fields are shared by send and (formatted) reply.
+_SEND_REPLY = {"displayOptions": {"show": {"operation": ["send", "reply"]}}}
 _ATTACH = {"displayOptions": {"show": {"operation": ["list_attachments", "download_attachments"]}}}
 
 # Graph attachment @odata.type discriminators.
@@ -52,19 +56,20 @@ class MailParams(BaseModel):
     # .Shared OAuth scopes.
     mailbox: str = Field(default="", description="Shared mailbox address (empty = your own mailbox).")
 
-    # Send
+    # Send / reply: recipients and body. `to`/`cc` on reply override the reply's
+    # default recipients (original sender, or original to+cc with reply_all).
     to: str = Field(
         default="",
-        json_schema_extra={"placeholder": "alice@contoso.com, bob@contoso.com", **_SEND},
+        json_schema_extra={"placeholder": "alice@contoso.com, bob@contoso.com", **_SEND_REPLY},
     )
-    cc: str = Field(default="", json_schema_extra=_SEND)
+    cc: str = Field(default="", json_schema_extra=_SEND_REPLY)
     bcc: str = Field(default="", json_schema_extra=_SEND)
     subject: str = Field(default="", json_schema_extra=_SEND)
     body: str = Field(
         default="",
-        json_schema_extra={"rows": 4, "placeholder": "Write your message...", **_SEND},
+        json_schema_extra={"rows": 4, "placeholder": "Write your message...", **_SEND_REPLY},
     )
-    body_type: Literal["text", "html"] = Field(default="text", json_schema_extra=_SEND)
+    body_type: Literal["text", "html"] = Field(default="text", json_schema_extra=_SEND_REPLY)
     # Workspace file paths to attach to the outgoing email.
     # Accepts a JSON array string or a comma-separated string of paths — the
     # LLM may pass either; both are normalised to a list before execution.
@@ -78,7 +83,7 @@ class MailParams(BaseModel):
             "Workspace file paths to attach (absolute or workspace-relative). "
             "Pass as a JSON array or comma-separated string."
         ),
-        json_schema_extra=_SEND,
+        json_schema_extra=_SEND_REPLY,
     )
 
     @field_validator("attachments", mode="before")
@@ -240,14 +245,16 @@ class MailNode(ActionNode):
         "Send, read, search, reply to, and handle attachments of Outlook email via Microsoft Graph. "
         "Operations: send (compose, optionally with file attachments from the workspace), "
         "read (get message by ID or list recent), "
-        "search (find messages by text), reply (respond to a message), "
+        "search (find messages by text), reply (respond to a message — plain-text "
+        "'comment', or set 'body'+'body_type' for an HTML reply, optionally with "
+        "'attachments'; 'to'/'cc' override the reply recipients), "
         "list_attachments (metadata for a message's attachments), "
         "download_attachments (save file attachments to the workspace; returns paths "
         "for the document parser). read/search results include has_attachments. "
         "Set 'mailbox' to a shared mailbox address to operate on it instead of your own. "
-        "For send: pass 'attachments' as a list of workspace file paths "
+        "For send or reply: pass 'attachments' as a list of workspace file paths "
         "(absolute paths from download_attachments/gallery, or workspace-relative) "
-        "to attach files to the outgoing email."
+        "to attach files."
     )
     handles = (
         {"name": "input-main", "kind": "input", "position": "left", "label": "Input", "role": "main"},
@@ -389,17 +396,59 @@ class MailNode(ActionNode):
     async def _reply(self, ctx: NodeContext, params: MailParams) -> MailOutput:
         if not params.reply_message_id:
             raise NodeUserError("reply_message_id is required")
-        if not params.comment:
+        # Graph accepts either a plain-text `comment` OR a `message` object with
+        # a body — never both (400 Bad Request). A `message` object is also how
+        # a reply carries an HTML/RTF body, attachments, or recipient overrides.
+        has_body = bool(params.body)
+        if has_body and params.comment:
+            raise NodeUserError(
+                "Pass either 'comment' (plain-text reply) or 'body' with 'body_type' "
+                "(formatted reply), not both — Graph rejects a comment together with a message body."
+            )
+        if not has_body and not params.comment:
             raise NodeUserError("Reply comment is required")
+
+        message: dict = {}
+        if has_body:
+            message["body"] = {
+                "contentType": "HTML" if params.body_type == "html" else "Text",
+                "content": params.body,
+            }
+        # Recipient overrides: passing `to` takes control of the reply's to/cc
+        # lists entirely. With `reply_all`, Graph's defaults re-include the
+        # original recipients (to + cc) — including the mailbox itself if it was
+        # on the original thread — so the caller passes `to` explicitly and owns
+        # the final recipient list; an empty `cc` then clears the default cc.
+        if params.to:
+            message["toRecipients"] = _recipients(params.to)
+            message["ccRecipients"] = _recipients(params.cc) if params.cc else []
+        elif params.cc:
+            message["ccRecipients"] = _recipients(params.cc)
+        if params.attachments:
+            message["attachments"] = [
+                await _read_attachment_for_send(p, ctx) for p in params.attachments
+            ]
+
+        payload: dict = {}
+        if message:
+            payload["message"] = message
+        if not has_body:
+            payload["comment"] = params.comment
+
         endpoint = "replyAll" if params.reply_all else "reply"
         await graph_request(
             ctx,
             "POST",
             f"{mailbox_base(params.mailbox)}/messages/{params.reply_message_id}/{endpoint}",
-            json={"comment": params.comment},
+            json=payload,
         )
         await track_microsoft_usage(ctx.node_id, "reply", 1, ctx.raw)
-        return MailOutput(operation="reply", replied=True, message_id=params.reply_message_id)
+        return MailOutput(
+            operation="reply",
+            replied=True,
+            message_id=params.reply_message_id,
+            attachments_sent=len(params.attachments) if params.attachments else None,
+        )
 
     async def _list_attachments(self, ctx: NodeContext, params: MailParams) -> MailOutput:
         if not params.message_id:
